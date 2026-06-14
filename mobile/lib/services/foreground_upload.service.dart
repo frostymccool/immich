@@ -85,13 +85,18 @@ class ForegroundUploadService {
       return;
     }
 
-    // Sort candidates smallest-first when enabled (persists across restarts via settings)
+    // Sort candidates smallest-first when enabled (persists across restarts via settings).
+    // LocalAsset has no pre-computed file size, so we use pixel count (width * height) as a
+    // reliable proxy for image file size. Videos are weighted by duration to keep them after images.
     final backupConfig = SettingsRepository.instance.appConfig.backup;
     if (backupConfig.sortSmallestFirst) {
       candidates.sort((a, b) {
-        final sizeA = a.fileSize ?? 0;
-        final sizeB = b.fileSize ?? 0;
-        return sizeA.compareTo(sizeB);
+        final pixelsA = (a.width ?? 0) * (a.height ?? 0);
+        final pixelsB = (b.width ?? 0) * (b.height ?? 0);
+        // Add duration weighting so short videos sort before long ones
+        final scoreA = pixelsA + (a.durationMs ?? 0) * 500;
+        final scoreB = pixelsB + (b.durationMs ?? 0) * 500;
+        return scoreA.compareTo(scoreB);
       });
     }
 
