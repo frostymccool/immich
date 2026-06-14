@@ -32,6 +32,13 @@ class DriftBackupSettings extends ConsumerWidget {
         ),
         const _UseCellularForVideosButton(),
         const _UseCellularForPhotosButton(),
+        const Divider(),
+        SettingGroupTitle(
+          title: "Upload Settings",
+          icon: Icons.upload_rounded,
+        ),
+        const _ParallelUploadsSlider(),
+        const _SortSmallestFirstButton(),
         if (CurrentPlatform.isAndroid) ...[
           const Divider(),
           SettingGroupTitle(
@@ -294,6 +301,54 @@ class _BackupDelaySlider extends ConsumerWidget {
           label: formatBackupDelaySliderValue(currentValue),
         ),
       ],
+    );
+  }
+}
+
+class _ParallelUploadsSlider extends ConsumerWidget {
+  const _ParallelUploadsSlider();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final parallelUploads = ref.watch(appConfigProvider.select((c) => c.backup.parallelUploads));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 24.0, top: 8.0),
+          child: Text(
+            'Parallel uploads: $parallelUploads',
+            style: context.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w500),
+          ),
+        ),
+        Slider(
+          value: parallelUploads.toDouble(),
+          min: 1,
+          max: 10,
+          divisions: 9,
+          label: '$parallelUploads',
+          onChanged: (double v) async {
+            await ref.read(settingsProvider).write(SettingsKey.backupParallelUploads, v.toInt());
+          },
+          onChangeEnd: (double v) async {
+            await ref.read(settingsProvider).write(SettingsKey.backupParallelUploads, v.toInt());
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _SortSmallestFirstButton extends StatelessWidget {
+  const _SortSmallestFirstButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return _BackupSwitchTile(
+      metadataKey: SettingsKey.backupSortSmallestFirst,
+      selector: (c) => c.backup.sortSmallestFirst,
+      titleKey: "Upload smallest files first",
+      subtitleKey: "Uploads are sorted by file size so smaller files complete first",
     );
   }
 }
