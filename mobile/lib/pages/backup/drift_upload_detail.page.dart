@@ -319,7 +319,7 @@ class _DriftUploadDetailPageState extends ConsumerState<DriftUploadDetailPage> {
                       Text(
                         isFailed
                             ? item.error ?? "unable_to_upload_file".t(context: context)
-                            : "${formatHumanReadableBytes(item.fileSize, 1)} • ${item.networkSpeedAsString}",
+                            : "${formatHumanReadableBytes(item.fileSize, 1)} • ${formatHumanReadableBytes((item.progress * item.fileSize).round(), 1)} transferred • ${item.networkSpeedAsString}",
                         style: context.textTheme.labelLarge?.copyWith(
                           color: isFailed
                               ? context.colorScheme.error
