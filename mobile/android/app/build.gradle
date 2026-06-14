@@ -37,7 +37,7 @@ android {
   }
 
   defaultConfig {
-    applicationId "app.alextran.immich"
+    applicationId "app.immich.custom"
     minSdk = 26
     targetSdk = flutter.targetSdkVersion
     versionCode flutter.versionCode
@@ -75,7 +75,7 @@ android {
       }
     }
   }
-  namespace 'app.alextran.immich'
+  namespace 'app.immich.custom'
 
   externalNativeBuild {
     cmake {
