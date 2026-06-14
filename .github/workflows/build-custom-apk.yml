@@ -11,39 +11,43 @@ jobs:
     name: Build Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Install Mise
+        uses: jdx/mise-action@v2
+        with:
+          working_directory: mobile
+
+      - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.32.2'
-          channel: stable
-          cache: true
+          java-version: '21'
 
       - name: Get Flutter dependencies
         working-directory: mobile
         run: flutter pub get
 
-      - name: Run code generation
+      - name: Generate translation files
+        working-directory: mobile
+        run: dart run easy_localization:generate -S ../i18n
+
+      - name: Run Dart code generation
         working-directory: mobile
         run: dart run build_runner build --delete-conflicting-outputs
 
-      - name: Build APK (release, no signing)
+      - name: Generate platform APIs (Pigeon)
         working-directory: mobile
-        run: |
-          flutter build apk \
-            --release \
-            --dart-define=isDebug=false \
-            --no-pub
+        run: ls pigeon/*.dart | xargs -n1 -P4 -I{} dart run pigeon --input {}
+
+      - name: Build APK (release)
+        working-directory: mobile
+        run: flutter build apk --release --no-pub
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
