@@ -75,7 +75,7 @@ android {
       }
     }
   }
-  namespace 'app.immich.custom'
+  namespace 'app.alextran.immich'
 
   externalNativeBuild {
     cmake {
