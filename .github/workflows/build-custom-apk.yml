@@ -45,8 +45,15 @@ jobs:
         working-directory: mobile
         run: dart run build_runner build --delete-conflicting-outputs
 
+      - name: Decode keystore
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > mobile/android/key.jks
+
       - name: Build APK (release)
         working-directory: mobile
+        env:
+          ALIAS: ${{ secrets.KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: flutter build apk --release
 
       - name: Upload APK artifact
