@@ -43,6 +43,8 @@ enum SettingsKey<T> {
   backupRequireCharging<bool>(),
   backupTriggerDelay<int>(),
   backupSyncAlbums<bool>(),
+  backupParallelUploads<int>(),
+  backupSortSmallestFirst<bool>(),
 
   // Timeline
   timelineTilesPerRow<int>(),
@@ -226,3 +228,4 @@ final class _PrimitiveCodec<T extends Object> extends _SettingsCodec<T> {
 
   static String _identity(String s) => s;
 }
+
