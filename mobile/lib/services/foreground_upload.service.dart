@@ -85,19 +85,28 @@ class ForegroundUploadService {
       return;
     }
 
-    // Sort candidates smallest-first when enabled (persists across restarts via settings).
-    // LocalAsset has no pre-computed file size, so we use pixel count (width * height) as a
-    // reliable proxy for image file size. Videos are weighted by duration to keep them after images.
     final backupConfig = SettingsRepository.instance.appConfig.backup;
     if (backupConfig.sortSmallestFirst) {
-      candidates.sort((a, b) {
-        final pixelsA = (a.width ?? 0) * (a.height ?? 0);
-        final pixelsB = (b.width ?? 0) * (b.height ?? 0);
-        // Add duration weighting so short videos sort before long ones
-        final scoreA = pixelsA + (a.durationMs ?? 0) * 500;
-        final scoreB = pixelsB + (b.durationMs ?? 0) * 500;
-        return scoreA.compareTo(scoreB);
-      });
+      // Fetch actual file sizes concurrently (8 workers) then sort smallest-first.
+      // file.length() is a metadata-only stat — no file data is read.
+      final sizeMap = <String, int>{};
+      var si = 0;
+      Future<void> fetchSize() async {
+        while (true) {
+          final i = si;
+          if (i >= candidates.length) break;
+          si++;
+          final asset = candidates[i];
+          try {
+            final file = await _storageRepository.getFileForAsset(asset.id);
+            sizeMap[asset.id] = (file != null) ? await file.length() : 0;
+          } catch (_) {
+            sizeMap[asset.id] = 0;
+          }
+        }
+      }
+      await Future.wait(List.generate(8, (_) => fetchSize()));
+      candidates.sort((a, b) => (sizeMap[a.id] ?? 0).compareTo(sizeMap[b.id] ?? 0));
     }
 
     final networkCapabilities = await _connectivityApi.getCapabilities();
@@ -478,4 +487,3 @@ class ForegroundUploadService {
     return true;
   }
 }
-
