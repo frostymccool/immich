@@ -39,6 +39,7 @@ class DriftBackupSettings extends ConsumerWidget {
         ),
         const _ParallelUploadsSlider(),
         const _SortSmallestFirstButton(),
+        const _ReservePhotoSlotButton(),
         if (CurrentPlatform.isAndroid) ...[
           const Divider(),
           SettingGroupTitle(
@@ -349,6 +350,20 @@ class _SortSmallestFirstButton extends StatelessWidget {
       selector: (c) => c.backup.sortSmallestFirst,
       titleKey: "Upload smallest files first",
       subtitleKey: "Uploads are sorted by file size so smaller files complete first",
+    );
+  }
+}
+
+class _ReservePhotoSlotButton extends StatelessWidget {
+  const _ReservePhotoSlotButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return _BackupSwitchTile(
+      metadataKey: SettingsKey.backupReserveSlotForPhotos,
+      selector: (c) => c.backup.reserveSlotForPhotos,
+      titleKey: "Reserve slot for photos",
+      subtitleKey: "When uploading in parallel, always keep 1 slot available for photos",
     );
   }
 }

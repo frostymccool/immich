@@ -116,17 +116,75 @@ class ForegroundUploadService {
     if (useSequentialUpload) {
       await _uploadSequentially(items: candidates, cancelToken: cancelToken, hasWifi: hasWifi, callbacks: callbacks);
     } else {
-      final parallelUploads = SettingsRepository.instance.appConfig.backup.parallelUploads;
-      await _executeWithWorkerPool<LocalAsset>(
-        items: candidates,
-        cancelToken: cancelToken,
-        concurrentWorkers: parallelUploads.clamp(1, 10),
-        shouldSkip: (asset) {
-          final requireWifi = _shouldRequireWiFi(asset);
-          return requireWifi && !hasWifi;
-        },
-        processItem: (asset) => _uploadSingleAsset(asset, cancelToken, callbacks: callbacks),
-      );
+      await _storageRepository.clearCache();
+      shouldAbortUpload = false;
+
+      bool shouldSkip(LocalAsset asset) => _shouldRequireWiFi(asset) && !hasWifi;
+
+      final config = SettingsRepository.instance.appConfig.backup;
+      final reserveSlot = config.parallelUploads > 1 && config.reserveSlotForPhotos;
+
+      if (reserveSlot) {
+        // One dedicated photo worker + up to (parallelUploads-1) dynamic video workers.
+        // Video slots re-check the setting every item so slider changes take effect within ~200ms.
+        final photos = candidates.where((a) => !a.isVideo).toList();
+        final videos = candidates.where((a) => a.isVideo).toList();
+
+        Future<void> runPhotos() async {
+          int idx = 0;
+          while (idx < photos.length) {
+            if (shouldAbortUpload || cancelToken.isCompleted) break;
+            final asset = photos[idx++];
+            if (shouldSkip(asset)) continue;
+            await _uploadSingleAsset(asset, cancelToken, callbacks: callbacks);
+          }
+        }
+
+        int videoIdx = 0;
+        Future<void> videoWorker(int workerIndex) async {
+          while (true) {
+            if (shouldAbortUpload || cancelToken.isCompleted) break;
+            final videoLimit =
+                (SettingsRepository.instance.appConfig.backup.parallelUploads.clamp(1, 10) - 1).clamp(0, 9);
+            if (workerIndex >= videoLimit) {
+              if (videoIdx >= videos.length) break;
+              await Future.delayed(const Duration(milliseconds: 200));
+              continue;
+            }
+            final idx = videoIdx;
+            if (idx >= videos.length) break;
+            videoIdx++;
+            final asset = videos[idx];
+            if (shouldSkip(asset)) continue;
+            await _uploadSingleAsset(asset, cancelToken, callbacks: callbacks);
+          }
+        }
+
+        await Future.wait([runPhotos(), ...List.generate(9, videoWorker)]);
+      } else {
+        // Dynamic worker pool: spawn 10 workers, each re-reads parallelUploads so slider
+        // changes take effect within ~200ms of the next item pickup.
+        int idx = 0;
+        Future<void> worker(int workerIndex) async {
+          while (true) {
+            if (shouldAbortUpload || cancelToken.isCompleted) break;
+            final limit = SettingsRepository.instance.appConfig.backup.parallelUploads.clamp(1, 10);
+            if (workerIndex >= limit) {
+              if (idx >= candidates.length) break;
+              await Future.delayed(const Duration(milliseconds: 200));
+              continue;
+            }
+            final i = idx;
+            if (i >= candidates.length) break;
+            idx++;
+            final asset = candidates[i];
+            if (shouldSkip(asset)) continue;
+            await _uploadSingleAsset(asset, cancelToken, callbacks: callbacks);
+          }
+        }
+
+        await Future.wait(List.generate(10, worker));
+      }
     }
   }
 
