@@ -85,6 +85,16 @@ class ForegroundUploadService {
       return;
     }
 
+    // Sort candidates smallest-first when enabled (persists across restarts via settings)
+    final backupConfig = SettingsRepository.instance.appConfig.backup;
+    if (backupConfig.sortSmallestFirst) {
+      candidates.sort((a, b) {
+        final sizeA = a.fileSize ?? 0;
+        final sizeB = b.fileSize ?? 0;
+        return sizeA.compareTo(sizeB);
+      });
+    }
+
     final networkCapabilities = await _connectivityApi.getCapabilities();
     final hasWifi = networkCapabilities.isUnmetered;
     _logger.info('Network capabilities: $networkCapabilities, hasWifi/isUnmetered: $hasWifi');
@@ -92,9 +102,11 @@ class ForegroundUploadService {
     if (useSequentialUpload) {
       await _uploadSequentially(items: candidates, cancelToken: cancelToken, hasWifi: hasWifi, callbacks: callbacks);
     } else {
+      final parallelUploads = SettingsRepository.instance.appConfig.backup.parallelUploads;
       await _executeWithWorkerPool<LocalAsset>(
         items: candidates,
         cancelToken: cancelToken,
+        concurrentWorkers: parallelUploads.clamp(1, 10),
         shouldSkip: (asset) {
           final requireWifi = _shouldRequireWiFi(asset);
           return requireWifi && !hasWifi;
@@ -461,3 +473,4 @@ class ForegroundUploadService {
     return true;
   }
 }
+
