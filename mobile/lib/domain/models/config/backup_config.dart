@@ -7,6 +7,7 @@ class BackupConfig {
   final bool syncAlbums;
   final int parallelUploads;
   final bool sortSmallestFirst;
+  final bool reserveSlotForPhotos;
 
   const BackupConfig({
     this.enabled = false,
@@ -17,6 +18,7 @@ class BackupConfig {
     this.syncAlbums = false,
     this.parallelUploads = 3,
     this.sortSmallestFirst = true,
+    this.reserveSlotForPhotos = true,
   });
 
   BackupConfig copyWith({
@@ -28,6 +30,7 @@ class BackupConfig {
     bool? syncAlbums,
     int? parallelUploads,
     bool? sortSmallestFirst,
+    bool? reserveSlotForPhotos,
   }) => BackupConfig(
     enabled: enabled ?? this.enabled,
     useCellularForVideos: useCellularForVideos ?? this.useCellularForVideos,
@@ -37,6 +40,7 @@ class BackupConfig {
     syncAlbums: syncAlbums ?? this.syncAlbums,
     parallelUploads: parallelUploads ?? this.parallelUploads,
     sortSmallestFirst: sortSmallestFirst ?? this.sortSmallestFirst,
+    reserveSlotForPhotos: reserveSlotForPhotos ?? this.reserveSlotForPhotos,
   );
 
   @override
@@ -50,13 +54,23 @@ class BackupConfig {
           other.triggerDelay == triggerDelay &&
           other.syncAlbums == syncAlbums &&
           other.parallelUploads == parallelUploads &&
-          other.sortSmallestFirst == sortSmallestFirst);
+          other.sortSmallestFirst == sortSmallestFirst &&
+          other.reserveSlotForPhotos == reserveSlotForPhotos);
 
   @override
-  int get hashCode =>
-      Object.hash(enabled, useCellularForVideos, useCellularForPhotos, requireCharging, triggerDelay, syncAlbums, parallelUploads, sortSmallestFirst);
+  int get hashCode => Object.hash(
+    enabled,
+    useCellularForVideos,
+    useCellularForPhotos,
+    requireCharging,
+    triggerDelay,
+    syncAlbums,
+    parallelUploads,
+    sortSmallestFirst,
+    reserveSlotForPhotos,
+  );
 
   @override
   String toString() =>
-      'BackupConfig(enabled: $enabled, useCellularForVideos: $useCellularForVideos, useCellularForPhotos: $useCellularForPhotos, requireCharging: $requireCharging, triggerDelay: $triggerDelay, syncAlbums: $syncAlbums, parallelUploads: $parallelUploads, sortSmallestFirst: $sortSmallestFirst)';
+      'BackupConfig(enabled: $enabled, useCellularForVideos: $useCellularForVideos, useCellularForPhotos: $useCellularForPhotos, requireCharging: $requireCharging, triggerDelay: $triggerDelay, syncAlbums: $syncAlbums, parallelUploads: $parallelUploads, sortSmallestFirst: $sortSmallestFirst, reserveSlotForPhotos: $reserveSlotForPhotos)';
 }
