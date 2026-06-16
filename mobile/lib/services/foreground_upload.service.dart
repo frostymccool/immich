@@ -126,70 +126,53 @@ class ForegroundUploadService {
 
       bool shouldSkip(LocalAsset asset) => _shouldRequireWiFi(asset) && !hasWifi;
 
-      final config = SettingsRepository.instance.appConfig.backup;
-      final reserveSlot = config.parallelUploads > 1 && config.reserveSlotForPhotos;
+      // Single shared pool of 10 workers. Each re-reads parallelUploads on every item
+      // so the slider takes effect within ~200ms of the next pickup.
+      //
+      // When reserveSlotForPhotos is on, videos are additionally capped at
+      // (parallelUploads - 1) using a shared activeVideoCount counter.
+      // Because Dart is single-threaded the check-and-increment is effectively
+      // atomic (no await between them).
+      int idx = 0;
+      int activeVideoCount = 0;
 
-      if (reserveSlot) {
-        // One dedicated photo worker + up to (parallelUploads-1) dynamic video workers.
-        // Video slots re-check the setting every item so slider changes take effect within ~200ms.
-        final photos = candidates.where((a) => !a.isVideo).toList();
-        final videos = candidates.where((a) => a.isVideo).toList();
+      Future<void> worker(int workerIndex) async {
+        while (true) {
+          if (shouldAbortUpload || cancelToken.isCompleted) break;
 
-        Future<void> runPhotos() async {
-          int idx = 0;
-          while (idx < photos.length) {
-            if (shouldAbortUpload || cancelToken.isCompleted) break;
-            final asset = photos[idx++];
-            if (shouldSkip(asset)) continue;
-            await _uploadSingleAsset(asset, cancelToken, callbacks: callbacks);
+          final limit = SettingsRepository.instance.appConfig.backup.parallelUploads.clamp(1, 10);
+          if (workerIndex >= limit) {
+            if (idx >= candidates.length) break;
+            await Future.delayed(const Duration(milliseconds: 200));
+            continue;
           }
-        }
 
-        int videoIdx = 0;
-        Future<void> videoWorker(int workerIndex) async {
-          while (true) {
-            if (shouldAbortUpload || cancelToken.isCompleted) break;
-            final videoLimit =
-                (SettingsRepository.instance.appConfig.backup.parallelUploads.clamp(1, 10) - 1).clamp(0, 9);
-            if (workerIndex >= videoLimit) {
-              if (videoIdx >= videos.length) break;
-              await Future.delayed(const Duration(milliseconds: 200));
-              continue;
-            }
-            final idx = videoIdx;
-            if (idx >= videos.length) break;
-            videoIdx++;
-            final asset = videos[idx];
-            if (shouldSkip(asset)) continue;
-            await _uploadSingleAsset(asset, cancelToken, callbacks: callbacks);
+          final i = idx;
+          if (i >= candidates.length) break;
+
+          final asset = candidates[i];
+
+          // If reserveSlotForPhotos is on and this is a video, enforce the cap.
+          final reserveSlot = SettingsRepository.instance.appConfig.backup.reserveSlotForPhotos;
+          if (asset.isVideo && reserveSlot && limit > 1 && activeVideoCount >= limit - 1) {
+            await Future.delayed(const Duration(milliseconds: 200));
+            continue;
           }
-        }
 
-        await Future.wait([runPhotos(), ...List.generate(9, videoWorker)]);
-      } else {
-        // Dynamic worker pool: spawn 10 workers, each re-reads parallelUploads so slider
-        // changes take effect within ~200ms of the next item pickup.
-        int idx = 0;
-        Future<void> worker(int workerIndex) async {
-          while (true) {
-            if (shouldAbortUpload || cancelToken.isCompleted) break;
-            final limit = SettingsRepository.instance.appConfig.backup.parallelUploads.clamp(1, 10);
-            if (workerIndex >= limit) {
-              if (idx >= candidates.length) break;
-              await Future.delayed(const Duration(milliseconds: 200));
-              continue;
-            }
-            final i = idx;
-            if (i >= candidates.length) break;
-            idx++;
-            final asset = candidates[i];
-            if (shouldSkip(asset)) continue;
-            await _uploadSingleAsset(asset, cancelToken, callbacks: callbacks);
+          idx++;
+          if (asset.isVideo) activeVideoCount++;
+
+          if (shouldSkip(asset)) {
+            if (asset.isVideo) activeVideoCount--;
+            continue;
           }
-        }
 
-        await Future.wait(List.generate(10, worker));
+          await _uploadSingleAsset(asset, cancelToken, callbacks: callbacks);
+          if (asset.isVideo) activeVideoCount--;
+        }
       }
+
+      await Future.wait(List.generate(10, worker));
     }
   }
 
