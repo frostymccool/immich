@@ -33,6 +33,7 @@ class DriftUploadStatus {
   final double progress;
   final int fileSize;
   final String networkSpeedAsString;
+  final String timeRemainingAsString;
   final bool? isFailed;
   final String? error;
 
@@ -42,6 +43,7 @@ class DriftUploadStatus {
     required this.progress,
     required this.fileSize,
     required this.networkSpeedAsString,
+    this.timeRemainingAsString = '--:--',
     this.isFailed,
     this.error,
   });
@@ -52,6 +54,7 @@ class DriftUploadStatus {
     double? progress,
     int? fileSize,
     String? networkSpeedAsString,
+    String? timeRemainingAsString,
     bool? isFailed,
     String? error,
   }) {
@@ -61,6 +64,7 @@ class DriftUploadStatus {
       progress: progress ?? this.progress,
       fileSize: fileSize ?? this.fileSize,
       networkSpeedAsString: networkSpeedAsString ?? this.networkSpeedAsString,
+      timeRemainingAsString: timeRemainingAsString ?? this.timeRemainingAsString,
       isFailed: isFailed ?? this.isFailed,
       error: error ?? this.error,
     );
@@ -68,7 +72,7 @@ class DriftUploadStatus {
 
   @override
   String toString() {
-    return 'DriftUploadStatus(taskId: $taskId, filename: $filename, progress: $progress, fileSize: $fileSize, networkSpeedAsString: $networkSpeedAsString, isFailed: $isFailed, error: $error)';
+    return 'DriftUploadStatus(taskId: $taskId, filename: $filename, progress: $progress, fileSize: $fileSize, networkSpeedAsString: $networkSpeedAsString, timeRemainingAsString: $timeRemainingAsString, isFailed: $isFailed, error: $error)';
   }
 
   @override
@@ -82,6 +86,7 @@ class DriftUploadStatus {
         other.progress == progress &&
         other.fileSize == fileSize &&
         other.networkSpeedAsString == networkSpeedAsString &&
+        other.timeRemainingAsString == timeRemainingAsString &&
         other.isFailed == isFailed &&
         other.error == error;
   }
@@ -93,6 +98,7 @@ class DriftUploadStatus {
         progress.hashCode ^
         fileSize.hashCode ^
         networkSpeedAsString.hashCode ^
+        timeRemainingAsString.hashCode ^
         isFailed.hashCode ^
         error.hashCode;
   }
@@ -304,6 +310,7 @@ class DriftBackupNotifier extends StateNotifier<DriftBackupState> {
 
     final progress = totalBytes > 0 ? bytes / totalBytes : 0.0;
     final networkSpeedAsString = _uploadSpeedManager.updateProgress(localAssetId, bytes, totalBytes);
+    final timeRemainingAsString = _uploadSpeedManager.getTimeRemainingAsString(localAssetId);
     final currentItem = state.uploadItems[localAssetId];
     if (currentItem != null) {
       state = state.copyWith(
@@ -314,6 +321,7 @@ class DriftBackupNotifier extends StateNotifier<DriftBackupState> {
             progress: progress,
             fileSize: totalBytes,
             networkSpeedAsString: networkSpeedAsString,
+            timeRemainingAsString: timeRemainingAsString,
           ),
         },
       );
@@ -327,6 +335,7 @@ class DriftBackupNotifier extends StateNotifier<DriftBackupState> {
             progress: progress,
             fileSize: totalBytes,
             networkSpeedAsString: networkSpeedAsString,
+            timeRemainingAsString: timeRemainingAsString,
           ),
         },
       );

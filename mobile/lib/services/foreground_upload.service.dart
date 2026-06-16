@@ -106,7 +106,12 @@ class ForegroundUploadService {
         }
       }
       await Future.wait(List.generate(8, (_) => fetchSize()));
-      candidates.sort((a, b) => (sizeMap[a.id] ?? 0).compareTo(sizeMap[b.id] ?? 0));
+      // Photos before videos; within each group, smallest first.
+      candidates.sort((a, b) {
+        final typeOrder = (a.isVideo ? 1 : 0).compareTo(b.isVideo ? 1 : 0);
+        if (typeOrder != 0) return typeOrder;
+        return (sizeMap[a.id] ?? 0).compareTo(sizeMap[b.id] ?? 0);
+      });
     }
 
     final networkCapabilities = await _connectivityApi.getCapabilities();

@@ -7,6 +7,7 @@ import 'package:immich_mobile/extensions/translate_extensions.dart';
 import 'package:immich_mobile/presentation/widgets/images/thumbnail.widget.dart';
 import 'package:immich_mobile/providers/backup/drift_backup.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/asset.provider.dart';
+import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:path/path.dart' as path;
 
@@ -23,18 +24,18 @@ class _DriftUploadDetailPageState extends ConsumerState<DriftUploadDetailPage> {
   final Set<String> _failedTaskIds = {};
 
   final Map<String, int> _taskSlotAssignments = {};
-  static const int _maxSlots = 3;
 
-  /// Assigns uploading items to fixed slots to prevent jumping when items complete
-  List<DriftUploadStatus?> _assignItemsToSlots(List<DriftUploadStatus> uploadingItems) {
-    final slots = List<DriftUploadStatus?>.filled(_maxSlots, null);
+  /// Assigns uploading items to fixed slots to prevent jumping when items complete.
+  /// [maxSlots] matches the current parallelUploads setting.
+  List<DriftUploadStatus?> _assignItemsToSlots(List<DriftUploadStatus> uploadingItems, int maxSlots) {
+    final slots = List<DriftUploadStatus?>.filled(maxSlots, null);
     final currentTaskIds = uploadingItems.map((e) => e.taskId).toSet();
 
     _taskSlotAssignments.removeWhere((taskId, _) => !currentTaskIds.contains(taskId));
 
     for (final item in uploadingItems) {
       final existingSlot = _taskSlotAssignments[item.taskId];
-      if (existingSlot != null && existingSlot < _maxSlots) {
+      if (existingSlot != null && existingSlot < maxSlots) {
         slots[existingSlot] = item;
       }
     }
@@ -44,7 +45,7 @@ class _DriftUploadDetailPageState extends ConsumerState<DriftUploadDetailPage> {
         continue;
       }
 
-      for (int i = 0; i < _maxSlots; i++) {
+      for (int i = 0; i < maxSlots; i++) {
         if (slots[i] == null) {
           slots[i] = item;
           _taskSlotAssignments[item.taskId] = i;
@@ -60,6 +61,7 @@ class _DriftUploadDetailPageState extends ConsumerState<DriftUploadDetailPage> {
   Widget build(BuildContext context) {
     final uploadItems = ref.watch(driftBackupProvider.select((state) => state.uploadItems));
     final iCloudProgress = ref.watch(driftBackupProvider.select((state) => state.iCloudDownloadProgress));
+    final parallelUploads = ref.watch(appConfigProvider.select((c) => c.backup.parallelUploads)).clamp(1, 10);
 
     for (final item in uploadItems.values) {
       if (item.isFailed == true) {
@@ -85,7 +87,7 @@ class _DriftUploadDetailPageState extends ConsumerState<DriftUploadDetailPage> {
         elevation: 0,
         scrolledUnderElevation: 1,
       ),
-      body: _buildTwoSectionLayout(context, uploadingItems, failedItems, iCloudProgress),
+      body: _buildTwoSectionLayout(context, uploadingItems, failedItems, iCloudProgress, parallelUploads),
     );
   }
 
@@ -94,6 +96,7 @@ class _DriftUploadDetailPageState extends ConsumerState<DriftUploadDetailPage> {
     List<DriftUploadStatus> uploadingItems,
     List<DriftUploadStatus> failedItems,
     Map<String, double> iCloudProgress,
+    int parallelUploads,
   ) {
     return CustomScrollView(
       slivers: [
@@ -134,15 +137,14 @@ class _DriftUploadDetailPageState extends ConsumerState<DriftUploadDetailPage> {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           sliver: SliverList(
             delegate: SliverChildBuilderDelegate((context, index) {
-              // Use slot-based assignment to prevent items from jumping
-              final slots = _assignItemsToSlots(uploadingItems);
+              final slots = _assignItemsToSlots(uploadingItems, parallelUploads);
               final item = slots[index];
               if (item != null) {
                 return _buildCurrentUploadCard(context, item);
               } else {
                 return _buildPlaceholderCard(context);
               }
-            }, childCount: 3),
+            }, childCount: parallelUploads),
           ),
         ),
 
@@ -299,66 +301,79 @@ class _DriftUploadDetailPageState extends ConsumerState<DriftUploadDetailPage> {
         borderRadius: const BorderRadius.all(Radius.circular(12)),
         child: Padding(
           padding: const EdgeInsets.all(12),
-          child: SizedBox(
-            height: 64,
-            child: Row(
-              children: [
-                _CurrentUploadThumbnail(taskId: item.taskId),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        path.basename(item.filename),
-                        style: context.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _CurrentUploadThumbnail(taskId: item.taskId),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      path.basename(item.filename),
+                      style: context.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      isFailed
+                          ? item.error ?? "unable_to_upload_file".t(context: context)
+                          : "${formatHumanReadableBytes(item.fileSize, 1)} • ${formatHumanReadableBytes((item.progress * item.fileSize).round(), 1)} transferred • ${item.networkSpeedAsString}",
+                      style: context.textTheme.labelLarge?.copyWith(
+                        color: isFailed
+                            ? context.colorScheme.error
+                            : context.colorScheme.onSurface.withValues(alpha: 0.6),
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        isFailed
-                            ? item.error ?? "unable_to_upload_file".t(context: context)
-                            : "${formatHumanReadableBytes(item.fileSize, 1)} • ${formatHumanReadableBytes((item.progress * item.fileSize).round(), 1)} transferred • ${item.networkSpeedAsString}",
-                        style: context.textTheme.labelLarge?.copyWith(
-                          color: isFailed
-                              ? context.colorScheme.error
-                              : context.colorScheme.onSurface.withValues(alpha: 0.6),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (!isFailed) ...[
+                      const SizedBox(height: 8),
+                      ClipRRect(
+                        borderRadius: const BorderRadius.all(Radius.circular(4)),
+                        child: LinearProgressIndicator(
+                          value: item.progress,
+                          backgroundColor: context.colorScheme.primary.withValues(alpha: 0.2),
+                          valueColor: AlwaysStoppedAnimation(context.colorScheme.primary),
+                          minHeight: 4,
                         ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
                       ),
-                      if (!isFailed) ...[
-                        const SizedBox(height: 8),
-                        ClipRRect(
-                          borderRadius: const BorderRadius.all(Radius.circular(4)),
-                          child: LinearProgressIndicator(
-                            value: item.progress,
-                            backgroundColor: context.colorScheme.primary.withValues(alpha: 0.2),
-                            valueColor: AlwaysStoppedAnimation(context.colorScheme.primary),
-                            minHeight: 4,
-                          ),
-                        ),
-                      ],
                     ],
-                  ),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                SizedBox(
-                  width: 48,
-                  child: isFailed
-                      ? Icon(Icons.error_rounded, color: context.colorScheme.error, size: 28)
-                      : Text(
-                          "${progressPercentage.toStringAsFixed(0)}%",
-                          textAlign: TextAlign.right,
-                          style: context.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                            color: context.colorScheme.primary,
+              ),
+              const SizedBox(width: 12),
+              SizedBox(
+                width: 56,
+                child: isFailed
+                    ? Icon(Icons.error_rounded, color: context.colorScheme.error, size: 28)
+                    : Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            "${progressPercentage.toStringAsFixed(0)}%",
+                            textAlign: TextAlign.right,
+                            style: context.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                              color: context.colorScheme.primary,
+                            ),
                           ),
-                        ),
-                ),
-              ],
-            ),
+                          if (item.timeRemainingAsString != '--:--')
+                            Text(
+                              "est ${item.timeRemainingAsString}",
+                              textAlign: TextAlign.right,
+                              style: context.textTheme.labelSmall?.copyWith(
+                                color: context.colorScheme.onSurface.withValues(alpha: 0.5),
+                              ),
+                            ),
+                        ],
+                      ),
+              ),
+            ],
           ),
         ),
       ),
