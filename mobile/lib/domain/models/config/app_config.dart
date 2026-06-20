@@ -3,6 +3,7 @@ import 'package:immich_mobile/constants/colors.dart';
 import 'package:immich_mobile/constants/enums.dart';
 import 'package:immich_mobile/domain/models/config/album_config.dart';
 import 'package:immich_mobile/domain/models/config/backup_config.dart';
+import 'package:immich_mobile/domain/models/config/copyparty_config.dart';
 import 'package:immich_mobile/domain/models/config/cleanup_config.dart';
 import 'package:immich_mobile/domain/models/config/image_config.dart';
 import 'package:immich_mobile/domain/models/config/map_config.dart';
@@ -32,6 +33,7 @@ class AppConfig {
   final BackupConfig backup;
   final NetworkConfig network;
   final ShareConfig share;
+  final CopypartyConfig copyparty;
 
   const AppConfig({
     this.logLevel = .info,
@@ -46,6 +48,7 @@ class AppConfig {
     this.backup = const .new(),
     this.network = const .new(),
     this.share = const .new(),
+    this.copyparty = const .new(),
   });
 
   AppConfig copyWith({
@@ -61,6 +64,7 @@ class AppConfig {
     BackupConfig? backup,
     NetworkConfig? network,
     ShareConfig? share,
+    CopypartyConfig? copyparty,
   }) => .new(
     logLevel: logLevel ?? this.logLevel,
     theme: theme ?? this.theme,
@@ -74,6 +78,7 @@ class AppConfig {
     backup: backup ?? this.backup,
     network: network ?? this.network,
     share: share ?? this.share,
+    copyparty: copyparty ?? this.copyparty,
   );
 
   @override
@@ -91,15 +96,16 @@ class AppConfig {
           other.album == album &&
           other.backup == backup &&
           other.network == network &&
-          other.share == share);
+          other.share == share &&
+          other.copyparty == copyparty);
 
   @override
   int get hashCode =>
-      Object.hash(logLevel, theme, cleanup, map, timeline, image, viewer, slideshow, album, backup, network, share);
+      Object.hash(logLevel, theme, cleanup, map, timeline, image, viewer, slideshow, album, backup, network, share, copyparty);
 
   @override
   String toString() =>
-      'AppConfig(logLevel: $logLevel, theme: $theme, cleanup: $cleanup, map: $map, timeline: $timeline, image: $image, viewer: $viewer, slideshow: $slideshow, album: $album, backup: $backup, network: $network, share: $share)';
+      'AppConfig(logLevel: $logLevel, theme: $theme, cleanup: $cleanup, map: $map, timeline: $timeline, image: $image, viewer: $viewer, slideshow: $slideshow, album: $album, backup: $backup, network: $network, share: $share, copyparty: $copyparty)';
 
   T read<T>(SettingsKey<T> key) =>
       (switch (key) {
@@ -145,6 +151,13 @@ class AppConfig {
             .cleanupCutoffDaysAgo => cleanup.cutoffDaysAgo,
             .cleanupDefaultsInitialized => cleanup.defaultsInitialized,
             .shareFileType => share.fileType,
+            .copypartyHostUrl => copyparty.hostUrl,
+            .copypartyUploadPath => copyparty.uploadPath,
+            .copypartyParallelConnections => copyparty.parallelConnections,
+            .copypartyAutoDeleteAfterVerify => copyparty.autoDeleteAfterVerify,
+            .copypartyWriteReceipts => copyparty.writeReceipts,
+            .copypartyTriggerExtensions => copyparty.triggerExtensions,
+            .copypartyStripPrefixes => copyparty.stripPrefixes,
             .slideshowTransition => slideshow.transition,
             .slideshowRepeat => slideshow.repeat,
             .slideshowDuration => slideshow.duration,
@@ -202,6 +215,13 @@ class AppConfig {
       .cleanupCutoffDaysAgo => copyWith(cleanup: cleanup.copyWith(cutoffDaysAgo: value as int)),
       .cleanupDefaultsInitialized => copyWith(cleanup: cleanup.copyWith(defaultsInitialized: value as bool)),
       .shareFileType => copyWith(share: share.copyWith(fileType: value as ShareAssetType)),
+      .copypartyHostUrl => copyWith(copyparty: copyparty.copyWith(hostUrl: value as String)),
+      .copypartyUploadPath => copyWith(copyparty: copyparty.copyWith(uploadPath: value as String)),
+      .copypartyParallelConnections => copyWith(copyparty: copyparty.copyWith(parallelConnections: value as int)),
+      .copypartyAutoDeleteAfterVerify => copyWith(copyparty: copyparty.copyWith(autoDeleteAfterVerify: value as bool)),
+      .copypartyWriteReceipts => copyWith(copyparty: copyparty.copyWith(writeReceipts: value as bool)),
+      .copypartyTriggerExtensions => copyWith(copyparty: copyparty.copyWith(triggerExtensions: value as List<String>)),
+      .copypartyStripPrefixes => copyWith(copyparty: copyparty.copyWith(stripPrefixes: value as List<String>)),
       .slideshowTransition => copyWith(slideshow: slideshow.copyWith(transition: value as bool)),
       .slideshowRepeat => copyWith(slideshow: slideshow.copyWith(repeat: value as bool)),
       .slideshowDuration => copyWith(slideshow: slideshow.copyWith(duration: value as int)),

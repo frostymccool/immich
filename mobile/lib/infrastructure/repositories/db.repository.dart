@@ -120,7 +120,7 @@ class Drift extends $Drift {
   }
 
   @override
-  int get schemaVersion => 30;
+  int get schemaVersion => 31;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -128,10 +128,14 @@ class Drift extends $Drift {
       // Run migration steps without foreign keys and re-enable them later
       await customStatement('PRAGMA foreign_keys = OFF');
 
-      await m.runMigrationSteps(
-        from: from,
-        to: to,
-        steps: migrationSteps(
+      // The generated migrationSteps only knows versions 1-30.
+      // Handle v31+ migrations below, separately.
+      final stepsTarget = to < 31 ? to : 30;
+      if (from < stepsTarget) {
+        await m.runMigrationSteps(
+          from: from,
+          to: stepsTarget,
+          steps: migrationSteps(
           from1To2: (m, v2) async {
             for (final entity in v2.entities) {
               await m.drop(entity);
@@ -313,6 +317,28 @@ class Drift extends $Drift {
           },
         ),
       );
+      }
+
+      // v30 → v31: add copyparty upload receipts table (raw SQL, outside generated steps)
+      if (from < 31 && to >= 31) {
+        await customStatement('''
+          CREATE TABLE IF NOT EXISTS copyparty_upload_receipts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL,
+            local_path TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            sha512_file TEXT NOT NULL,
+            wark TEXT NOT NULL,
+            upload_timestamp TEXT NOT NULL,
+            copyparty_url TEXT NOT NULL,
+            receipt_file_written INTEGER NOT NULL DEFAULT 0,
+            source_deleted INTEGER NOT NULL DEFAULT 0
+          )
+        ''');
+        await customStatement(
+          'CREATE INDEX IF NOT EXISTS idx_copyparty_receipts_wark ON copyparty_upload_receipts(wark)',
+        );
+      }
 
       if (kDebugMode) {
         // Fail if the migration broke foreign keys
@@ -330,6 +356,24 @@ class Drift extends $Drift {
       await customStatement('PRAGMA busy_timeout = 30000'); // 30s
       await customStatement('PRAGMA cache_size = -32000'); // 32MB
       await customStatement('PRAGMA temp_store = MEMORY');
+      // Ensure copyparty receipts table exists (covers both migrations and fresh installs)
+      await customStatement('''
+        CREATE TABLE IF NOT EXISTS copyparty_upload_receipts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          filename TEXT NOT NULL,
+          local_path TEXT NOT NULL,
+          size_bytes INTEGER NOT NULL,
+          sha512_file TEXT NOT NULL,
+          wark TEXT NOT NULL,
+          upload_timestamp TEXT NOT NULL,
+          copyparty_url TEXT NOT NULL,
+          receipt_file_written INTEGER NOT NULL DEFAULT 0,
+          source_deleted INTEGER NOT NULL DEFAULT 0
+        )
+      ''');
+      await customStatement(
+        'CREATE INDEX IF NOT EXISTS idx_copyparty_receipts_wark ON copyparty_upload_receipts(wark)',
+      );
     },
   );
 }
