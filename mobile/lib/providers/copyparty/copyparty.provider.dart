@@ -103,7 +103,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       state = state.copyWith(
         step: ImportSessionStep.options,
         uploadSets: sets,
-        totalFiles: sets.fold(0, (s, u) => s + u.files.length),
+        totalFiles: sets.fold<int>(0, (s, u) => s + u.files.length),
       );
     } catch (e) {
       state = state.copyWith(
