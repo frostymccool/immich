@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/settings_key.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
@@ -21,6 +22,7 @@ class CopypartySettings extends ConsumerWidget {
         const _HostUrlTile(),
         const _PasswordTile(),
         const _UploadPathTile(),
+        const _ConnectTestButton(),
         const Divider(),
         SettingGroupTitle(title: 'Upload Behaviour', icon: Icons.tune_rounded),
         const _ParallelConnectionsSlider(),
@@ -305,6 +307,57 @@ class _ImportFromMemoryCardButton extends ConsumerWidget {
         icon: const Icon(Icons.sd_card_rounded),
         label: const Text('Import from Memory Card'),
         style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Connect test button
+// ---------------------------------------------------------------------------
+
+class _ConnectTestButton extends HookConsumerWidget {
+  const _ConnectTestButton();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final testing = useState(false);
+    final hostUrl = ref.watch(appConfigProvider.select((c) => c.copyparty.hostUrl));
+
+    Future<void> runTest() async {
+      if (testing.value || hostUrl.isEmpty) return;
+      testing.value = true;
+      try {
+        final password = await ref.read(copypartyPasswordProvider.future);
+        final uploader = ref.read(copypartyUploaderProvider);
+        final error = await uploader.testConnection(hostUrl, password);
+        if (!context.mounted) return;
+        final ok = error == null;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(ok ? 'Connected successfully' : error),
+            backgroundColor: ok ? Colors.green : context.colorScheme.error,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      } finally {
+        testing.value = false;
+      }
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+      child: OutlinedButton.icon(
+        onPressed: hostUrl.isEmpty || testing.value ? null : runTest,
+        icon: testing.value
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.wifi_tethering_rounded),
+        label: Text(testing.value ? 'Testing…' : 'Test Connection'),
+        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(44)),
       ),
     );
   }

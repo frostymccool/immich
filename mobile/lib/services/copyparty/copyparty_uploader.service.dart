@@ -21,6 +21,31 @@ class CopypartyUploaderService {
   void dispose() => _client.close();
 
   // ---------------------------------------------------------------------------
+  // Connection test
+  // ---------------------------------------------------------------------------
+
+  /// Returns null on success, or an error string on failure.
+  Future<String?> testConnection(String hostUrl, String password) async {
+    try {
+      final base = hostUrl.trimRight('/');
+      if (base.isEmpty) return 'Host URL is not configured';
+      final uri = Uri.parse(base);
+      final headers = password.isNotEmpty ? {'X-Password': password} : <String, String>{};
+      final response = await _client
+          .get(uri, headers: headers)
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode < 400) return null;
+      return 'Server returned HTTP ${response.statusCode}';
+    } on SocketException catch (e) {
+      return 'Cannot reach server: ${e.message}';
+    } on TimeoutException {
+      return 'Connection timed out after 10 s';
+    } catch (e) {
+      return 'Error: $e';
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Chunk size table — mirrors the up2k reference table from copyparty devnotes
   // ---------------------------------------------------------------------------
 
