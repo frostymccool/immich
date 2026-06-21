@@ -5,7 +5,6 @@ class CopypartyConfig {
   final bool autoDeleteAfterVerify;
   final bool writeReceipts;
   final List<String> triggerExtensions;
-  final List<String> stripPrefixes;
 
   const CopypartyConfig({
     this.hostUrl = '',
@@ -14,7 +13,6 @@ class CopypartyConfig {
     this.autoDeleteAfterVerify = false,
     this.writeReceipts = true,
     this.triggerExtensions = const ['lrv', 'insv', 'insp'],
-    this.stripPrefixes = const ['LRV_', 'lrv_', 'THM_', 'thm_'],
   });
 
   CopypartyConfig copyWith({
@@ -24,7 +22,6 @@ class CopypartyConfig {
     bool? autoDeleteAfterVerify,
     bool? writeReceipts,
     List<String>? triggerExtensions,
-    List<String>? stripPrefixes,
   }) => CopypartyConfig(
     hostUrl: hostUrl ?? this.hostUrl,
     uploadPath: uploadPath ?? this.uploadPath,
@@ -32,7 +29,6 @@ class CopypartyConfig {
     autoDeleteAfterVerify: autoDeleteAfterVerify ?? this.autoDeleteAfterVerify,
     writeReceipts: writeReceipts ?? this.writeReceipts,
     triggerExtensions: triggerExtensions ?? this.triggerExtensions,
-    stripPrefixes: stripPrefixes ?? this.stripPrefixes,
   );
 
   @override
@@ -44,8 +40,7 @@ class CopypartyConfig {
           other.parallelConnections == parallelConnections &&
           other.autoDeleteAfterVerify == autoDeleteAfterVerify &&
           other.writeReceipts == writeReceipts &&
-          _listEquals(other.triggerExtensions, triggerExtensions) &&
-          _listEquals(other.stripPrefixes, stripPrefixes));
+          _listEquals(other.triggerExtensions, triggerExtensions));
 
   @override
   int get hashCode => Object.hash(
@@ -55,15 +50,13 @@ class CopypartyConfig {
     autoDeleteAfterVerify,
     writeReceipts,
     Object.hashAll(triggerExtensions),
-    Object.hashAll(stripPrefixes),
   );
 
   @override
   String toString() =>
       'CopypartyConfig(hostUrl: $hostUrl, uploadPath: $uploadPath, '
       'parallelConnections: $parallelConnections, autoDeleteAfterVerify: $autoDeleteAfterVerify, '
-      'writeReceipts: $writeReceipts, triggerExtensions: $triggerExtensions, '
-      'stripPrefixes: $stripPrefixes)';
+      'writeReceipts: $writeReceipts, triggerExtensions: $triggerExtensions)';
 
   static bool _listEquals(List<String> a, List<String> b) {
     if (a.length != b.length) return false;

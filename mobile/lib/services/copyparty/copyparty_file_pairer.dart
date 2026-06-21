@@ -5,14 +5,12 @@ import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 /// Pairs files in a directory into upload sets based on stem matching.
 ///
 /// Trigger files (e.g. .lrv, .insv) initiate pairing. Other files with the
-/// same stem (after stripping known prefixes) are grouped into the same set.
+/// same stem are grouped into the same set.
 class CopypartyFilePairer {
   final List<String> triggerExtensions;
-  final List<String> stripPrefixes;
 
   const CopypartyFilePairer({
     this.triggerExtensions = const ['lrv', 'insv', 'insp'],
-    this.stripPrefixes = const ['LRV_', 'lrv_', 'THM_', 'thm_'],
   });
 
   // ---------------------------------------------------------------------------
@@ -40,21 +38,13 @@ class CopypartyFilePairer {
   // Stem normalisation
   // ---------------------------------------------------------------------------
 
-  /// Strips known prefixes and the file extension, returns the normalised stem.
+  /// Strips the file extension and lowercases, returning the normalised stem.
   String normalise(String filename) {
     var stem = filename;
 
     // Strip extension
     final dotIdx = stem.lastIndexOf('.');
     if (dotIdx > 0) stem = stem.substring(0, dotIdx);
-
-    // Strip known prefixes (case-insensitive comparison)
-    for (final prefix in stripPrefixes) {
-      if (stem.toLowerCase().startsWith(prefix.toLowerCase())) {
-        stem = stem.substring(prefix.length);
-        break; // only strip one prefix
-      }
-    }
 
     return stem.toLowerCase();
   }

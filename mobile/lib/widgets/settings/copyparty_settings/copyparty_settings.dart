@@ -29,7 +29,6 @@ class CopypartySettings extends ConsumerWidget {
         const Divider(),
         SettingGroupTitle(title: 'File Matching', icon: Icons.link_rounded),
         const _TriggerExtensionsTile(),
-        const _StripPrefixesTile(),
         const Divider(),
         SettingGroupTitle(title: 'Import', icon: Icons.sd_card_rounded),
         const _ImportFromMemoryCardButton(),
@@ -282,40 +281,6 @@ class _TriggerExtensionsTile extends ConsumerWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Strip prefixes
-// ---------------------------------------------------------------------------
-
-class _StripPrefixesTile extends ConsumerWidget {
-  const _StripPrefixesTile();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final prefixes = ref.watch(appConfigProvider.select((c) => c.copyparty.stripPrefixes));
-    return Padding(
-      padding: const EdgeInsets.only(left: 8.0),
-      child: SettingListTile(
-        title: 'Strip filename prefixes',
-        subtitle: prefixes.join(', '),
-        leading: const Icon(Icons.text_fields_rounded),
-        onTap: () => _showTextDialog(
-          context,
-          title: 'Strip Prefixes',
-          hint: 'LRV_, lrv_, THM_, thm_',
-          initialValue: prefixes.join(', '),
-          onSave: (value) {
-            final list = value
-                .split(',')
-                .map((e) => e.trim())
-                .where((e) => e.isNotEmpty)
-                .toList();
-            ref.read(settingsProvider).write(SettingsKey.copypartyStripPrefixes, list);
-          },
-        ),
-      ),
-    );
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Import from memory card button

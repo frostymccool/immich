@@ -97,7 +97,6 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       final config = _ref.read(appConfigProvider).copyparty;
       final pairer = CopypartyFilePairer(
         triggerExtensions: config.triggerExtensions,
-        stripPrefixes: config.stripPrefixes,
       );
       final sets = await pairer.scanDirectory(directoryPath);
       state = state.copyWith(

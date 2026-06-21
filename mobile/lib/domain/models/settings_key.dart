@@ -79,7 +79,6 @@ enum SettingsKey<T> {
   copypartyAutoDeleteAfterVerify<bool>(),
   copypartyWriteReceipts<bool>(),
   copypartyTriggerExtensions<List<String>>(codec: _ListCodec(_PrimitiveCodec.string)),
-  copypartyStripPrefixes<List<String>>(codec: _ListCodec(_PrimitiveCodec.string)),
 
   // Slideshow
   slideshowTransition<bool>(),
