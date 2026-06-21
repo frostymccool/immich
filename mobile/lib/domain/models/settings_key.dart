@@ -79,6 +79,7 @@ enum SettingsKey<T> {
   copypartyAutoDeleteAfterVerify<bool>(),
   copypartyWriteReceipts<bool>(),
   copypartyTriggerExtensions<List<String>>(codec: _ListCodec(_PrimitiveCodec.string)),
+  copypartySelfSignedCert<bool>(),
 
   // Slideshow
   slideshowTransition<bool>(),

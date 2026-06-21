@@ -23,6 +23,7 @@ class CopypartySettings extends ConsumerWidget {
         const _HostUrlTile(),
         const _PasswordTile(),
         const _UploadPathTile(),
+        const _SelfSignedCertTile(),
         const _ConnectTestButton(),
         const Divider(),
         SettingGroupTitle(title: 'Upload Behaviour', icon: Icons.tune_rounded),
@@ -309,6 +310,30 @@ class _ImportFromMemoryCardButton extends ConsumerWidget {
         icon: const Icon(Icons.sd_card_rounded),
         label: const Text('Import from Memory Card'),
         style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Self-signed certificate toggle
+// ---------------------------------------------------------------------------
+
+class _SelfSignedCertTile extends ConsumerWidget {
+  const _SelfSignedCertTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final value = ref.watch(appConfigProvider.select((c) => c.copyparty.allowSelfSignedCert));
+    return Padding(
+      padding: const EdgeInsets.only(left: 8.0),
+      child: SettingListTile(
+        title: 'Allow self-signed certificate',
+        subtitle: 'Skip TLS verification (required for local servers with self-signed certs)',
+        trailing: Switch(
+          value: value,
+          onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartySelfSignedCert, v),
+        ),
       ),
     );
   }

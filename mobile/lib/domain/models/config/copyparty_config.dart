@@ -5,6 +5,7 @@ class CopypartyConfig {
   final bool autoDeleteAfterVerify;
   final bool writeReceipts;
   final List<String> triggerExtensions;
+  final bool allowSelfSignedCert;
 
   const CopypartyConfig({
     this.hostUrl = '',
@@ -13,6 +14,7 @@ class CopypartyConfig {
     this.autoDeleteAfterVerify = false,
     this.writeReceipts = true,
     this.triggerExtensions = const ['lrv', 'insv', 'insp'],
+    this.allowSelfSignedCert = false,
   });
 
   CopypartyConfig copyWith({
@@ -22,6 +24,7 @@ class CopypartyConfig {
     bool? autoDeleteAfterVerify,
     bool? writeReceipts,
     List<String>? triggerExtensions,
+    bool? allowSelfSignedCert,
   }) => CopypartyConfig(
     hostUrl: hostUrl ?? this.hostUrl,
     uploadPath: uploadPath ?? this.uploadPath,
@@ -29,6 +32,7 @@ class CopypartyConfig {
     autoDeleteAfterVerify: autoDeleteAfterVerify ?? this.autoDeleteAfterVerify,
     writeReceipts: writeReceipts ?? this.writeReceipts,
     triggerExtensions: triggerExtensions ?? this.triggerExtensions,
+    allowSelfSignedCert: allowSelfSignedCert ?? this.allowSelfSignedCert,
   );
 
   @override
@@ -40,7 +44,8 @@ class CopypartyConfig {
           other.parallelConnections == parallelConnections &&
           other.autoDeleteAfterVerify == autoDeleteAfterVerify &&
           other.writeReceipts == writeReceipts &&
-          _listEquals(other.triggerExtensions, triggerExtensions));
+          _listEquals(other.triggerExtensions, triggerExtensions) &&
+          other.allowSelfSignedCert == allowSelfSignedCert);
 
   @override
   int get hashCode => Object.hash(
@@ -50,13 +55,15 @@ class CopypartyConfig {
     autoDeleteAfterVerify,
     writeReceipts,
     Object.hashAll(triggerExtensions),
+    allowSelfSignedCert,
   );
 
   @override
   String toString() =>
       'CopypartyConfig(hostUrl: $hostUrl, uploadPath: $uploadPath, '
       'parallelConnections: $parallelConnections, autoDeleteAfterVerify: $autoDeleteAfterVerify, '
-      'writeReceipts: $writeReceipts, triggerExtensions: $triggerExtensions)';
+      'writeReceipts: $writeReceipts, triggerExtensions: $triggerExtensions, '
+      'allowSelfSignedCert: $allowSelfSignedCert)';
 
   static bool _listEquals(List<String> a, List<String> b) {
     if (a.length != b.length) return false;

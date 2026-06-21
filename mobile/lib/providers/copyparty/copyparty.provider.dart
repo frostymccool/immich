@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/infrastructure/repositories/copyparty_receipt.repository.dart';
 import 'package:immich_mobile/providers/infrastructure/db.provider.dart';
@@ -19,7 +21,18 @@ const _copypartyPasswordKey = 'copyparty_password';
 
 final copypartyUploaderProvider = Provider<CopypartyUploaderService>(
   (ref) {
-    final service = CopypartyUploaderService();
+    final allowSelfSigned = ref.watch(
+      appConfigProvider.select((c) => c.copyparty.allowSelfSignedCert),
+    );
+    http.Client client;
+    if (allowSelfSigned) {
+      final httpClient = HttpClient()
+        ..badCertificateCallback = (cert, host, port) => true;
+      client = IOClient(httpClient);
+    } else {
+      client = http.Client();
+    }
+    final service = CopypartyUploaderService(client: client);
     ref.onDispose(service.dispose);
     return service;
   },
