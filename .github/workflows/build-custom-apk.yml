@@ -3,7 +3,7 @@ name: Build Custom APK
 on:
   push:
     branches:
-      - feature/custom-upload-settings
+      - 'feature/**'
   workflow_dispatch:
 
 jobs:
