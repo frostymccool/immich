@@ -27,7 +27,7 @@ class CopypartyUploaderService {
   /// Returns null on success, or an error string on failure.
   Future<String?> testConnection(String hostUrl, String password) async {
     try {
-      final base = hostUrl.trimRight('/');
+      final base = hostUrl.replaceAll(RegExp(r'/+$'), '');
       if (base.isEmpty) return 'Host URL is not configured';
       final uri = Uri.parse(base);
       final headers = password.isNotEmpty ? {'X-Password': password} : <String, String>{};
