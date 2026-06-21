@@ -68,6 +68,13 @@ class CopypartyReceiptRepository {
     return rows.map(_rowToReceipt).toList();
   }
 
+  Future<List<CopypartyReceipt>> getUndeleted() async {
+    final rows = await _db.customSelect(
+      'SELECT * FROM copyparty_upload_receipts WHERE source_deleted = 0 ORDER BY upload_timestamp DESC',
+    ).get();
+    return rows.map(_rowToReceipt).toList();
+  }
+
   Future<void> delete(int id) async {
     await _db.customStatement(
       'DELETE FROM copyparty_upload_receipts WHERE id = ?',

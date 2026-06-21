@@ -39,6 +39,14 @@ final copypartyPasswordProvider = FutureProvider<String>((ref) async {
 });
 
 // ---------------------------------------------------------------------------
+// Pending cleanup (uploaded files not yet deleted from device)
+// ---------------------------------------------------------------------------
+
+final pendingCleanupProvider = FutureProvider<List<CopypartyReceipt>>((ref) {
+  return ref.watch(copypartyReceiptRepositoryProvider).getUndeleted();
+});
+
+// ---------------------------------------------------------------------------
 // Import session state
 // ---------------------------------------------------------------------------
 

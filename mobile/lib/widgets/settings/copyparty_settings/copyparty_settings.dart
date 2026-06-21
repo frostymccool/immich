@@ -3,6 +3,7 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/settings_key.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
+import 'package:immich_mobile/pages/copyparty/copyparty_cleanup.page.dart';
 import 'package:immich_mobile/pages/copyparty/copyparty_import.page.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
@@ -34,6 +35,7 @@ class CopypartySettings extends ConsumerWidget {
         const Divider(),
         SettingGroupTitle(title: 'Import', icon: Icons.sd_card_rounded),
         const _ImportFromMemoryCardButton(),
+        const _PendingCleanupTile(),
       ],
     );
   }
@@ -359,6 +361,41 @@ class _ConnectTestButton extends HookConsumerWidget {
         label: Text(testing.value ? 'Testing…' : 'Test Connection'),
         style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(44)),
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Pending cleanup tile
+// ---------------------------------------------------------------------------
+
+class _PendingCleanupTile extends ConsumerWidget {
+  const _PendingCleanupTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(pendingCleanupProvider);
+    return async.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+      data: (receipts) {
+        if (receipts.isEmpty) return const SizedBox.shrink();
+        final count = receipts.length;
+        return Padding(
+          padding: const EdgeInsets.only(left: 8.0),
+          child: SettingListTile(
+            title: 'Delete uploaded source files',
+            subtitle: '$count file${count == 1 ? '' : 's'} uploaded and awaiting deletion',
+            leading: Badge(
+              label: Text('$count'),
+              child: const Icon(Icons.cleaning_services_rounded),
+            ),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const CopypartyCleanupPage()),
+            ),
+          ),
+        );
+      },
     );
   }
 }
