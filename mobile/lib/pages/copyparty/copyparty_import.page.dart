@@ -81,11 +81,24 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
     if (await Directory('/storage/emulated/0').exists()) {
       roots.add(const _DirEntry(path: '/storage/emulated/0', label: 'Internal Storage'));
     }
+    // /storage/ — SD cards and USB on most Android devices
     try {
       await for (final entity in Directory('/storage').list(followLinks: false)) {
         if (entity is Directory) {
           final name = entity.path.split('/').last;
           if (name != 'emulated' && name != 'self') {
+            roots.add(_DirEntry(path: entity.path, label: 'External — $name'));
+          }
+        }
+      }
+    } catch (_) {}
+    // /mnt/media_rw/ — Samsung alternate mount point for removable storage
+    try {
+      await for (final entity in Directory('/mnt/media_rw').list(followLinks: false)) {
+        if (entity is Directory) {
+          final name = entity.path.split('/').last;
+          final alreadyListed = roots.any((r) => r.label.contains(name));
+          if (!alreadyListed) {
             roots.add(_DirEntry(path: entity.path, label: 'External — $name'));
           }
         }

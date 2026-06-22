@@ -120,7 +120,15 @@ class _DriftBackupPageState extends ConsumerState<DriftBackupPage> {
         actions: [
           IconButton(
             onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const CopypartySettings()),
+              MaterialPageRoute(
+                builder: (_) => Scaffold(
+                  appBar: AppBar(
+                    title: const Text('Copyparty'),
+                    centerTitle: false,
+                  ),
+                  body: const CopypartySettings(),
+                ),
+              ),
             ),
             icon: const Icon(Icons.cloud_upload_outlined),
             tooltip: 'Copyparty',
