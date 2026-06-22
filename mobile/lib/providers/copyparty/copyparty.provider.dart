@@ -71,6 +71,7 @@ class ImportSessionState {
   final List<UploadSet> uploadSets;
   final int completedFiles;
   final int totalFiles;
+  final int scannedFiles;
   final String? errorMessage;
 
   const ImportSessionState({
@@ -79,6 +80,7 @@ class ImportSessionState {
     this.uploadSets = const [],
     this.completedFiles = 0,
     this.totalFiles = 0,
+    this.scannedFiles = 0,
     this.errorMessage,
   });
 
@@ -88,6 +90,7 @@ class ImportSessionState {
     List<UploadSet>? uploadSets,
     int? completedFiles,
     int? totalFiles,
+    int? scannedFiles,
     String? errorMessage,
   }) => ImportSessionState(
     step: step ?? this.step,
@@ -95,6 +98,7 @@ class ImportSessionState {
     uploadSets: uploadSets ?? this.uploadSets,
     completedFiles: completedFiles ?? this.completedFiles,
     totalFiles: totalFiles ?? this.totalFiles,
+    scannedFiles: scannedFiles ?? this.scannedFiles,
     errorMessage: errorMessage,
   );
 
@@ -112,14 +116,21 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   void reset() => state = const ImportSessionState();
 
   Future<void> scan(String directoryPath) async {
-    state = state.copyWith(step: ImportSessionStep.scanning, directoryPath: directoryPath);
+    state = state.copyWith(
+      step: ImportSessionStep.scanning,
+      directoryPath: directoryPath,
+      scannedFiles: 0,
+    );
 
     try {
       final config = _ref.read(appConfigProvider).copyparty;
       final pairer = CopypartyFilePairer(
         triggerExtensions: config.triggerExtensions,
       );
-      final sets = await pairer.scanDirectory(directoryPath);
+      final sets = await pairer.scanDirectory(
+        directoryPath,
+        onFileFound: (count) => state = state.copyWith(scannedFiles: count),
+      );
       state = state.copyWith(
         step: ImportSessionStep.options,
         uploadSets: sets,

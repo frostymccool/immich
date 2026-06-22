@@ -28,7 +28,7 @@ class CopypartyImportPage extends ConsumerWidget {
         ),
         body: switch (session.step) {
           ImportSessionStep.idle => const _DirectoryPickerStep(),
-          ImportSessionStep.scanning => const _ScanningStep(),
+          ImportSessionStep.scanning => _ScanningStep(session),
           ImportSessionStep.options => _OptionsStep(session),
           ImportSessionStep.uploading => _UploadProgressStep(session),
           ImportSessionStep.complete => _CompletionStep(session),
@@ -263,17 +263,26 @@ class _DirEntry {
 // ---------------------------------------------------------------------------
 
 class _ScanningStep extends StatelessWidget {
-  const _ScanningStep();
+  final ImportSessionState session;
+  const _ScanningStep(this.session);
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
+    final count = session.scannedFiles;
+    return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          CircularProgressIndicator.adaptive(),
-          SizedBox(height: 24),
-          Text('Scanning directory for files…'),
+          const CircularProgressIndicator.adaptive(),
+          const SizedBox(height: 24),
+          const Text('Scanning directory for files…'),
+          if (count > 0) ...[
+            const SizedBox(height: 8),
+            Text(
+              '$count file${count == 1 ? '' : 's'} found',
+              style: context.textTheme.bodySmall,
+            ),
+          ],
         ],
       ),
     );

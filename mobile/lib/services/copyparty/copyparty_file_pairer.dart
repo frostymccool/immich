@@ -19,13 +19,16 @@ class CopypartyFilePairer {
 
   /// Scans a directory (recursively) and returns paired upload sets.
   ///
-  /// Files with extensions in [triggerExtensions] seed the pairing.
-  /// Files with matching stems are added to the same set.
-  Future<List<UploadSet>> scanDirectory(String directoryPath) async {
+  /// [onFileFound] is called with the running total each time a file is
+  /// discovered, so callers can show live progress.
+  Future<List<UploadSet>> scanDirectory(
+    String directoryPath, {
+    void Function(int count)? onFileFound,
+  }) async {
     final dir = Directory(directoryPath);
     if (!await dir.exists()) return [];
 
-    final allFiles = await _listFiles(dir);
+    final allFiles = await _listFiles(dir, onFileFound: onFileFound);
     return _pairFiles(allFiles);
   }
 
@@ -133,7 +136,10 @@ class CopypartyFilePairer {
   // Filesystem scanning
   // ---------------------------------------------------------------------------
 
-  Future<List<FileInfo>> _listFiles(Directory dir) async {
+  Future<List<FileInfo>> _listFiles(
+    Directory dir, {
+    void Function(int count)? onFileFound,
+  }) async {
     final result = <FileInfo>[];
     await for (final entity in dir.list(recursive: true, followLinks: false)) {
       if (entity is File) {
@@ -147,6 +153,7 @@ class CopypartyFilePairer {
               lastModifiedMs: stat.modified.millisecondsSinceEpoch,
             ),
           );
+          onFileFound?.call(result.length);
         } catch (_) {
           // Skip files we can't stat
         }
