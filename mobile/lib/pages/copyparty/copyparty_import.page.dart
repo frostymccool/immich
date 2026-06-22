@@ -1,8 +1,7 @@
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
@@ -41,7 +40,7 @@ class CopypartyImportPage extends ConsumerWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Step 1: Directory browser
+// Step 1: Folder picker (uses Android SAF via file_picker)
 // ---------------------------------------------------------------------------
 
 class _DirectoryPickerStep extends ConsumerStatefulWidget {
@@ -52,359 +51,118 @@ class _DirectoryPickerStep extends ConsumerStatefulWidget {
 }
 
 class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
-  final List<String> _pathStack = []; // empty → roots view
-  List<_DirEntry> _entries = [];
-  bool _loading = true;
-  bool _hasFullStorageAccess = true;
-  String? _error;
+  String? _selectedPath;
+  bool _picking = false;
 
-  String? get _currentPath => _pathStack.isEmpty ? null : _pathStack.last;
-
-  @override
-  void initState() {
-    super.initState();
-    _checkPermissionAndLoad();
-  }
-
-  Future<void> _checkPermissionAndLoad() async {
-    final status = await Permission.manageExternalStorage.status;
-    if (mounted) setState(() => _hasFullStorageAccess = status.isGranted);
-    _load(null);
-  }
-
-  Future<void> _requestFullStorageAccess() async {
-    await Permission.manageExternalStorage.request();
-    final status = await Permission.manageExternalStorage.status;
-    if (mounted) {
-      setState(() => _hasFullStorageAccess = status.isGranted);
-      _load(null);
-    }
-  }
-
-  Future<void> _load(String? path) async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _browse() async {
+    setState(() => _picking = true);
     try {
-      final entries = path == null ? await _loadRoots() : await _loadDirectory(path);
-      if (mounted) setState(() { _entries = entries; _loading = false; });
-    } catch (e) {
-      final isPermissionError = '$e'.contains('Permission denied') ||
-          '$e'.contains('EACCES') || '$e'.contains('Operation not permitted');
-      if (isPermissionError && path != null && !path.contains('/emulated/')) {
-        final status = await Permission.manageExternalStorage.request();
-        if (status.isGranted) {
-          setState(() => _hasFullStorageAccess = true);
-          _load(path);
-          return;
-        }
-        if (mounted) {
-          setState(() {
-            _error = 'Storage access denied.\n\n'
-                'Tap "Grant Access" at the top to enable full storage access.';
-            _loading = false;
-          });
-        }
-      } else {
-        if (mounted) setState(() { _error = '$e'; _loading = false; });
-      }
+      final path = await FilePicker.platform.getDirectoryPath();
+      if (path != null && mounted) setState(() => _selectedPath = path);
+    } finally {
+      if (mounted) setState(() => _picking = false);
     }
   }
 
-  Future<List<_DirEntry>> _loadRoots() async {
-    final seenPaths = <String>{};
-    final roots = <_DirEntry>[];
-
-    // 1. Internal storage — always first
-    const internal = '/storage/emulated/0';
-    if (await Directory(internal).exists()) {
-      roots.add(const _DirEntry(path: internal, label: 'Internal Storage'));
-      seenPaths.add(internal);
-    }
-
-    // 2. getExternalStorageDirectories() — the proper Android API; returns
-    //    app-specific paths for EVERY mounted volume (SD card, USB OTG, hub).
-    //    Strip the app suffix to get the volume root.
-    try {
-      final externalDirs = await getExternalStorageDirectories();
-      if (externalDirs != null) {
-        for (final dir in externalDirs) {
-          final rootPath = _extractStorageRoot(dir.path);
-          if (rootPath != null && rootPath != internal && seenPaths.add(rootPath)) {
-            final name = rootPath.split('/').last;
-            roots.add(_DirEntry(path: rootPath, label: 'External — $name'));
-          }
-        }
-      }
-    } catch (_) {}
-
-    // 3. /proc/mounts — catches volumes not in externalDirs (e.g. SD card on some devices)
-    try {
-      final lines = await File('/proc/mounts').readAsLines();
-      for (final line in lines) {
-        final parts = line.split(' ');
-        if (parts.length < 2) continue;
-        final mp = parts[1];
-        final match = RegExp(r'^/storage/([^/]+)$').firstMatch(mp);
-        if (match != null) {
-          final name = match.group(1)!;
-          if (name != 'emulated' && name != 'self' && seenPaths.add(mp)) {
-            roots.add(_DirEntry(path: mp, label: 'External — $name'));
-          }
-        }
-      }
-    } catch (_) {}
-
-    // 4. /storage/ scan with followLinks: true — Samsung USB OTG entries are
-    //    often symlinks, which followLinks: false misses entirely.
-    //    Also scan /mnt/media_rw/ and /mnt/ broadly.
-    for (final base in ['/storage', '/mnt/media_rw', '/mnt/usb_storage', '/mnt/usbdisk']) {
-      try {
-        await for (final entity in Directory(base).list(followLinks: true)) {
-          if (entity is Directory || entity is Link) {
-            final name = entity.path.split('/').last;
-            if (name != 'emulated' && name != 'self' && name != 'obb' &&
-                name != 'user' && name != 'runtime' &&
-                !seenPaths.any((p) => p.endsWith('/$name'))) {
-              seenPaths.add(entity.path);
-              roots.add(_DirEntry(path: entity.path, label: 'External — $name'));
-            }
-          }
-        }
-      } catch (_) {}
-    }
-
-    return roots;
-  }
-
-  static String? _extractStorageRoot(String appPath) {
-    final parts = appPath.split('/');
-    if (parts.length < 3) return null;
-    // /storage/emulated/0/Android/... → /storage/emulated/0
-    if (parts.length >= 4 && parts[2] == 'emulated') {
-      return '/${parts[1]}/${parts[2]}/${parts[3]}';
-    }
-    // /storage/UUID/Android/... → /storage/UUID
-    return '/${parts[1]}/${parts[2]}';
-  }
-
-  Future<List<_DirEntry>> _loadDirectory(String path) async {
-    final entries = <_DirEntry>[];
-    await for (final entity in Directory(path).list(followLinks: false)) {
-      if (entity is Directory) {
-        final name = entity.path.split('/').last;
-        if (!name.startsWith('.')) {
-          entries.add(_DirEntry(path: entity.path, label: name));
-        }
-      }
-    }
-    entries.sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
-    return entries;
-  }
-
-  Future<void> _showManualPathDialog(BuildContext ctx) async {
-    final controller = TextEditingController();
+  Future<void> _showManualEntry() async {
+    final controller = TextEditingController(text: _selectedPath);
     final result = await showDialog<String>(
-      context: ctx,
-      builder: (dlgCtx) => AlertDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
         title: const Text('Enter Path'),
         content: TextField(
           controller: controller,
           autofocus: true,
           decoration: const InputDecoration(
-            hintText: '/storage/XXXX-XXXX',
-            helperText: 'Find your USB drive path in Samsung My Files → USB storage → ⋮ → Details',
-            helperMaxLines: 2,
+            hintText: '/storage/XXXX-XXXX/DCIM',
             border: OutlineInputBorder(),
           ),
-          onSubmitted: (v) => Navigator.pop(dlgCtx, v),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dlgCtx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           FilledButton(
-            onPressed: () => Navigator.pop(dlgCtx, controller.text.trim()),
-            child: const Text('Go'),
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('OK'),
           ),
         ],
       ),
     );
-    if (result != null && result.isNotEmpty) _enter(result);
-  }
-
-  void _enter(String path) {
-    _pathStack.add(path);
-    _load(path);
-  }
-
-  void _back() {
-    if (_pathStack.isEmpty) return;
-    _pathStack.removeLast();
-    _load(_currentPath);
+    if (result != null && result.isNotEmpty && mounted) {
+      setState(() => _selectedPath = result);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final canGoBack = _pathStack.isNotEmpty;
-    final canScan = _currentPath != null;
-
-    return Column(
-      children: [
-        // Full storage access banner
-        if (!_hasFullStorageAccess)
-          MaterialBanner(
-            padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-            content: const Text(
-              'Grant "All files access" to detect USB drives and SD cards.',
-            ),
-            leading: const Icon(Icons.usb_rounded),
-            actions: [
-              TextButton(
-                onPressed: _requestFullStorageAccess,
-                child: const Text('Grant Access'),
-              ),
-            ],
-          ),
-        // Breadcrumb bar
-        Container(
-          color: context.colorScheme.surfaceContainer,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          child: Row(
-            children: [
-              if (canGoBack)
-                IconButton(
-                  icon: const Icon(Icons.arrow_back_rounded),
-                  onPressed: _back,
-                  tooltip: 'Go up',
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                )
-              else
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 8),
-                  child: Icon(Icons.storage_rounded, size: 20),
-                ),
-              Expanded(
-                child: Text(
-                  _currentPath ?? 'Select storage',
-                  style: context.textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-        ),
-        // Directory list
-        Expanded(
-          child: _loading
-              ? const Center(child: CircularProgressIndicator.adaptive())
-              : _error != null
-                  ? Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(24.0),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.lock_outline, size: 48,
-                                color: context.colorScheme.error),
-                            const SizedBox(height: 12),
-                            Text(
-                              'Cannot read directory',
-                              style: context.textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              _error!,
-                              textAlign: TextAlign.center,
-                              style: context.textTheme.bodySmall,
-                            ),
-                            if (canGoBack) ...[
-                              const SizedBox(height: 16),
-                              OutlinedButton(
-                                onPressed: _back,
-                                child: const Text('Go back'),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    )
-                  : _entries.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.folder_open_outlined, size: 48,
-                                  color: context.colorScheme.onSurface.withValues(alpha: 0.4)),
-                              const SizedBox(height: 12),
-                              Text(
-                                _currentPath == null
-                                    ? 'No storage volumes found'
-                                    : 'No subfolders here',
-                                style: context.textTheme.bodyMedium,
-                              ),
-                              if (_currentPath != null) ...[
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Tap "Scan This Folder" to scan files here.',
-                                  style: context.textTheme.bodySmall,
-                                ),
-                              ],
-                            ],
-                          ),
-                        )
-                      : ListView.builder(
-                          // +1 for the manual entry tile at the bottom of the roots view
-                          itemCount: _entries.length + (_currentPath == null ? 1 : 0),
-                          itemBuilder: (ctx, i) {
-                            if (i == _entries.length) {
-                              // Manual path entry tile
-                              return ListTile(
-                                leading: const Icon(Icons.edit_outlined),
-                                title: const Text('Enter path manually'),
-                                subtitle: const Text('e.g. /storage/XXXX-XXXX'),
-                                onTap: () => _showManualPathDialog(ctx),
-                              );
-                            }
-                            final e = _entries[i];
-                            return ListTile(
-                              leading: const Icon(Icons.folder_rounded),
-                              title: Text(e.label),
-                              subtitle: _currentPath == null
-                                  ? Text(e.path, style: ctx.textTheme.bodySmall)
-                                  : null,
-                              trailing: const Icon(Icons.chevron_right_rounded),
-                              onTap: () => _enter(e.path),
-                            );
-                          },
-                        ),
-        ),
-        // Scan button
-        SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: canScan
-                    ? () => ref.read(importSessionProvider.notifier).scan(_currentPath!)
-                    : null,
-                icon: const Icon(Icons.search_rounded),
-                label: const Text('Scan This Folder'),
-                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
-              ),
+    return Padding(
+      padding: const EdgeInsets.all(24.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Select Folder to Import', style: context.textTheme.titleLarge),
+          const SizedBox(height: 8),
+          Text(
+            'Choose the folder on your memory card or USB drive that contains '
+            'files to upload. Subfolders are included automatically.',
+            style: context.textTheme.bodyMedium?.copyWith(
+              color: context.colorScheme.onSurface.withValues(alpha: 0.7),
             ),
           ),
-        ),
-      ],
+          const SizedBox(height: 32),
+          FilledButton.icon(
+            onPressed: _picking ? null : _browse,
+            icon: _picking
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.folder_open_rounded),
+            label: const Text('Browse for Folder'),
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+          ),
+          if (_selectedPath != null) ...[
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: context.colorScheme.surfaceContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.folder_rounded, color: context.primaryColor, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _selectedPath!,
+                      style: context.textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const Spacer(),
+          OutlinedButton.icon(
+            onPressed: _showManualEntry,
+            icon: const Icon(Icons.edit_outlined),
+            label: const Text('Enter path manually'),
+          ),
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: _selectedPath != null
+                ? () => ref.read(importSessionProvider.notifier).scan(_selectedPath!)
+                : null,
+            icon: const Icon(Icons.search_rounded),
+            label: const Text('Scan This Folder'),
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+          ),
+        ],
+      ),
     );
   }
-}
-
-class _DirEntry {
-  final String path;
-  final String label;
-  const _DirEntry({required this.path, required this.label});
 }
 
 // ---------------------------------------------------------------------------
