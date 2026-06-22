@@ -39,7 +39,7 @@ class CopypartyImportPage extends ConsumerWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Step 1: Directory picker
+// Step 1: Directory browser
 // ---------------------------------------------------------------------------
 
 class _DirectoryPickerStep extends ConsumerStatefulWidget {
@@ -50,105 +50,212 @@ class _DirectoryPickerStep extends ConsumerStatefulWidget {
 }
 
 class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
-  final _controller = TextEditingController();
+  final List<String> _pathStack = []; // empty → roots view
+  List<_DirEntry> _entries = [];
+  bool _loading = true;
   String? _error;
 
+  String? get _currentPath => _pathStack.isEmpty ? null : _pathStack.last;
+
   @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    _load(null);
   }
 
-  Future<void> _startScan() async {
-    final path = _controller.text.trim();
-    if (path.isEmpty) {
-      setState(() => _error = 'Please enter a directory path');
-      return;
+  Future<void> _load(String? path) async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final entries = path == null ? await _loadRoots() : await _loadDirectory(path);
+      if (mounted) setState(() { _entries = entries; _loading = false; });
+    } catch (e) {
+      if (mounted) setState(() { _error = '$e'; _loading = false; });
     }
-    final dir = Directory(path);
-    if (!await dir.exists()) {
-      setState(() => _error = 'Directory not found: $path');
-      return;
+  }
+
+  Future<List<_DirEntry>> _loadRoots() async {
+    final roots = <_DirEntry>[];
+    if (await Directory('/storage/emulated/0').exists()) {
+      roots.add(const _DirEntry(path: '/storage/emulated/0', label: 'Internal Storage'));
     }
-    setState(() => _error = null);
-    ref.read(importSessionProvider.notifier).scan(path);
+    try {
+      await for (final entity in Directory('/storage').list(followLinks: false)) {
+        if (entity is Directory) {
+          final name = entity.path.split('/').last;
+          if (name != 'emulated' && name != 'self') {
+            roots.add(_DirEntry(path: entity.path, label: 'External — $name'));
+          }
+        }
+      }
+    } catch (_) {}
+    return roots;
+  }
+
+  Future<List<_DirEntry>> _loadDirectory(String path) async {
+    final entries = <_DirEntry>[];
+    await for (final entity in Directory(path).list(followLinks: false)) {
+      if (entity is Directory) {
+        final name = entity.path.split('/').last;
+        if (!name.startsWith('.')) {
+          entries.add(_DirEntry(path: entity.path, label: name));
+        }
+      }
+    }
+    entries.sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
+    return entries;
+  }
+
+  void _enter(String path) {
+    _pathStack.add(path);
+    _load(path);
+  }
+
+  void _back() {
+    if (_pathStack.isEmpty) return;
+    _pathStack.removeLast();
+    _load(_currentPath);
   }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Select Memory Card Directory',
-            style: context.textTheme.titleLarge,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Enter the path to your memory card DCIM folder. '
-            'On Android, this is usually /storage/sdcard1/DCIM or '
-            '/storage/emulated/0/DCIM for internal storage.',
-            style: context.textTheme.bodyMedium?.copyWith(
-              color: context.colorScheme.onSurface.withValues(alpha: 0.7),
-            ),
-          ),
-          const SizedBox(height: 24),
-          TextField(
-            controller: _controller,
-            decoration: InputDecoration(
-              labelText: 'Directory path',
-              hintText: '/storage/sdcard1/DCIM',
-              border: const OutlineInputBorder(),
-              errorText: _error,
-              suffixIcon: IconButton(
-                icon: const Icon(Icons.clear),
-                onPressed: () => _controller.clear(),
-              ),
-            ),
-            onSubmitted: (_) => _startScan(),
-          ),
-          const SizedBox(height: 8),
-          // Quick path shortcuts
-          Wrap(
-            spacing: 8,
+    final canGoBack = _pathStack.isNotEmpty;
+    final canScan = _currentPath != null;
+
+    return Column(
+      children: [
+        // Breadcrumb bar
+        Container(
+          color: context.colorScheme.surfaceContainer,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Row(
             children: [
-              _PathChip(label: 'Internal DCIM', path: '/storage/emulated/0/DCIM', controller: _controller),
-              _PathChip(label: 'SD Card DCIM', path: '/storage/sdcard1/DCIM', controller: _controller),
-              _PathChip(label: 'Downloads', path: '/storage/emulated/0/Download', controller: _controller),
+              if (canGoBack)
+                IconButton(
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  onPressed: _back,
+                  tooltip: 'Go up',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                )
+              else
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 8),
+                  child: Icon(Icons.storage_rounded, size: 20),
+                ),
+              Expanded(
+                child: Text(
+                  _currentPath ?? 'Select storage',
+                  style: context.textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ],
           ),
-          const Spacer(),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: _startScan,
-              icon: const Icon(Icons.search_rounded),
-              label: const Text('Scan for Files'),
-              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+        ),
+        // Directory list
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator.adaptive())
+              : _error != null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24.0),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.lock_outline, size: 48,
+                                color: context.colorScheme.error),
+                            const SizedBox(height: 12),
+                            Text(
+                              'Cannot read directory',
+                              style: context.textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              _error!,
+                              textAlign: TextAlign.center,
+                              style: context.textTheme.bodySmall,
+                            ),
+                            if (canGoBack) ...[
+                              const SizedBox(height: 16),
+                              OutlinedButton(
+                                onPressed: _back,
+                                child: const Text('Go back'),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    )
+                  : _entries.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.folder_open_outlined, size: 48,
+                                  color: context.colorScheme.onSurface.withValues(alpha: 0.4)),
+                              const SizedBox(height: 12),
+                              Text(
+                                _currentPath == null
+                                    ? 'No storage volumes found'
+                                    : 'No subfolders here',
+                                style: context.textTheme.bodyMedium,
+                              ),
+                              if (_currentPath != null) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Tap "Scan This Folder" to scan files here.',
+                                  style: context.textTheme.bodySmall,
+                                ),
+                              ],
+                            ],
+                          ),
+                        )
+                      : ListView.builder(
+                          itemCount: _entries.length,
+                          itemBuilder: (ctx, i) {
+                            final e = _entries[i];
+                            return ListTile(
+                              leading: const Icon(Icons.folder_rounded),
+                              title: Text(e.label),
+                              subtitle: _currentPath == null
+                                  ? Text(e.path, style: ctx.textTheme.bodySmall)
+                                  : null,
+                              trailing: const Icon(Icons.chevron_right_rounded),
+                              onTap: () => _enter(e.path),
+                            );
+                          },
+                        ),
+        ),
+        // Scan button
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: canScan
+                    ? () => ref.read(importSessionProvider.notifier).scan(_currentPath!)
+                    : null,
+                icon: const Icon(Icons.search_rounded),
+                label: const Text('Scan This Folder'),
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+              ),
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
 
-class _PathChip extends StatelessWidget {
-  final String label;
+class _DirEntry {
   final String path;
-  final TextEditingController controller;
-
-  const _PathChip({required this.label, required this.path, required this.controller});
-
-  @override
-  Widget build(BuildContext context) {
-    return ActionChip(
-      label: Text(label),
-      onPressed: () => controller.text = path,
-    );
-  }
+  final String label;
+  const _DirEntry({required this.path, required this.label});
 }
 
 // ---------------------------------------------------------------------------
