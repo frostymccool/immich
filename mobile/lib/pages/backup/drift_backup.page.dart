@@ -22,6 +22,7 @@ import 'package:immich_mobile/providers/sync_status.provider.dart';
 import 'package:immich_mobile/providers/user.provider.dart';
 import 'package:immich_mobile/routing/router.dart';
 import 'package:immich_mobile/widgets/backup/backup_info_card.dart';
+import 'package:immich_mobile/widgets/settings/copyparty_settings/copyparty_settings.dart';
 import 'package:immich_ui/immich_ui.dart';
 import 'package:logging/logging.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -117,6 +118,13 @@ class _DriftBackupPageState extends ConsumerState<DriftBackupPage> {
           icon: const Icon(Icons.arrow_back_ios_rounded),
         ),
         actions: [
+          IconButton(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const CopypartySettings()),
+            ),
+            icon: const Icon(Icons.cloud_upload_outlined),
+            tooltip: 'Copyparty',
+          ),
           IconButton(
             onPressed: () {
               context.pushRoute(const DriftBackupOptionsRoute());
