@@ -156,13 +156,16 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
       }
     } catch (_) {}
 
-    // 4. /storage/ directory scan and /mnt/media_rw/ as final fallbacks
-    for (final base in ['/storage', '/mnt/media_rw']) {
+    // 4. /storage/ scan with followLinks: true — Samsung USB OTG entries are
+    //    often symlinks, which followLinks: false misses entirely.
+    //    Also scan /mnt/media_rw/ and /mnt/ broadly.
+    for (final base in ['/storage', '/mnt/media_rw', '/mnt/usb_storage', '/mnt/usbdisk']) {
       try {
-        await for (final entity in Directory(base).list(followLinks: false)) {
-          if (entity is Directory) {
+        await for (final entity in Directory(base).list(followLinks: true)) {
+          if (entity is Directory || entity is Link) {
             final name = entity.path.split('/').last;
-            if (name != 'emulated' && name != 'self' &&
+            if (name != 'emulated' && name != 'self' && name != 'obb' &&
+                name != 'user' && name != 'runtime' &&
                 !seenPaths.any((p) => p.endsWith('/$name'))) {
               seenPaths.add(entity.path);
               roots.add(_DirEntry(path: entity.path, label: 'External — $name'));
@@ -198,6 +201,35 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
     }
     entries.sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
     return entries;
+  }
+
+  Future<void> _showManualPathDialog(BuildContext ctx) async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: ctx,
+      builder: (dlgCtx) => AlertDialog(
+        title: const Text('Enter Path'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '/storage/XXXX-XXXX',
+            helperText: 'Find your USB drive path in Samsung My Files → USB storage → ⋮ → Details',
+            helperMaxLines: 2,
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (v) => Navigator.pop(dlgCtx, v),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dlgCtx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(dlgCtx, controller.text.trim()),
+            child: const Text('Go'),
+          ),
+        ],
+      ),
+    );
+    if (result != null && result.isNotEmpty) _enter(result);
   }
 
   void _enter(String path) {
@@ -322,8 +354,18 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
                           ),
                         )
                       : ListView.builder(
-                          itemCount: _entries.length,
+                          // +1 for the manual entry tile at the bottom of the roots view
+                          itemCount: _entries.length + (_currentPath == null ? 1 : 0),
                           itemBuilder: (ctx, i) {
+                            if (i == _entries.length) {
+                              // Manual path entry tile
+                              return ListTile(
+                                leading: const Icon(Icons.edit_outlined),
+                                title: const Text('Enter path manually'),
+                                subtitle: const Text('e.g. /storage/XXXX-XXXX'),
+                                onTap: () => _showManualPathDialog(ctx),
+                              );
+                            }
                             final e = _entries[i];
                             return ListTile(
                               leading: const Icon(Icons.folder_rounded),
