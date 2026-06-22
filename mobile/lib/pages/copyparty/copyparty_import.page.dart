@@ -55,6 +55,7 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
   final List<String> _pathStack = []; // empty → roots view
   List<_DirEntry> _entries = [];
   bool _loading = true;
+  bool _hasFullStorageAccess = true;
   String? _error;
 
   String? get _currentPath => _pathStack.isEmpty ? null : _pathStack.last;
@@ -62,7 +63,22 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
   @override
   void initState() {
     super.initState();
+    _checkPermissionAndLoad();
+  }
+
+  Future<void> _checkPermissionAndLoad() async {
+    final status = await Permission.manageExternalStorage.status;
+    if (mounted) setState(() => _hasFullStorageAccess = status.isGranted);
     _load(null);
+  }
+
+  Future<void> _requestFullStorageAccess() async {
+    await Permission.manageExternalStorage.request();
+    final status = await Permission.manageExternalStorage.status;
+    if (mounted) {
+      setState(() => _hasFullStorageAccess = status.isGranted);
+      _load(null);
+    }
   }
 
   Future<void> _load(String? path) async {
@@ -74,20 +90,19 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
       final entries = path == null ? await _loadRoots() : await _loadDirectory(path);
       if (mounted) setState(() { _entries = entries; _loading = false; });
     } catch (e) {
-      // Permission denied on external storage — request MANAGE_EXTERNAL_STORAGE
       final isPermissionError = '$e'.contains('Permission denied') ||
           '$e'.contains('EACCES') || '$e'.contains('Operation not permitted');
       if (isPermissionError && path != null && !path.contains('/emulated/')) {
         final status = await Permission.manageExternalStorage.request();
         if (status.isGranted) {
-          _load(path); // retry after permission granted
+          setState(() => _hasFullStorageAccess = true);
+          _load(path);
           return;
         }
         if (mounted) {
           setState(() {
             _error = 'Storage access denied.\n\n'
-                'Go to Settings → Apps → Immich → '
-                'Special permissions → All files access → Allow';
+                'Tap "Grant Access" at the top to enable full storage access.';
             _loading = false;
           });
         }
@@ -203,6 +218,21 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
 
     return Column(
       children: [
+        // Full storage access banner
+        if (!_hasFullStorageAccess)
+          MaterialBanner(
+            padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+            content: const Text(
+              'Grant "All files access" to detect USB drives and SD cards.',
+            ),
+            leading: const Icon(Icons.usb_rounded),
+            actions: [
+              TextButton(
+                onPressed: _requestFullStorageAccess,
+                child: const Text('Grant Access'),
+              ),
+            ],
+          ),
         // Breadcrumb bar
         Container(
           color: context.colorScheme.surfaceContainer,
