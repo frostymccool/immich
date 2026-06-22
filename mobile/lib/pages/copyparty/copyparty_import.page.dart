@@ -77,33 +77,61 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
   }
 
   Future<List<_DirEntry>> _loadRoots() async {
+    final seenPaths = <String>{};
     final roots = <_DirEntry>[];
-    if (await Directory('/storage/emulated/0').exists()) {
-      roots.add(const _DirEntry(path: '/storage/emulated/0', label: 'Internal Storage'));
+
+    // 1. Internal storage — always first
+    const internal = '/storage/emulated/0';
+    if (await Directory(internal).exists()) {
+      roots.add(const _DirEntry(path: internal, label: 'Internal Storage'));
+      seenPaths.add(internal);
     }
-    // /storage/ — SD cards and USB on most Android devices
+
+    // 2. /proc/mounts — most reliable; covers USB OTG + SD card + hub devices
+    try {
+      final lines = await File('/proc/mounts').readAsLines();
+      for (final line in lines) {
+        final parts = line.split(' ');
+        if (parts.length < 2) continue;
+        final mp = parts[1];
+        // Match /storage/<single-segment> — external volumes only
+        final match = RegExp(r'^/storage/([^/]+)$').firstMatch(mp);
+        if (match != null) {
+          final name = match.group(1)!;
+          if (name != 'emulated' && name != 'self' && seenPaths.add(mp)) {
+            if (await Directory(mp).exists()) {
+              roots.add(_DirEntry(path: mp, label: 'External — $name'));
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 3. /storage/ directory scan — catches anything /proc/mounts missed
     try {
       await for (final entity in Directory('/storage').list(followLinks: false)) {
         if (entity is Directory) {
           final name = entity.path.split('/').last;
-          if (name != 'emulated' && name != 'self') {
+          if (name != 'emulated' && name != 'self' && seenPaths.add(entity.path)) {
             roots.add(_DirEntry(path: entity.path, label: 'External — $name'));
           }
         }
       }
     } catch (_) {}
-    // /mnt/media_rw/ — Samsung alternate mount point for removable storage
+
+    // 4. /mnt/media_rw/ — Samsung alternate mount point
     try {
       await for (final entity in Directory('/mnt/media_rw').list(followLinks: false)) {
         if (entity is Directory) {
           final name = entity.path.split('/').last;
-          final alreadyListed = roots.any((r) => r.label.contains(name));
-          if (!alreadyListed) {
+          if (!seenPaths.any((p) => p.endsWith('/$name'))) {
+            seenPaths.add(entity.path);
             roots.add(_DirEntry(path: entity.path, label: 'External — $name'));
           }
         }
       }
     } catch (_) {}
+
     return roots;
   }
 
