@@ -1,6 +1,8 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
@@ -72,7 +74,26 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
       final entries = path == null ? await _loadRoots() : await _loadDirectory(path);
       if (mounted) setState(() { _entries = entries; _loading = false; });
     } catch (e) {
-      if (mounted) setState(() { _error = '$e'; _loading = false; });
+      // Permission denied on external storage — request MANAGE_EXTERNAL_STORAGE
+      final isPermissionError = '$e'.contains('Permission denied') ||
+          '$e'.contains('EACCES') || '$e'.contains('Operation not permitted');
+      if (isPermissionError && path != null && !path.contains('/emulated/')) {
+        final status = await Permission.manageExternalStorage.request();
+        if (status.isGranted) {
+          _load(path); // retry after permission granted
+          return;
+        }
+        if (mounted) {
+          setState(() {
+            _error = 'Storage access denied.\n\n'
+                'Go to Settings → Apps → Immich → '
+                'Special permissions → All files access → Allow';
+            _loading = false;
+          });
+        }
+      } else {
+        if (mounted) setState(() { _error = '$e'; _loading = false; });
+      }
     }
   }
 
@@ -87,52 +108,67 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
       seenPaths.add(internal);
     }
 
-    // 2. /proc/mounts — most reliable; covers USB OTG + SD card + hub devices
+    // 2. getExternalStorageDirectories() — the proper Android API; returns
+    //    app-specific paths for EVERY mounted volume (SD card, USB OTG, hub).
+    //    Strip the app suffix to get the volume root.
+    try {
+      final externalDirs = await getExternalStorageDirectories();
+      if (externalDirs != null) {
+        for (final dir in externalDirs) {
+          final rootPath = _extractStorageRoot(dir.path);
+          if (rootPath != null && rootPath != internal && seenPaths.add(rootPath)) {
+            final name = rootPath.split('/').last;
+            roots.add(_DirEntry(path: rootPath, label: 'External — $name'));
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 3. /proc/mounts — catches volumes not in externalDirs (e.g. SD card on some devices)
     try {
       final lines = await File('/proc/mounts').readAsLines();
       for (final line in lines) {
         final parts = line.split(' ');
         if (parts.length < 2) continue;
         final mp = parts[1];
-        // Match /storage/<single-segment> — external volumes only
         final match = RegExp(r'^/storage/([^/]+)$').firstMatch(mp);
         if (match != null) {
           final name = match.group(1)!;
           if (name != 'emulated' && name != 'self' && seenPaths.add(mp)) {
-            if (await Directory(mp).exists()) {
-              roots.add(_DirEntry(path: mp, label: 'External — $name'));
+            roots.add(_DirEntry(path: mp, label: 'External — $name'));
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 4. /storage/ directory scan and /mnt/media_rw/ as final fallbacks
+    for (final base in ['/storage', '/mnt/media_rw']) {
+      try {
+        await for (final entity in Directory(base).list(followLinks: false)) {
+          if (entity is Directory) {
+            final name = entity.path.split('/').last;
+            if (name != 'emulated' && name != 'self' &&
+                !seenPaths.any((p) => p.endsWith('/$name'))) {
+              seenPaths.add(entity.path);
+              roots.add(_DirEntry(path: entity.path, label: 'External — $name'));
             }
           }
         }
-      }
-    } catch (_) {}
-
-    // 3. /storage/ directory scan — catches anything /proc/mounts missed
-    try {
-      await for (final entity in Directory('/storage').list(followLinks: false)) {
-        if (entity is Directory) {
-          final name = entity.path.split('/').last;
-          if (name != 'emulated' && name != 'self' && seenPaths.add(entity.path)) {
-            roots.add(_DirEntry(path: entity.path, label: 'External — $name'));
-          }
-        }
-      }
-    } catch (_) {}
-
-    // 4. /mnt/media_rw/ — Samsung alternate mount point
-    try {
-      await for (final entity in Directory('/mnt/media_rw').list(followLinks: false)) {
-        if (entity is Directory) {
-          final name = entity.path.split('/').last;
-          if (!seenPaths.any((p) => p.endsWith('/$name'))) {
-            seenPaths.add(entity.path);
-            roots.add(_DirEntry(path: entity.path, label: 'External — $name'));
-          }
-        }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
 
     return roots;
+  }
+
+  static String? _extractStorageRoot(String appPath) {
+    final parts = appPath.split('/');
+    if (parts.length < 3) return null;
+    // /storage/emulated/0/Android/... → /storage/emulated/0
+    if (parts.length >= 4 && parts[2] == 'emulated') {
+      return '/${parts[1]}/${parts[2]}/${parts[3]}';
+    }
+    // /storage/UUID/Android/... → /storage/UUID
+    return '/${parts[1]}/${parts[2]}';
   }
 
   Future<List<_DirEntry>> _loadDirectory(String path) async {
