@@ -1,7 +1,7 @@
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
@@ -54,49 +54,27 @@ class _DirectoryPickerStep extends ConsumerStatefulWidget {
 }
 
 class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
+  static const _safChannel = MethodChannel('immich/saf_picker');
+
   String? _selectedPath;
   bool _picking = false;
 
   Future<void> _browse() async {
     setState(() => _picking = true);
     try {
-      final raw = await FilePicker.platform.getDirectoryPath();
-      if (raw == null || !mounted) {
-        return;
+      // Use the native SAF picker plugin which resolves the correct filesystem
+      // path via StorageVolume.getDirectory() — the public API.  file_picker
+      // used reflection to call a private API that Android blocked in API 30,
+      // causing it to return "/" for non-primary volumes.
+      final path = await _safChannel.invokeMethod<String?>('pickDirectory');
+      if (path != null && mounted) {
+        setState(() => _selectedPath = path);
       }
-
-      final resolved = _resolveSafPath(raw);
-
-      if (resolved.isNotEmpty && resolved != '/') {
-        setState(() => _selectedPath = resolved);
-        return;
-      }
-
-      // file_picker returned an unusable path — scan /storage/ for removable volumes
-      final candidates = await _findRemovableStoragePaths();
-      if (!mounted) {
-        return;
-      }
-
-      if (candidates.length == 1) {
-        setState(() => _selectedPath = candidates.first);
-      } else if (candidates.isNotEmpty) {
-        final chosen = await _showStorageChooserDialog(candidates);
-        if (chosen != null && mounted) {
-          setState(() => _selectedPath = chosen);
-        }
-      } else {
+    } on PlatformException catch (e) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Could not resolve USB path '
-              '(picker returned: "${_truncate(raw, 60)}"). '
-              'Please enter the path manually.',
-            ),
-            duration: const Duration(seconds: 10),
-          ),
+          SnackBar(content: Text('Picker error: ${e.message}')),
         );
-        await _showManualEntry();
       }
     } finally {
       if (mounted) {
@@ -117,10 +95,11 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
           builder: (ctx) => AlertDialog(
             title: const Text('All Files Access Required'),
             content: const Text(
-              'Scanning external storage (USB drives, SD cards) requires '
-              '"All files access".\n\n'
+              'Scanning USB drives and SD cards requires '
+              '"All files access" (MANAGE_EXTERNAL_STORAGE).\n\n'
               'Open Settings → Apps → Immich → Permissions → Files and media → '
-              'Allow management of all files.',
+              'Allow management of all files.\n\n'
+              'This is a one-time step.',
             ),
             actions: [
               TextButton(
@@ -141,114 +120,6 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
       }
     }
     ref.read(importSessionProvider.notifier).scan(path);
-  }
-
-  static String _truncate(String s, int max) =>
-      s.length <= max ? s : '${s.substring(0, max)}…';
-
-  static Future<List<String>> _findRemovableStoragePaths() async {
-    final found = <String>[];
-    try {
-      final storageDir = Directory('/storage');
-      if (!await storageDir.exists()) {
-        return found;
-      }
-      await for (final entity in storageDir.list()) {
-        if (entity is! Directory) {
-          continue;
-        }
-        final name = entity.path.split('/').last;
-        if (name == 'emulated' || name == 'self') {
-          continue;
-        }
-        // Removable storage volumes use a XXXX-XXXX hex UUID format
-        if (RegExp(r'^[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}$').hasMatch(name)) {
-          found.add(entity.path);
-        }
-      }
-    } catch (_) {}
-    return found;
-  }
-
-  Future<String?> _showStorageChooserDialog(List<String> paths) {
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('Select USB Drive'),
-        children: paths
-            .map(
-              (p) => SimpleDialogOption(
-                onPressed: () => Navigator.pop(ctx, p),
-                child: Text(
-                  p.split('/').last,
-                  style: const TextStyle(fontFamily: 'monospace'),
-                ),
-              ),
-            )
-            .toList(),
-      ),
-    );
-  }
-
-  /// Converts an Android SAF content URI to a real filesystem path.
-  ///
-  /// file_picker on Android 11+ returns a content URI from ACTION_OPEN_DOCUMENT_TREE
-  /// (e.g. content://com.android.externalstorage.documents/tree/XXXX-XXXX%3ADCIM).
-  /// dart:io cannot open content URIs directly, so we extract the volume ID and
-  /// relative path and reconstruct the real /storage/<volume>/<path> location.
-  static String _resolveSafPath(String raw) {
-    if (!raw.startsWith('content://')) {
-      return raw;
-    }
-    try {
-      final uri = Uri.parse(raw);
-      // pathSegments are percent-decoded by Uri.parse:
-      // ['tree', 'XXXX-XXXX:DCIM'] or ['tree', 'primary:DCIM']
-      final segments = uri.pathSegments;
-      if (segments.length < 2) {
-        return raw;
-      }
-      final treeId = segments.last;
-      final colonIdx = treeId.indexOf(':');
-      if (colonIdx < 0) {
-        return raw;
-      }
-      final volume = treeId.substring(0, colonIdx);
-      final rel = treeId.substring(colonIdx + 1);
-      final base = volume == 'primary' ? '/storage/emulated/0' : '/storage/$volume';
-      return rel.isEmpty ? base : '$base/$rel';
-    } catch (_) {
-      return raw;
-    }
-  }
-
-  Future<void> _showManualEntry() async {
-    final controller = TextEditingController(text: _selectedPath);
-    final result = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Enter Path'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: '/storage/XXXX-XXXX/DCIM',
-            border: OutlineInputBorder(),
-          ),
-          onSubmitted: (v) => Navigator.pop(ctx, v),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
-    if (result != null && result.isNotEmpty && mounted) {
-      setState(() => _selectedPath = result);
-    }
   }
 
   @override
@@ -328,12 +199,6 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
             ),
           ],
           const Spacer(),
-          OutlinedButton.icon(
-            onPressed: _showManualEntry,
-            icon: const Icon(Icons.edit_outlined),
-            label: const Text('Enter path manually'),
-          ),
-          const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: _selectedPath != null
                 ? () => _scanWithPermissionCheck(_selectedPath!)
