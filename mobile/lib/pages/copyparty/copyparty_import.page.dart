@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
@@ -60,14 +61,133 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
     setState(() => _picking = true);
     try {
       final raw = await FilePicker.platform.getDirectoryPath();
-      if (raw != null && mounted) {
-        setState(() => _selectedPath = _resolveSafPath(raw));
+      if (raw == null || !mounted) {
+        return;
+      }
+
+      final resolved = _resolveSafPath(raw);
+
+      if (resolved.isNotEmpty && resolved != '/') {
+        setState(() => _selectedPath = resolved);
+        return;
+      }
+
+      // file_picker returned an unusable path — scan /storage/ for removable volumes
+      final candidates = await _findRemovableStoragePaths();
+      if (!mounted) {
+        return;
+      }
+
+      if (candidates.length == 1) {
+        setState(() => _selectedPath = candidates.first);
+      } else if (candidates.isNotEmpty) {
+        final chosen = await _showStorageChooserDialog(candidates);
+        if (chosen != null && mounted) {
+          setState(() => _selectedPath = chosen);
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not resolve USB path '
+              '(picker returned: "${_truncate(raw, 60)}"). '
+              'Please enter the path manually.',
+            ),
+            duration: const Duration(seconds: 10),
+          ),
+        );
+        await _showManualEntry();
       }
     } finally {
       if (mounted) {
         setState(() => _picking = false);
       }
     }
+  }
+
+  Future<void> _scanWithPermissionCheck(String path) async {
+    if (Platform.isAndroid) {
+      final granted = await Permission.manageExternalStorage.isGranted;
+      if (!granted) {
+        if (!mounted) {
+          return;
+        }
+        final goToSettings = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('All Files Access Required'),
+            content: const Text(
+              'Scanning external storage (USB drives, SD cards) requires '
+              '"All files access".\n\n'
+              'Open Settings → Apps → Immich → Permissions → Files and media → '
+              'Allow management of all files.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Open Settings'),
+              ),
+            ],
+          ),
+        );
+        if (goToSettings == true) {
+          await openAppSettings();
+        }
+        return;
+      }
+    }
+    ref.read(importSessionProvider.notifier).scan(path);
+  }
+
+  static String _truncate(String s, int max) =>
+      s.length <= max ? s : '${s.substring(0, max)}…';
+
+  static Future<List<String>> _findRemovableStoragePaths() async {
+    final found = <String>[];
+    try {
+      final storageDir = Directory('/storage');
+      if (!await storageDir.exists()) {
+        return found;
+      }
+      await for (final entity in storageDir.list()) {
+        if (entity is! Directory) {
+          continue;
+        }
+        final name = entity.path.split('/').last;
+        if (name == 'emulated' || name == 'self') {
+          continue;
+        }
+        // Removable storage volumes use a XXXX-XXXX hex UUID format
+        if (RegExp(r'^[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}$').hasMatch(name)) {
+          found.add(entity.path);
+        }
+      }
+    } catch (_) {}
+    return found;
+  }
+
+  Future<String?> _showStorageChooserDialog(List<String> paths) {
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Select USB Drive'),
+        children: paths
+            .map(
+              (p) => SimpleDialogOption(
+                onPressed: () => Navigator.pop(ctx, p),
+                child: Text(
+                  p.split('/').last,
+                  style: const TextStyle(fontFamily: 'monospace'),
+                ),
+              ),
+            )
+            .toList(),
+      ),
+    );
   }
 
   /// Converts an Android SAF content URI to a real filesystem path.
@@ -216,7 +336,7 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
           const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: _selectedPath != null
-                ? () => ref.read(importSessionProvider.notifier).scan(_selectedPath!)
+                ? () => _scanWithPermissionCheck(_selectedPath!)
                 : null,
             icon: const Icon(Icons.search_rounded),
             label: const Text('Scan This Folder'),
