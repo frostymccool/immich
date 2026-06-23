@@ -26,7 +26,9 @@ class CopypartyFilePairer {
     void Function(int count)? onFileFound,
   }) async {
     final dir = Directory(directoryPath);
-    if (!await dir.exists()) return [];
+    if (!await dir.exists()) {
+      return [];
+    }
 
     final allFiles = await _listFiles(dir, onFileFound: onFileFound);
     return _pairFiles(allFiles);
@@ -47,7 +49,9 @@ class CopypartyFilePairer {
 
     // Strip extension
     final dotIdx = stem.lastIndexOf('.');
-    if (dotIdx > 0) stem = stem.substring(0, dotIdx);
+    if (dotIdx > 0) {
+      stem = stem.substring(0, dotIdx);
+    }
 
     return stem.toLowerCase();
   }
@@ -55,7 +59,9 @@ class CopypartyFilePairer {
   /// Returns the extension of a filename (without the dot), lowercased.
   static String _ext(String filename) {
     final dotIdx = filename.lastIndexOf('.');
-    if (dotIdx < 0 || dotIdx == filename.length - 1) return '';
+    if (dotIdx < 0 || dotIdx == filename.length - 1) {
+      return '';
+    }
     return filename.substring(dotIdx + 1).toLowerCase();
   }
 

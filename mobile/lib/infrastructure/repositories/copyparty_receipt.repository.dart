@@ -55,7 +55,9 @@ class CopypartyReceiptRepository {
       'SELECT * FROM copyparty_upload_receipts WHERE wark = ? LIMIT 1',
       variables: [Variable.withString(wark)],
     ).get();
-    if (rows.isEmpty) return null;
+    if (rows.isEmpty) {
+      return null;
+    }
     return _rowToReceipt(rows.first);
   }
 

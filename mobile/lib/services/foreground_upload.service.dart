@@ -94,7 +94,9 @@ class ForegroundUploadService {
       Future<void> fetchSize() async {
         while (true) {
           final i = si;
-          if (i >= candidates.length) break;
+          if (i >= candidates.length) {
+            break;
+          }
           si++;
           final asset = candidates[i];
           try {
@@ -109,7 +111,9 @@ class ForegroundUploadService {
       // Photos before videos; within each group, smallest first.
       candidates.sort((a, b) {
         final typeOrder = (a.isVideo ? 1 : 0).compareTo(b.isVideo ? 1 : 0);
-        if (typeOrder != 0) return typeOrder;
+        if (typeOrder != 0) {
+          return typeOrder;
+        }
         return (sizeMap[a.id] ?? 0).compareTo(sizeMap[b.id] ?? 0);
       });
     }
@@ -138,17 +142,23 @@ class ForegroundUploadService {
 
       Future<void> worker(int workerIndex) async {
         while (true) {
-          if (shouldAbortUpload || cancelToken.isCompleted) break;
+          if (shouldAbortUpload || cancelToken.isCompleted) {
+            break;
+          }
 
           final limit = SettingsRepository.instance.appConfig.backup.parallelUploads.clamp(1, 10);
           if (workerIndex >= limit) {
-            if (idx >= candidates.length) break;
+            if (idx >= candidates.length) {
+              break;
+            }
             await Future.delayed(const Duration(milliseconds: 200));
             continue;
           }
 
           final i = idx;
-          if (i >= candidates.length) break;
+          if (i >= candidates.length) {
+            break;
+          }
 
           final asset = candidates[i];
 
@@ -160,15 +170,21 @@ class ForegroundUploadService {
           }
 
           idx++;
-          if (asset.isVideo) activeVideoCount++;
+          if (asset.isVideo) {
+            activeVideoCount++;
+          }
 
           if (shouldSkip(asset)) {
-            if (asset.isVideo) activeVideoCount--;
+            if (asset.isVideo) {
+              activeVideoCount--;
+            }
             continue;
           }
 
           await _uploadSingleAsset(asset, cancelToken, callbacks: callbacks);
-          if (asset.isVideo) activeVideoCount--;
+          if (asset.isVideo) {
+            activeVideoCount--;
+          }
         }
       }
 

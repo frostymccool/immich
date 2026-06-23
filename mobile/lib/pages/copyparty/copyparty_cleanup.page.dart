@@ -31,7 +31,9 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     final receipts = await ref.read(copypartyReceiptRepositoryProvider).getUndeleted();
     final existing = <CopypartyReceipt>[];
     for (final r in receipts) {
-      if (await File(r.localPath).exists()) existing.add(r);
+      if (await File(r.localPath).exists()) {
+        existing.add(r);
+      }
     }
     if (mounted) {
       setState(() {
@@ -44,7 +46,9 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
 
   Future<void> _deleteSelected() async {
     final toDelete = _existing.where((r) => _selected.contains(r.id)).toList();
-    if (toDelete.isEmpty) return;
+    if (toDelete.isEmpty) {
+      return;
+    }
 
     final confirm = await showDialog<bool>(
       context: context,
@@ -65,7 +69,9 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       ),
     );
 
-    if (confirm != true) return;
+    if (confirm != true) {
+      return;
+    }
 
     int deleted = 0;
     final repo = ref.read(copypartyReceiptRepositoryProvider);

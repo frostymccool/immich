@@ -20,7 +20,9 @@ class CopypartyImportPage extends ConsumerWidget {
 
     return PopScope(
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop) ref.read(importSessionProvider.notifier).reset();
+        if (didPop) {
+          ref.read(importSessionProvider.notifier).reset();
+        }
       },
       child: Scaffold(
         appBar: AppBar(
@@ -58,9 +60,13 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
     setState(() => _picking = true);
     try {
       final path = await FilePicker.platform.getDirectoryPath();
-      if (path != null && mounted) setState(() => _selectedPath = path);
+      if (path != null && mounted) {
+        setState(() => _selectedPath = path);
+      }
     } finally {
-      if (mounted) setState(() => _picking = false);
+      if (mounted) {
+        setState(() => _picking = false);
+      }
     }
   }
 
@@ -309,8 +315,12 @@ class _FileTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final badges = <String>[];
-    if (file.isTriggerFile) badges.add('trigger');
-    if (file.isNativeImmichFile) badges.add('also in Immich');
+    if (file.isTriggerFile) {
+      badges.add('trigger');
+    }
+    if (file.isNativeImmichFile) {
+      badges.add('also in Immich');
+    }
 
     return ListTile(
       contentPadding: const EdgeInsets.only(left: 32, right: 16),

@@ -153,7 +153,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
 
     for (final set in state.uploadSets) {
       for (final file in set.files) {
-        if (file.status == UploadFileStatus.failed) continue;
+        if (file.status == UploadFileStatus.failed) {
+          continue;
+        }
         try {
           file.status = UploadFileStatus.hashing;
           _notify();
@@ -166,7 +168,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             password,
             parallelism: config.parallelConnections,
             onHashProgress: (done, total) {
-              if (total > 0) file.uploadedBytes = (done * 0.2).round();
+              if (total > 0) {
+                file.uploadedBytes = (done * 0.2).round();
+              }
               _notify();
             },
             onUploadProgress: (done, total) {

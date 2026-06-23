@@ -17,26 +17,26 @@ class CopypartySettings extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return SettingsSubPageScaffold(
+    return const SettingsSubPageScaffold(
       settings: [
         SettingGroupTitle(title: 'Copyparty Server', icon: Icons.cloud_upload_outlined),
-        const _HostUrlTile(),
-        const _PasswordTile(),
-        const _UploadPathTile(),
-        const _SelfSignedCertTile(),
-        const _ConnectTestButton(),
-        const Divider(),
+        _HostUrlTile(),
+        _PasswordTile(),
+        _UploadPathTile(),
+        _SelfSignedCertTile(),
+        _ConnectTestButton(),
+        Divider(),
         SettingGroupTitle(title: 'Upload Behaviour', icon: Icons.tune_rounded),
-        const _ParallelConnectionsSlider(),
-        const _WriteReceiptsTile(),
-        const _AutoDeleteTile(),
-        const Divider(),
+        _ParallelConnectionsSlider(),
+        _WriteReceiptsTile(),
+        _AutoDeleteTile(),
+        Divider(),
         SettingGroupTitle(title: 'File Matching', icon: Icons.link_rounded),
-        const _TriggerExtensionsTile(),
-        const Divider(),
+        _TriggerExtensionsTile(),
+        Divider(),
         SettingGroupTitle(title: 'Import', icon: Icons.sd_card_rounded),
-        const _ImportFromMemoryCardButton(),
-        const _PendingCleanupTile(),
+        _ImportFromMemoryCardButton(),
+        _PendingCleanupTile(),
       ],
     );
   }
@@ -352,13 +352,17 @@ class _ConnectTestButton extends HookConsumerWidget {
     final hostUrl = ref.watch(appConfigProvider.select((c) => c.copyparty.hostUrl));
 
     Future<void> runTest() async {
-      if (testing.value || hostUrl.isEmpty) return;
+      if (testing.value || hostUrl.isEmpty) {
+        return;
+      }
       testing.value = true;
       try {
         final password = await ref.read(copypartyPasswordProvider.future);
         final uploader = ref.read(copypartyUploaderProvider);
         final error = await uploader.testConnection(hostUrl, password);
-        if (!context.mounted) return;
+        if (!context.mounted) {
+          return;
+        }
         final ok = error == null;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -404,7 +408,9 @@ class _PendingCleanupTile extends ConsumerWidget {
       loading: () => const SizedBox.shrink(),
       error: (_, __) => const SizedBox.shrink(),
       data: (receipts) {
-        if (receipts.isEmpty) return const SizedBox.shrink();
+        if (receipts.isEmpty) {
+          return const SizedBox.shrink();
+        }
         final count = receipts.length;
         return Padding(
           padding: const EdgeInsets.only(left: 8.0),
@@ -456,5 +462,7 @@ Future<void> _showTextDialog(
       ],
     ),
   );
-  if (result != null) onSave(result);
+  if (result != null) {
+    onSave(result);
+  }
 }

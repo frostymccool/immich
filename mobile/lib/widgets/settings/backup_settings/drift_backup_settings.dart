@@ -33,7 +33,7 @@ class DriftBackupSettings extends ConsumerWidget {
         const _UseCellularForVideosButton(),
         const _UseCellularForPhotosButton(),
         const Divider(),
-        SettingGroupTitle(
+        const SettingGroupTitle(
           title: "Upload Settings",
           icon: Icons.upload_rounded,
         ),

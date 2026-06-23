@@ -28,13 +28,17 @@ class CopypartyUploaderService {
   Future<String?> testConnection(String hostUrl, String password) async {
     try {
       final base = hostUrl.replaceAll(RegExp(r'/+$'), '');
-      if (base.isEmpty) return 'Host URL is not configured';
+      if (base.isEmpty) {
+        return 'Host URL is not configured';
+      }
       final uri = Uri.parse(base);
       final headers = password.isNotEmpty ? {'X-Password': password} : <String, String>{};
       final response = await _client
           .get(uri, headers: headers)
           .timeout(const Duration(seconds: 10));
-      if (response.statusCode < 400) return null;
+      if (response.statusCode < 400) {
+        return null;
+      }
       return 'Server returned HTTP ${response.statusCode}';
     } on SocketException catch (e) {
       return 'Cannot reach server: ${e.message}';
@@ -66,7 +70,9 @@ class CopypartyUploaderService {
   /// Returns the chunk size in bytes for a given file size.
   int computeChunkSizeBytes(int fileSizeBytes) {
     for (final (maxBytes, chunkBytes) in _chunkTable) {
-      if (fileSizeBytes <= maxBytes) return chunkBytes;
+      if (fileSizeBytes <= maxBytes) {
+        return chunkBytes;
+      }
     }
     return 32 * 1024 * 1024; // 32 MiB for anything larger
   }
@@ -97,7 +103,9 @@ class CopypartyUploaderService {
       while (bytesRead < fileSize) {
         final toRead = (chunkSize < fileSize - bytesRead) ? chunkSize : fileSize - bytesRead;
         final bytes = await handle.read(toRead);
-        if (bytes.isEmpty) break;
+        if (bytes.isEmpty) {
+          break;
+        }
 
         // Whole-file running hash
         fileHasher.add(bytes);
@@ -215,7 +223,9 @@ class CopypartyUploaderService {
     int parallelism = 4,
     void Function(int chunksDone, int chunksTotal)? onProgress,
   }) async {
-    if (neededChunkIndices.isEmpty) return;
+    if (neededChunkIndices.isEmpty) {
+      return;
+    }
 
     int done = 0;
     final semaphore = _Semaphore(parallelism);

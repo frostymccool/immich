@@ -28,7 +28,9 @@ final _candidatesWithSizeProvider = FutureProvider.autoDispose<List<(LocalAsset,
   Future<void> fetchSize() async {
     while (true) {
       final i = si;
-      if (i >= candidates.length) break;
+      if (i >= candidates.length) {
+        break;
+      }
       si++;
       final asset = candidates[i];
       try {
