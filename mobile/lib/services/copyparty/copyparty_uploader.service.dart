@@ -101,20 +101,24 @@ class CopypartyUploaderService {
     try {
       int bytesRead = 0;
       while (bytesRead < fileSize) {
-        final toRead = (chunkSize < fileSize - bytesRead) ? chunkSize : fileSize - bytesRead;
-        final bytes = await handle.read(toRead);
-        if (bytes.isEmpty) {
-          break;
+        final chunkExpected = (fileSize - bytesRead).clamp(0, chunkSize);
+
+        // Accumulate into a full chunk — read() may return fewer bytes than
+        // requested (especially on FAT32/exFAT USB drives via SAF).
+        final chunkBuf = BytesBuilder(copy: false);
+        while (chunkBuf.length < chunkExpected) {
+          final toRead = chunkExpected - chunkBuf.length;
+          final slice = await handle.read(toRead);
+          if (slice.isEmpty) break;
+          chunkBuf.add(slice);
+          fileHasher.add(slice);
         }
 
-        // Whole-file running hash
-        fileHasher.add(bytes);
+        final chunkBytes = chunkBuf.takeBytes();
+        if (chunkBytes.isEmpty) break;
 
-        // Per-chunk hash
-        final chunkDigest = sha512.convert(bytes);
-        chunkHashes.add(chunkDigest.toString());
-
-        bytesRead += bytes.length;
+        chunkHashes.add(sha512.convert(chunkBytes).toString());
+        bytesRead += chunkBytes.length;
         onProgress?.call(bytesRead, fileSize);
       }
     } finally {
@@ -159,6 +163,7 @@ class CopypartyUploaderService {
       'size': file.totalBytes,
       'lmod': file.lastModifiedMs / 1000.0,
       'hash': file.chunkHashes,
+      'sz': file.chunkSizeBytes,
     });
 
     final response = await _client.post(
@@ -366,7 +371,13 @@ class CopypartyUploaderService {
     final handle = await file.open(mode: FileMode.read);
     try {
       await handle.setPosition(start);
-      return await handle.read(length);
+      final buf = BytesBuilder(copy: false);
+      while (buf.length < length) {
+        final slice = await handle.read(length - buf.length);
+        if (slice.isEmpty) break;
+        buf.add(slice);
+      }
+      return buf.takeBytes();
     } finally {
       await handle.close();
     }
