@@ -2,7 +2,10 @@ import 'package:uuid/uuid.dart';
 
 enum UploadSetStatus { pending, hashing, uploading, verified, failed, deleted }
 
-enum UploadFileStatus { pending, hashing, handshaking, uploading, confirmed, receiptWritten, failed }
+enum UploadFileStatus { pending, hashing, handshaking, uploading, confirmed, immichUploading, receiptWritten, failed }
+
+/// Where the file should be sent during import.
+enum UploadDestination { copypartyOnly, immichNative, both }
 
 class UploadFile {
   final String localPath;
@@ -18,6 +21,8 @@ class UploadFile {
   UploadFileStatus status;
   String? errorMessage;
   int uploadedBytes;
+  UploadDestination destination;
+  String? immichAssetId;
 
   UploadFile({
     required this.localPath,
@@ -33,11 +38,20 @@ class UploadFile {
     this.status = UploadFileStatus.pending,
     this.errorMessage,
     this.uploadedBytes = 0,
-  });
+    UploadDestination? destination,
+    this.immichAssetId,
+  }) : destination = destination ??
+           (isNativeImmichFile ? UploadDestination.both : UploadDestination.copypartyOnly);
 
   double get progress => sizeBytes > 0 ? uploadedBytes / sizeBytes : 0.0;
 
   bool get safeToDelete => sha512 != null && receiptWritten && dbRecordWritten;
+
+  bool get needsCopyparty =>
+      destination == UploadDestination.copypartyOnly || destination == UploadDestination.both;
+
+  bool get needsImmich =>
+      destination == UploadDestination.immichNative || destination == UploadDestination.both;
 }
 
 class UploadSet {

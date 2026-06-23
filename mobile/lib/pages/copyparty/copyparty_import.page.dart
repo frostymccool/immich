@@ -234,7 +234,7 @@ class _ScanningStep extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Step 3: Options / scan results — with checkboxes and folder info
+// Step 3: Options / scan results — checkboxes, folder info, destinations
 // ---------------------------------------------------------------------------
 
 class _OptionsStep extends ConsumerStatefulWidget {
@@ -247,6 +247,7 @@ class _OptionsStep extends ConsumerStatefulWidget {
 
 class _OptionsStepState extends ConsumerState<_OptionsStep> {
   late Set<String> _selectedPaths;
+  final Map<String, UploadDestination> _destinationOverrides = {};
 
   @override
   void initState() {
@@ -283,6 +284,22 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
         _selectedPaths.remove(path);
       }
     });
+  }
+
+  void _setDestination(String path, UploadDestination dest) {
+    setState(() => _destinationOverrides[path] = dest);
+  }
+
+  UploadDestination _destinationFor(UploadFile file) =>
+      _destinationOverrides[file.localPath] ?? file.destination;
+
+  void _applyDestinations() {
+    for (final set in widget.session.uploadSets) {
+      for (final file in set.files) {
+        final override = _destinationOverrides[file.localPath];
+        if (override != null) file.destination = override;
+      }
+    }
   }
 
   @override
@@ -329,7 +346,6 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
 
     return Column(
       children: [
-        // Summary bar with select-all toggle
         Container(
           color: context.colorScheme.surfaceContainer,
           padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
@@ -352,7 +368,6 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
             ],
           ),
         ),
-        // Upload set list
         Expanded(
           child: ListView.builder(
             itemCount: sets.length,
@@ -360,12 +375,13 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
               set: sets[i],
               rootPath: widget.session.directoryPath,
               selectedPaths: _selectedPaths,
+              getDestination: _destinationFor,
               onToggleGroup: (select) => _toggleGroup(sets[i], select),
               onToggleFile: _toggleFile,
+              onDestinationChange: _setDestination,
             ),
           ),
         ),
-        // Upload button
         SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(16.0),
@@ -373,9 +389,12 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
               width: double.infinity,
               child: FilledButton.icon(
                 onPressed: selectedCount > 0
-                    ? () => ref
-                        .read(importSessionProvider.notifier)
-                        .startUpload(selectedFilePaths: Set.of(_selectedPaths))
+                    ? () {
+                        _applyDestinations();
+                        ref
+                            .read(importSessionProvider.notifier)
+                            .startUpload(selectedFilePaths: Set.of(_selectedPaths));
+                      }
                     : null,
                 icon: const Icon(Icons.upload_rounded),
                 label: Text(
@@ -395,15 +414,19 @@ class _SelectableUploadSetTile extends StatelessWidget {
   final UploadSet set;
   final String? rootPath;
   final Set<String> selectedPaths;
+  final UploadDestination Function(UploadFile) getDestination;
   final void Function(bool) onToggleGroup;
   final void Function(String, bool) onToggleFile;
+  final void Function(String, UploadDestination) onDestinationChange;
 
   const _SelectableUploadSetTile({
     required this.set,
     required this.rootPath,
     required this.selectedPaths,
+    required this.getDestination,
     required this.onToggleGroup,
     required this.onToggleFile,
+    required this.onDestinationChange,
   });
 
   @override
@@ -413,7 +436,6 @@ class _SelectableUploadSetTile extends StatelessWidget {
     final total = set.files.length;
     final bool? groupChecked =
         filesSelected == 0 ? false : (filesSelected == total ? true : null);
-
     final relPath = _relPath(rootPath, set.directoryPath);
 
     return ExpansionTile(
@@ -446,7 +468,9 @@ class _SelectableUploadSetTile extends StatelessWidget {
             (f) => _SelectableFileTile(
               file: f,
               selected: selectedPaths.contains(f.localPath),
+              destination: getDestination(f),
               onToggle: (v) => onToggleFile(f.localPath, v),
+              onDestinationChange: (d) => onDestinationChange(f.localPath, d),
             ),
           )
           .toList(),
@@ -465,35 +489,72 @@ class _SelectableUploadSetTile extends StatelessWidget {
 class _SelectableFileTile extends StatelessWidget {
   final UploadFile file;
   final bool selected;
+  final UploadDestination destination;
   final void Function(bool) onToggle;
+  final void Function(UploadDestination) onDestinationChange;
 
   const _SelectableFileTile({
     required this.file,
     required this.selected,
+    required this.destination,
     required this.onToggle,
+    required this.onDestinationChange,
   });
 
   @override
   Widget build(BuildContext context) {
-    final badges = <String>[];
-    if (file.isTriggerFile) badges.add('trigger');
-    if (file.isNativeImmichFile) badges.add('also in Immich');
-
-    return ListTile(
-      contentPadding: const EdgeInsets.only(left: 16, right: 16),
-      leading: Checkbox(
-        value: selected,
-        onChanged: (v) => onToggle(v ?? false),
-      ),
-      title: Text(file.filename, style: context.textTheme.bodyMedium),
-      subtitle: Text(
-        [formatHumanReadableBytes(file.sizeBytes, 1), ...badges].join(' · '),
-        style: context.textTheme.bodySmall,
-      ),
-      trailing: file.isTriggerFile
-          ? Icon(Icons.star_rounded, color: context.primaryColor, size: 20)
-          : null,
-      dense: true,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ListTile(
+          contentPadding: const EdgeInsets.only(left: 16, right: 16),
+          leading: Checkbox(
+            value: selected,
+            onChanged: (v) => onToggle(v ?? false),
+          ),
+          title: Text(file.filename, style: context.textTheme.bodyMedium),
+          subtitle: Text(
+            formatHumanReadableBytes(file.sizeBytes, 1),
+            style: context.textTheme.bodySmall,
+          ),
+          trailing: file.isTriggerFile
+              ? Icon(Icons.star_rounded, color: context.primaryColor, size: 20)
+              : null,
+          dense: true,
+        ),
+        // Destination selector — only for files Immich handles natively
+        if (file.isNativeImmichFile && selected)
+          Padding(
+            padding: const EdgeInsets.only(left: 56, right: 16, bottom: 8),
+            child: SegmentedButton<UploadDestination>(
+              dense: true,
+              showSelectedIcon: false,
+              style: SegmentedButton.styleFrom(
+                textStyle: context.textTheme.labelSmall,
+                visualDensity: VisualDensity.compact,
+              ),
+              segments: const [
+                ButtonSegment(
+                  value: UploadDestination.copypartyOnly,
+                  label: Text('CP only'),
+                  icon: Icon(Icons.cloud_upload_outlined, size: 14),
+                ),
+                ButtonSegment(
+                  value: UploadDestination.both,
+                  label: Text('Both'),
+                  icon: Icon(Icons.sync_alt_rounded, size: 14),
+                ),
+                ButtonSegment(
+                  value: UploadDestination.immichNative,
+                  label: Text('Immich only'),
+                  icon: Icon(Icons.photo_library_outlined, size: 14),
+                ),
+              ],
+              selected: {destination},
+              onSelectionChanged: (s) => onDestinationChange(s.first),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -557,7 +618,7 @@ class _ProgressFileTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDone = file.status == UploadFileStatus.receiptWritten ||
-        file.status == UploadFileStatus.confirmed;
+        (file.status == UploadFileStatus.confirmed && !file.needsImmich);
     final isFailed = file.status == UploadFileStatus.failed;
 
     Widget trailing;
@@ -611,7 +672,8 @@ class _ProgressFileTile extends StatelessWidget {
         UploadFileStatus.hashing => 'Hashing…',
         UploadFileStatus.handshaking => 'Handshaking…',
         UploadFileStatus.uploading => 'Uploading…',
-        UploadFileStatus.confirmed => 'Verified',
+        UploadFileStatus.confirmed => 'Copyparty verified',
+        UploadFileStatus.immichUploading => 'Uploading to Immich…',
         UploadFileStatus.receiptWritten => 'Done ✓',
         UploadFileStatus.failed => 'Failed',
       };

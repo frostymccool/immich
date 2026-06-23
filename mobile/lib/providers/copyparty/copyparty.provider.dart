@@ -5,10 +5,13 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
+import 'package:immich_mobile/domain/models/store.model.dart';
+import 'package:immich_mobile/entities/store.entity.dart';
 import 'package:immich_mobile/infrastructure/repositories/copyparty_receipt.repository.dart';
 import 'package:immich_mobile/providers/infrastructure/db.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/repositories/secure_storage.repository.dart';
+import 'package:immich_mobile/repositories/upload.repository.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -108,9 +111,10 @@ class ImportSessionState {
 class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   final CopypartyUploaderService _uploader;
   final CopypartyReceiptRepository _receiptRepo;
+  final UploadRepository _immichUploadRepo;
   final Ref _ref;
 
-  ImportSessionNotifier(this._uploader, this._receiptRepo, this._ref)
+  ImportSessionNotifier(this._uploader, this._receiptRepo, this._immichUploadRepo, this._ref)
       : super(const ImportSessionState());
 
   void reset() => state = const ImportSessionState();
@@ -168,77 +172,89 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
           continue;
         }
         try {
-          file.status = UploadFileStatus.hashing;
-          _notify();
+          // ---- Copyparty upload ----
+          if (file.needsCopyparty) {
+            file.status = UploadFileStatus.hashing;
+            _notify();
 
-          final fileSizeBytes = file.sizeBytes;
-          final (hashed, confirmed) = await _uploader.uploadFile(
-            file.localPath,
-            config.hostUrl,
-            config.uploadPath,
-            password,
-            parallelism: config.parallelConnections,
-            onHashProgress: (done, total) {
-              if (total > 0) {
-                file.uploadedBytes = (done * 0.2).round();
-              }
-              _notify();
-            },
-            onUploadProgress: (done, total) {
-              final chunkProgress = total > 0 ? done / total : 0.0;
-              file.uploadedBytes = (fileSizeBytes * (0.2 + 0.8 * chunkProgress)).round();
-              _notify();
-            },
-          );
-
-          file.sha512 = hashed.fileHash;
-          file.wark = confirmed.wark;
-          file.uploadedBytes = file.sizeBytes;
-          file.status = UploadFileStatus.confirmed;
-
-          // Write DB receipt
-          final uploadUrl =
-              '${config.hostUrl.trimRight()}/${_stripSlashes(config.uploadPath)}/${file.filename}';
-          final receiptId = await _receiptRepo.insert(
-            CopypartyReceipt(
-              filename: file.filename,
-              localPath: file.localPath,
-              sizeBytes: file.sizeBytes,
-              sha512File: hashed.fileHash,
-              wark: confirmed.wark,
-              uploadTimestamp: DateTime.now().toUtc(),
-              copypartyUrl: uploadUrl,
-            ),
-          );
-          file.dbRecordWritten = true;
-
-          // Write .cpreceipt sidecar file
-          if (config.writeReceipts) {
-            final written = await _uploader.writeReceiptFile(
-              hashed,
-              confirmed.wark,
+            final fileSizeBytes = file.sizeBytes;
+            final (hashed, confirmed) = await _uploader.uploadFile(
+              file.localPath,
               config.hostUrl,
               config.uploadPath,
-              packageInfo.version,
+              password,
+              parallelism: config.parallelConnections,
+              onHashProgress: (done, total) {
+                if (total > 0) {
+                  file.uploadedBytes = (done * 0.2).round();
+                }
+                _notify();
+              },
+              onUploadProgress: (done, total) {
+                final chunkProgress = total > 0 ? done / total : 0.0;
+                file.uploadedBytes = (fileSizeBytes * (0.2 + 0.8 * chunkProgress)).round();
+                _notify();
+              },
             );
-            if (written) {
-              file.receiptWritten = true;
-              await _receiptRepo.markReceiptWritten(receiptId);
+
+            file.sha512 = hashed.fileHash;
+            file.wark = confirmed.wark;
+            file.uploadedBytes = file.sizeBytes;
+            file.status = UploadFileStatus.confirmed;
+
+            // Write DB receipt
+            final uploadUrl =
+                '${config.hostUrl.trimRight()}/${_stripSlashes(config.uploadPath)}/${file.filename}';
+            final receiptId = await _receiptRepo.insert(
+              CopypartyReceipt(
+                filename: file.filename,
+                localPath: file.localPath,
+                sizeBytes: file.sizeBytes,
+                sha512File: hashed.fileHash,
+                wark: confirmed.wark,
+                uploadTimestamp: DateTime.now().toUtc(),
+                copypartyUrl: uploadUrl,
+              ),
+            );
+            file.dbRecordWritten = true;
+
+            if (config.writeReceipts) {
+              final written = await _uploader.writeReceiptFile(
+                hashed,
+                confirmed.wark,
+                config.hostUrl,
+                config.uploadPath,
+                packageInfo.version,
+              );
+              if (written) {
+                file.receiptWritten = true;
+                await _receiptRepo.markReceiptWritten(receiptId);
+              }
+            }
+
+            if (config.autoDeleteAfterVerify && file.safeToDelete && !file.needsImmich) {
+              try {
+                await File(file.localPath).delete();
+                await _receiptRepo.markSourceDeleted(receiptId);
+              } catch (_) {}
+            }
+          }
+
+          // ---- Immich native upload ----
+          if (file.needsImmich) {
+            file.status = UploadFileStatus.immichUploading;
+            file.uploadedBytes = 0;
+            _notify();
+
+            final result = await _uploadToImmich(file);
+            if (result.isSuccess) {
+              file.immichAssetId = result.remoteAssetId;
+            } else if (!result.isCancelled) {
+              throw Exception(result.errorMessage ?? 'Immich upload failed');
             }
           }
 
           file.status = UploadFileStatus.receiptWritten;
-
-          // Auto-delete if configured and safe
-          if (config.autoDeleteAfterVerify && file.safeToDelete) {
-            try {
-              await File(file.localPath).delete();
-              await _receiptRepo.markSourceDeleted(receiptId);
-            } catch (_) {
-              // Deletion failed — leave the receipt in place for later
-            }
-          }
-
           state = state.copyWith(completedFiles: state.completedFiles + 1);
         } catch (e) {
           file.status = UploadFileStatus.failed;
@@ -249,6 +265,35 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     }
 
     state = state.copyWith(step: ImportSessionStep.complete);
+  }
+
+  Future<UploadResult> _uploadToImmich(UploadFile file) async {
+    final f = File(file.localPath);
+    final fields = {
+      'deviceAssetId': file.localPath,
+      'deviceId': Store.get(StoreKey.deviceId),
+      'fileCreatedAt': DateTime.fromMillisecondsSinceEpoch(file.lastModifiedMs)
+          .toUtc()
+          .toIso8601String(),
+      'fileModifiedAt': DateTime.fromMillisecondsSinceEpoch(file.lastModifiedMs)
+          .toUtc()
+          .toIso8601String(),
+      'isFavorite': 'false',
+      'duration': '0',
+    };
+    return _immichUploadRepo.uploadFile(
+      file: f,
+      originalFileName: file.filename,
+      fields: fields,
+      cancelToken: null,
+      onProgress: (bytes, total) {
+        if (total > 0) {
+          file.uploadedBytes = bytes;
+          _notify();
+        }
+      },
+      logContext: 'copypartyImport[${file.filename}]',
+    );
   }
 
   void _notify() {
@@ -267,6 +312,7 @@ final importSessionProvider = StateNotifierProvider<ImportSessionNotifier, Impor
   (ref) => ImportSessionNotifier(
     ref.watch(copypartyUploaderProvider),
     ref.watch(copypartyReceiptRepositoryProvider),
+    ref.watch(uploadRepositoryProvider),
     ref,
   ),
 );

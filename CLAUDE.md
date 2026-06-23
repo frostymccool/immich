@@ -19,6 +19,24 @@ is identifiable on-device. Increment both numbers together:
 - PRs target `feature/custom-upload-settings` as base, not `main`.
 - Push to the specific `feature/*` branch; never to `main`.
 
+### Engineering discipline — diagnose at the correct layer
+Before implementing a workaround, identify the root constraint at the correct
+abstraction layer (OS API restriction, framework limitation, protocol constraint,
+etc.). If the correct solution requires native code, go native immediately —
+do not iterate through higher-level workarounds first.
+
+**Early-warning sign**: reaching a second "I'll try X instead" iteration means
+the root-cause analysis was wrong. Stop, re-read the constraint, and ask: is
+this fixable at this layer at all? If not, drop down to the layer that owns it.
+
+**Worked example (USB OTG path resolution):**
+`file_picker.getDirectoryPath()` returned `"/"` for non-primary volumes on
+Android 11+. Root cause: it calls the private `StorageVolume.getPath()` via
+Java reflection, which Android blocked at API 30. No Dart-side fix exists.
+Correct solution: a native Kotlin plugin using the public
+`StorageVolume.getDirectory()` API. Two prior Dart-side iterations were wasted
+because the root cause was not identified as an OS-level API restriction first.
+
 ### APK builds
 `Build Custom APK` (`.github/workflows/build-custom-apk.yml`) triggers
 automatically on every push to `feature/**`. The signed release APK artifact
