@@ -59,14 +59,46 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
   Future<void> _browse() async {
     setState(() => _picking = true);
     try {
-      final path = await FilePicker.platform.getDirectoryPath();
-      if (path != null && mounted) {
-        setState(() => _selectedPath = path);
+      final raw = await FilePicker.platform.getDirectoryPath();
+      if (raw != null && mounted) {
+        setState(() => _selectedPath = _resolveSafPath(raw));
       }
     } finally {
       if (mounted) {
         setState(() => _picking = false);
       }
+    }
+  }
+
+  /// Converts an Android SAF content URI to a real filesystem path.
+  ///
+  /// file_picker on Android 11+ returns a content URI from ACTION_OPEN_DOCUMENT_TREE
+  /// (e.g. content://com.android.externalstorage.documents/tree/XXXX-XXXX%3ADCIM).
+  /// dart:io cannot open content URIs directly, so we extract the volume ID and
+  /// relative path and reconstruct the real /storage/<volume>/<path> location.
+  static String _resolveSafPath(String raw) {
+    if (!raw.startsWith('content://')) {
+      return raw;
+    }
+    try {
+      final uri = Uri.parse(raw);
+      // pathSegments are percent-decoded by Uri.parse:
+      // ['tree', 'XXXX-XXXX:DCIM'] or ['tree', 'primary:DCIM']
+      final segments = uri.pathSegments;
+      if (segments.length < 2) {
+        return raw;
+      }
+      final treeId = segments.last;
+      final colonIdx = treeId.indexOf(':');
+      if (colonIdx < 0) {
+        return raw;
+      }
+      final volume = treeId.substring(0, colonIdx);
+      final rel = treeId.substring(colonIdx + 1);
+      final base = volume == 'primary' ? '/storage/emulated/0' : '/storage/$volume';
+      return rel.isEmpty ? base : '$base/$rel';
+    } catch (_) {
+      return raw;
     }
   }
 
@@ -101,6 +133,7 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
 
   @override
   Widget build(BuildContext context) {
+    final errorMessage = ref.watch(importSessionProvider.select((s) => s.errorMessage));
     return Padding(
       padding: const EdgeInsets.all(24.0),
       child: Column(
@@ -115,6 +148,30 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
               color: context.colorScheme.onSurface.withValues(alpha: 0.7),
             ),
           ),
+          if (errorMessage != null) ...[
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: context.colorScheme.errorContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.error_outline, color: context.colorScheme.onErrorContainer, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      errorMessage,
+                      style: context.textTheme.bodySmall?.copyWith(
+                        color: context.colorScheme.onErrorContainer,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 32),
           FilledButton.icon(
             onPressed: _picking ? null : _browse,

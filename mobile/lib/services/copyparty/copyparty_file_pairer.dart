@@ -147,7 +147,7 @@ class CopypartyFilePairer {
     void Function(int count)? onFileFound,
   }) async {
     final result = <FileInfo>[];
-    await for (final entity in dir.list(recursive: true, followLinks: false)) {
+    await for (final entity in dir.list(recursive: true, followLinks: true)) {
       if (entity is File) {
         try {
           final stat = await entity.stat();
