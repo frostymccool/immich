@@ -43,11 +43,13 @@ class UploadFile {
 class UploadSet {
   final String id;
   final List<UploadFile> files;
+  final String? directoryPath;
   UploadSetStatus status;
 
   UploadSet({
     String? id,
     required this.files,
+    this.directoryPath,
     this.status = UploadSetStatus.pending,
   }) : id = id ?? const Uuid().v4();
 

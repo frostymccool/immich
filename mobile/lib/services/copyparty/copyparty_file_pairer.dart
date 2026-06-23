@@ -43,14 +43,26 @@ class CopypartyFilePairer {
   // Stem normalisation
   // ---------------------------------------------------------------------------
 
-  /// Strips the file extension and lowercases, returning the normalised stem.
+  // Camera vendors that use different prefixes for companion files of the same
+  // clip (e.g. LRV_*.lrv and VID_*.mp4 from DJI/GoPro).  Stripping these lets
+  // the pairer recognise them as belonging to the same upload set.
+  static const _stripPrefixes = ['LRV_', 'VID_', 'LIV_', 'PHO_', 'THM_'];
+
+  /// Strips the file extension, strips known camera prefixes, then lowercases.
   String normalise(String filename) {
     var stem = filename;
 
-    // Strip extension
     final dotIdx = stem.lastIndexOf('.');
     if (dotIdx > 0) {
       stem = stem.substring(0, dotIdx);
+    }
+
+    final upper = stem.toUpperCase();
+    for (final prefix in _stripPrefixes) {
+      if (upper.startsWith(prefix)) {
+        stem = stem.substring(prefix.length);
+        break;
+      }
     }
 
     return stem.toLowerCase();
@@ -79,14 +91,14 @@ class CopypartyFilePairer {
 
     final sets = <UploadSet>[];
 
-    for (final dirFiles in byDir.values) {
-      sets.addAll(_pairFilesInDirectory(dirFiles));
+    for (final entry in byDir.entries) {
+      sets.addAll(_pairFilesInDirectory(entry.value, dirPath: entry.key));
     }
 
     return sets;
   }
 
-  List<UploadSet> _pairFilesInDirectory(List<FileInfo> files) {
+  List<UploadSet> _pairFilesInDirectory(List<FileInfo> files, {String? dirPath}) {
     // Build stem → [files] map
     final stemMap = <String, List<FileInfo>>{};
     for (final f in files) {
@@ -132,7 +144,7 @@ class CopypartyFilePairer {
         return a.filename.compareTo(b.filename);
       });
 
-      sets.add(UploadSet(files: uploadFiles));
+      sets.add(UploadSet(files: uploadFiles, directoryPath: dirPath));
     }
 
     return sets;

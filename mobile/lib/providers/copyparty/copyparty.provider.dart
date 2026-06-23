@@ -144,15 +144,26 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     }
   }
 
-  Future<void> startUpload() async {
+  Future<void> startUpload({Set<String>? selectedFilePaths}) async {
     final config = _ref.read(appConfigProvider).copyparty;
     final password = await _ref.read(copypartyPasswordProvider.future);
     final packageInfo = await PackageInfo.fromPlatform();
 
-    state = state.copyWith(step: ImportSessionStep.uploading, completedFiles: 0);
+    final effectiveTotal = selectedFilePaths != null
+        ? selectedFilePaths.length
+        : state.totalFiles;
+
+    state = state.copyWith(
+      step: ImportSessionStep.uploading,
+      completedFiles: 0,
+      totalFiles: effectiveTotal,
+    );
 
     for (final set in state.uploadSets) {
       for (final file in set.files) {
+        if (selectedFilePaths != null && !selectedFilePaths.contains(file.localPath)) {
+          continue;
+        }
         if (file.status == UploadFileStatus.failed) {
           continue;
         }

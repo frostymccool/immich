@@ -43,7 +43,7 @@ class CopypartyImportPage extends ConsumerWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Step 1: Folder picker (uses Android SAF via file_picker)
+// Step 1: Folder picker — browse and scan in one tap
 // ---------------------------------------------------------------------------
 
 class _DirectoryPickerStep extends ConsumerStatefulWidget {
@@ -62,13 +62,10 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
   Future<void> _browse() async {
     setState(() => _picking = true);
     try {
-      // Use the native SAF picker plugin which resolves the correct filesystem
-      // path via StorageVolume.getDirectory() — the public API.  file_picker
-      // used reflection to call a private API that Android blocked in API 30,
-      // causing it to return "/" for non-primary volumes.
       final path = await _safChannel.invokeMethod<String?>('pickDirectory');
       if (path != null && mounted) {
         setState(() => _selectedPath = path);
+        await _scanWithPermissionCheck(path);
       }
     } on PlatformException catch (e) {
       if (mounted) {
@@ -87,9 +84,7 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
     if (Platform.isAndroid) {
       final granted = await Permission.manageExternalStorage.isGranted;
       if (!granted) {
-        if (!mounted) {
-          return;
-        }
+        if (!mounted) return;
         final goToSettings = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
@@ -134,7 +129,10 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
           const SizedBox(height: 8),
           Text(
             'Choose the folder on your memory card or USB drive that contains '
-            'files to upload. Subfolders are included automatically.',
+            'files to upload. Subfolders are included automatically.\n\n'
+            'If multiple USB devices are connected, the picker will show all of '
+            'them — tap the device that contains your files, then navigate to '
+            'the desired folder.',
             style: context.textTheme.bodyMedium?.copyWith(
               color: context.colorScheme.onSurface.withValues(alpha: 0.7),
             ),
@@ -163,19 +161,6 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
               ),
             ),
           ],
-          const SizedBox(height: 32),
-          FilledButton.icon(
-            onPressed: _picking ? null : _browse,
-            icon: _picking
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.folder_open_rounded),
-            label: const Text('Browse for Folder'),
-            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
-          ),
           if (_selectedPath != null) ...[
             const SizedBox(height: 16),
             Container(
@@ -200,11 +185,15 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
           ],
           const Spacer(),
           FilledButton.icon(
-            onPressed: _selectedPath != null
-                ? () => _scanWithPermissionCheck(_selectedPath!)
-                : null,
-            icon: const Icon(Icons.search_rounded),
-            label: const Text('Scan This Folder'),
+            onPressed: _picking ? null : _browse,
+            icon: _picking
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.folder_open_rounded),
+            label: const Text('Browse for Folder'),
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
           ),
         ],
@@ -245,19 +234,60 @@ class _ScanningStep extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Step 3: Options / scan results
+// Step 3: Options / scan results — with checkboxes and folder info
 // ---------------------------------------------------------------------------
 
-class _OptionsStep extends ConsumerWidget {
+class _OptionsStep extends ConsumerStatefulWidget {
   final ImportSessionState session;
-
   const _OptionsStep(this.session);
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final sets = session.uploadSets;
-    final totalFiles = sets.fold(0, (s, u) => s + u.files.length);
-    final totalBytes = sets.fold(0, (s, u) => s + u.totalBytes);
+  ConsumerState<_OptionsStep> createState() => _OptionsStepState();
+}
+
+class _OptionsStepState extends ConsumerState<_OptionsStep> {
+  late Set<String> _selectedPaths;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedPaths = _allPaths(widget.session.uploadSets);
+  }
+
+  Set<String> _allPaths(List<UploadSet> sets) =>
+      sets.expand((s) => s.files).map((f) => f.localPath).toSet();
+
+  void _toggleAll(bool select) {
+    setState(() {
+      _selectedPaths = select ? _allPaths(widget.session.uploadSets) : {};
+    });
+  }
+
+  void _toggleGroup(UploadSet set, bool select) {
+    setState(() {
+      for (final f in set.files) {
+        if (select) {
+          _selectedPaths.add(f.localPath);
+        } else {
+          _selectedPaths.remove(f.localPath);
+        }
+      }
+    });
+  }
+
+  void _toggleFile(String path, bool select) {
+    setState(() {
+      if (select) {
+        _selectedPaths.add(path);
+      } else {
+        _selectedPaths.remove(path);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sets = widget.session.uploadSets;
 
     if (sets.isEmpty) {
       return Center(
@@ -288,20 +318,36 @@ class _OptionsStep extends ConsumerWidget {
       );
     }
 
+    final allFiles = sets.expand((s) => s.files).toList();
+    final totalFiles = allFiles.length;
+    final selectedCount =
+        allFiles.where((f) => _selectedPaths.contains(f.localPath)).length;
+    final selectedBytes = allFiles
+        .where((f) => _selectedPaths.contains(f.localPath))
+        .fold<int>(0, (s, f) => s + f.sizeBytes);
+    final allSelected = selectedCount == totalFiles;
+
     return Column(
       children: [
-        // Summary bar
+        // Summary bar with select-all toggle
         Container(
           color: context.colorScheme.surfaceContainer,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
           child: Row(
             children: [
-              const Icon(Icons.file_copy_outlined),
+              const Icon(Icons.file_copy_outlined, size: 20),
               const SizedBox(width: 8),
-              Text(
-                '$totalFiles files in ${sets.length} upload sets '
-                '(${formatHumanReadableBytes(totalBytes, 1)})',
-                style: context.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
+              Expanded(
+                child: Text(
+                  '$selectedCount / $totalFiles files '
+                  '(${formatHumanReadableBytes(selectedBytes, 1)})',
+                  style: context.textTheme.bodyMedium
+                      ?.copyWith(fontWeight: FontWeight.w500),
+                ),
+              ),
+              TextButton(
+                onPressed: () => _toggleAll(!allSelected),
+                child: Text(allSelected ? 'Deselect All' : 'Select All'),
               ),
             ],
           ),
@@ -310,7 +356,13 @@ class _OptionsStep extends ConsumerWidget {
         Expanded(
           child: ListView.builder(
             itemCount: sets.length,
-            itemBuilder: (ctx, i) => _UploadSetTile(set: sets[i]),
+            itemBuilder: (ctx, i) => _SelectableUploadSetTile(
+              set: sets[i],
+              rootPath: widget.session.directoryPath,
+              selectedPaths: _selectedPaths,
+              onToggleGroup: (select) => _toggleGroup(sets[i], select),
+              onToggleFile: _toggleFile,
+            ),
           ),
         ),
         // Upload button
@@ -320,9 +372,15 @@ class _OptionsStep extends ConsumerWidget {
             child: SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
-                onPressed: () => ref.read(importSessionProvider.notifier).startUpload(),
+                onPressed: selectedCount > 0
+                    ? () => ref
+                        .read(importSessionProvider.notifier)
+                        .startUpload(selectedFilePaths: Set.of(_selectedPaths))
+                    : null,
                 icon: const Icon(Icons.upload_rounded),
-                label: Text('Upload $totalFiles files'),
+                label: Text(
+                  'Upload $selectedCount file${selectedCount == 1 ? '' : 's'}',
+                ),
                 style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
               ),
             ),
@@ -333,49 +391,109 @@ class _OptionsStep extends ConsumerWidget {
   }
 }
 
-class _UploadSetTile extends StatelessWidget {
+class _SelectableUploadSetTile extends StatelessWidget {
   final UploadSet set;
-  const _UploadSetTile({required this.set});
+  final String? rootPath;
+  final Set<String> selectedPaths;
+  final void Function(bool) onToggleGroup;
+  final void Function(String, bool) onToggleFile;
+
+  const _SelectableUploadSetTile({
+    required this.set,
+    required this.rootPath,
+    required this.selectedPaths,
+    required this.onToggleGroup,
+    required this.onToggleFile,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final filesSelected =
+        set.files.where((f) => selectedPaths.contains(f.localPath)).length;
+    final total = set.files.length;
+    final bool? groupChecked =
+        filesSelected == 0 ? false : (filesSelected == total ? true : null);
+
+    final relPath = _relPath(rootPath, set.directoryPath);
+
     return ExpansionTile(
-      leading: const Icon(Icons.folder_zip_outlined),
-      title: Text(set.displayName),
-      subtitle: Text(
-        '${set.files.length} files · ${formatHumanReadableBytes(set.totalBytes, 1)}',
+      leading: Checkbox(
+        tristate: true,
+        value: groupChecked,
+        onChanged: (v) => onToggleGroup(v == true),
       ),
-      children: set.files.map((f) => _FileTile(file: f)).toList(),
+      title: Text(set.displayName),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (relPath.isNotEmpty)
+            Text(
+              relPath,
+              style: context.textTheme.bodySmall?.copyWith(
+                color: context.colorScheme.onSurface.withValues(alpha: 0.5),
+                fontFamily: 'monospace',
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          Text(
+            '$total file${total == 1 ? '' : 's'} · '
+            '${formatHumanReadableBytes(set.totalBytes, 1)}',
+          ),
+        ],
+      ),
+      children: set.files
+          .map(
+            (f) => _SelectableFileTile(
+              file: f,
+              selected: selectedPaths.contains(f.localPath),
+              onToggle: (v) => onToggleFile(f.localPath, v),
+            ),
+          )
+          .toList(),
     );
+  }
+
+  String _relPath(String? root, String? dir) {
+    if (dir == null) return '';
+    if (root == null) return dir.split('/').last;
+    if (dir == root) return dir.split('/').last;
+    if (dir.startsWith('$root/')) return dir.substring(root.length + 1);
+    return dir.split('/').last;
   }
 }
 
-class _FileTile extends StatelessWidget {
+class _SelectableFileTile extends StatelessWidget {
   final UploadFile file;
-  const _FileTile({required this.file});
+  final bool selected;
+  final void Function(bool) onToggle;
+
+  const _SelectableFileTile({
+    required this.file,
+    required this.selected,
+    required this.onToggle,
+  });
 
   @override
   Widget build(BuildContext context) {
     final badges = <String>[];
-    if (file.isTriggerFile) {
-      badges.add('trigger');
-    }
-    if (file.isNativeImmichFile) {
-      badges.add('also in Immich');
-    }
+    if (file.isTriggerFile) badges.add('trigger');
+    if (file.isNativeImmichFile) badges.add('also in Immich');
 
     return ListTile(
-      contentPadding: const EdgeInsets.only(left: 32, right: 16),
-      leading: Icon(
-        file.isTriggerFile ? Icons.star_rounded : Icons.insert_drive_file_outlined,
-        color: file.isTriggerFile ? context.primaryColor : null,
-        size: 20,
+      contentPadding: const EdgeInsets.only(left: 16, right: 16),
+      leading: Checkbox(
+        value: selected,
+        onChanged: (v) => onToggle(v ?? false),
       ),
       title: Text(file.filename, style: context.textTheme.bodyMedium),
       subtitle: Text(
         [formatHumanReadableBytes(file.sizeBytes, 1), ...badges].join(' · '),
         style: context.textTheme.bodySmall,
       ),
+      trailing: file.isTriggerFile
+          ? Icon(Icons.star_rounded, color: context.primaryColor, size: 20)
+          : null,
+      dense: true,
     );
   }
 }
@@ -412,7 +530,7 @@ class _UploadProgressStep extends StatelessWidget {
               ),
               Text(
                 formatHumanReadableBytes(
-                  allFiles.fold(0, (s, f) => s + f.uploadedBytes),
+                  allFiles.fold<int>(0, (s, f) => s + f.uploadedBytes),
                   1,
                 ),
                 style: context.textTheme.bodyMedium,
@@ -477,7 +595,8 @@ class _ProgressFileTile extends StatelessWidget {
           if (isFailed && file.errorMessage != null)
             Text(
               file.errorMessage!,
-              style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.error),
+              style: context.textTheme.bodySmall
+                  ?.copyWith(color: context.colorScheme.error),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
@@ -488,14 +607,14 @@ class _ProgressFileTile extends StatelessWidget {
   }
 
   String _statusLabel(UploadFileStatus status) => switch (status) {
-    UploadFileStatus.pending => 'Waiting…',
-    UploadFileStatus.hashing => 'Hashing…',
-    UploadFileStatus.handshaking => 'Handshaking…',
-    UploadFileStatus.uploading => 'Uploading…',
-    UploadFileStatus.confirmed => 'Verified',
-    UploadFileStatus.receiptWritten => 'Done ✓',
-    UploadFileStatus.failed => 'Failed',
-  };
+        UploadFileStatus.pending => 'Waiting…',
+        UploadFileStatus.hashing => 'Hashing…',
+        UploadFileStatus.handshaking => 'Handshaking…',
+        UploadFileStatus.uploading => 'Uploading…',
+        UploadFileStatus.confirmed => 'Verified',
+        UploadFileStatus.receiptWritten => 'Done ✓',
+        UploadFileStatus.failed => 'Failed',
+      };
 }
 
 // ---------------------------------------------------------------------------
@@ -510,7 +629,8 @@ class _CompletionStep extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final allFiles = session.uploadSets.expand((s) => s.files).toList();
-    final succeeded = allFiles.where((f) => f.status == UploadFileStatus.receiptWritten).length;
+    final succeeded =
+        allFiles.where((f) => f.status == UploadFileStatus.receiptWritten).length;
     final failed = allFiles.where((f) => f.status == UploadFileStatus.failed).length;
     final safeToDelete = allFiles.where((f) => f.safeToDelete).toList();
 
@@ -522,8 +642,12 @@ class _CompletionStep extends ConsumerWidget {
           Row(
             children: [
               Icon(
-                failed == 0 ? Icons.check_circle_rounded : Icons.warning_rounded,
-                color: failed == 0 ? context.primaryColor : context.colorScheme.error,
+                failed == 0
+                    ? Icons.check_circle_rounded
+                    : Icons.warning_rounded,
+                color: failed == 0
+                    ? context.primaryColor
+                    : context.colorScheme.error,
                 size: 36,
               ),
               const SizedBox(width: 12),
@@ -535,7 +659,8 @@ class _CompletionStep extends ConsumerWidget {
           ),
           const SizedBox(height: 16),
           _SummaryRow('Uploaded', '$succeeded files'),
-          if (failed > 0) _SummaryRow('Failed', '$failed files', isError: true),
+          if (failed > 0)
+            _SummaryRow('Failed', '$failed files', isError: true),
           _SummaryRow('Safe to delete', '${safeToDelete.length} files'),
           const SizedBox(height: 24),
           if (safeToDelete.isNotEmpty) ...[
@@ -590,7 +715,11 @@ class _CompletionStep extends ConsumerWidget {
     );
   }
 
-  Future<void> _confirmDelete(BuildContext context, WidgetRef ref, List<UploadFile> files) async {
+  Future<void> _confirmDelete(
+    BuildContext context,
+    WidgetRef ref,
+    List<UploadFile> files,
+  ) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -600,7 +729,10 @@ class _CompletionStep extends ConsumerWidget {
           'All files have been uploaded and verified.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: ctx.colorScheme.error),
             onPressed: () => Navigator.pop(ctx, true),
