@@ -562,7 +562,9 @@ class _SelectableFileTile extends StatelessWidget {
                     color: Colors.green.shade600),
                 const SizedBox(width: 4),
                 Text(
-                  'Already uploaded',
+                  file.alreadyUploadedToImmich
+                      ? 'Confirmed: copyparty + Immich'
+                      : 'Confirmed: copyparty',
                   style: context.textTheme.labelSmall?.copyWith(
                     color: Colors.green.shade600,
                   ),

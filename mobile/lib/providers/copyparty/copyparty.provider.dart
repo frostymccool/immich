@@ -177,6 +177,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         if (file.status == UploadFileStatus.failed) {
           continue;
         }
+        int? receiptId;
         try {
           // ---- Copyparty upload ----
           if (file.needsCopyparty) {
@@ -208,10 +209,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             file.uploadedBytes = file.sizeBytes;
             file.status = UploadFileStatus.confirmed;
 
-            // Write DB receipt
+            // Write DB receipt — upload_confirmed=true since uploadFile() only
+            // returns successfully after the confirmation handshake passes.
             final uploadUrl =
                 '${config.hostUrl.trimRight()}/${_stripSlashes(config.uploadPath)}/${file.filename}';
-            final receiptId = await _receiptRepo.insert(
+            receiptId = await _receiptRepo.insert(
               CopypartyReceipt(
                 filename: file.filename,
                 localPath: file.localPath,
@@ -220,6 +222,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                 wark: confirmed.wark,
                 uploadTimestamp: DateTime.now().toUtc(),
                 copypartyUrl: uploadUrl,
+                uploadConfirmed: true,
               ),
             );
             file.dbRecordWritten = true;
@@ -255,6 +258,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             final result = await _uploadToImmich(file);
             if (result.isSuccess) {
               file.immichAssetId = result.remoteAssetId;
+              if (receiptId != null && result.remoteAssetId != null) {
+                await _receiptRepo.markImmichUploaded(receiptId, result.remoteAssetId!);
+              }
             } else if (!result.isCancelled) {
               throw Exception(result.errorMessage ?? 'Immich upload failed');
             }

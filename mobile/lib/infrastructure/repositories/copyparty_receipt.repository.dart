@@ -12,8 +12,9 @@ class CopypartyReceiptRepository {
       '''
       INSERT INTO copyparty_upload_receipts
         (filename, local_path, size_bytes, sha512_file, wark,
-         upload_timestamp, copyparty_url, receipt_file_written, source_deleted)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         upload_timestamp, copyparty_url, receipt_file_written, source_deleted,
+         upload_confirmed, immich_asset_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ''',
       variables: [
         Variable.withString(receipt.filename),
@@ -25,6 +26,10 @@ class CopypartyReceiptRepository {
         Variable.withString(receipt.copypartyUrl),
         Variable.withInt(receipt.receiptFileWritten ? 1 : 0),
         Variable.withInt(receipt.sourceDeleted ? 1 : 0),
+        Variable.withInt(receipt.uploadConfirmed ? 1 : 0),
+        receipt.immichAssetId != null
+            ? Variable.withString(receipt.immichAssetId!)
+            : const Variable(null),
       ],
     );
   }
@@ -40,6 +45,13 @@ class CopypartyReceiptRepository {
     await _db.customStatement(
       'UPDATE copyparty_upload_receipts SET source_deleted = 1 WHERE id = ?',
       [id],
+    );
+  }
+
+  Future<void> markImmichUploaded(int id, String assetId) async {
+    await _db.customStatement(
+      'UPDATE copyparty_upload_receipts SET immich_asset_id = ? WHERE id = ?',
+      [assetId, id],
     );
   }
 
@@ -61,10 +73,12 @@ class CopypartyReceiptRepository {
     return _rowToReceipt(rows.first);
   }
 
+  /// Returns the most recent confirmed upload receipt for the given local path,
+  /// or null if no confirmed upload exists.
   Future<CopypartyReceipt?> findByLocalPath(String localPath) async {
     final rows = await _db.customSelect(
       '''SELECT * FROM copyparty_upload_receipts
-         WHERE local_path = ? AND source_deleted = 0
+         WHERE local_path = ? AND upload_confirmed = 1 AND source_deleted = 0
          ORDER BY upload_timestamp DESC LIMIT 1''',
       variables: [Variable.withString(localPath)],
     ).get();
@@ -81,11 +95,23 @@ class CopypartyReceiptRepository {
     return rows.map(_rowToReceipt).toList();
   }
 
+  /// Returns one receipt per local_path (most recent confirmed upload),
+  /// for files not yet deleted from device.
   Future<List<CopypartyReceipt>> getUndeleted() async {
     final rows = await _db.customSelect(
-      'SELECT * FROM copyparty_upload_receipts WHERE source_deleted = 0 ORDER BY upload_timestamp DESC',
+      '''SELECT * FROM copyparty_upload_receipts
+         WHERE upload_confirmed = 1 AND source_deleted = 0
+         ORDER BY upload_timestamp DESC''',
     ).get();
-    return rows.map(_rowToReceipt).toList();
+    // Deduplicate by local_path — first occurrence is most recent (DESC order).
+    final seen = <String>{};
+    final result = <CopypartyReceipt>[];
+    for (final row in rows.map(_rowToReceipt)) {
+      if (seen.add(row.localPath)) {
+        result.add(row);
+      }
+    }
+    return result;
   }
 
   Future<void> delete(int id) async {
@@ -108,6 +134,8 @@ class CopypartyReceiptRepository {
       copypartyUrl: data['copyparty_url'] as String,
       receiptFileWritten: (data['receipt_file_written'] as int) == 1,
       sourceDeleted: (data['source_deleted'] as int) == 1,
+      uploadConfirmed: (data['upload_confirmed'] as int? ?? 0) == 1,
+      immichAssetId: data['immich_asset_id'] as String?,
     );
   }
 }

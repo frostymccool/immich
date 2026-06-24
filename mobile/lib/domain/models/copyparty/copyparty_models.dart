@@ -59,6 +59,7 @@ class UploadFile {
       destination == UploadDestination.immichNative || destination == UploadDestination.both;
 
   bool get alreadyUploaded => existingReceipt != null;
+  bool get alreadyUploadedToImmich => existingReceipt?.immichAssetId != null;
   bool get copypartyConfirmed => sha512 != null && wark != null;
   bool get immichConfirmed => immichAssetId != null;
 }
@@ -133,6 +134,8 @@ class CopypartyReceipt {
   final String copypartyUrl;
   final bool receiptFileWritten;
   final bool sourceDeleted;
+  final bool uploadConfirmed;
+  final String? immichAssetId;
 
   const CopypartyReceipt({
     this.id,
@@ -145,11 +148,15 @@ class CopypartyReceipt {
     required this.copypartyUrl,
     this.receiptFileWritten = false,
     this.sourceDeleted = false,
+    this.uploadConfirmed = false,
+    this.immichAssetId,
   });
 
   CopypartyReceipt copyWith({
     bool? receiptFileWritten,
     bool? sourceDeleted,
+    bool? uploadConfirmed,
+    String? immichAssetId,
   }) => CopypartyReceipt(
     id: id,
     filename: filename,
@@ -161,5 +168,7 @@ class CopypartyReceipt {
     copypartyUrl: copypartyUrl,
     receiptFileWritten: receiptFileWritten ?? this.receiptFileWritten,
     sourceDeleted: sourceDeleted ?? this.sourceDeleted,
+    uploadConfirmed: uploadConfirmed ?? this.uploadConfirmed,
+    immichAssetId: immichAssetId ?? this.immichAssetId,
   );
 }

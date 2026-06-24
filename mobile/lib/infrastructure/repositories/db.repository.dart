@@ -120,7 +120,7 @@ class Drift extends $Drift {
   }
 
   @override
-  int get schemaVersion => 31;
+  int get schemaVersion => 32;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -340,6 +340,16 @@ class Drift extends $Drift {
         );
       }
 
+      // v31 → v32: add upload_confirmed + immich_asset_id columns
+      if (from < 32 && to >= 32) {
+        await customStatement(
+          'ALTER TABLE copyparty_upload_receipts ADD COLUMN upload_confirmed INTEGER NOT NULL DEFAULT 0',
+        );
+        await customStatement(
+          'ALTER TABLE copyparty_upload_receipts ADD COLUMN immich_asset_id TEXT',
+        );
+      }
+
       if (kDebugMode) {
         // Fail if the migration broke foreign keys
         final wrongFKs = await customSelect('PRAGMA foreign_key_check').get();
@@ -368,7 +378,9 @@ class Drift extends $Drift {
           upload_timestamp TEXT NOT NULL,
           copyparty_url TEXT NOT NULL,
           receipt_file_written INTEGER NOT NULL DEFAULT 0,
-          source_deleted INTEGER NOT NULL DEFAULT 0
+          source_deleted INTEGER NOT NULL DEFAULT 0,
+          upload_confirmed INTEGER NOT NULL DEFAULT 0,
+          immich_asset_id TEXT
         )
       ''');
       await customStatement(
