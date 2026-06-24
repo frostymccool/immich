@@ -328,14 +328,13 @@ class CopypartyUploaderService {
     // Step 1: hash
     final hashed = await hashFile(filePath, onProgress: onHashProgress);
 
-    // Step 2: handshake
+    // Step 2: initial handshake — find out which chunks the server needs.
+    // Even if need==[] (server has all chunks from a prior attempt), we MUST
+    // still send the confirmation handshake (step 4) to trigger server-side
+    // finalization.  Skipping it leaves the file as .PARTIAL indefinitely.
     final handshakeResult = await handshake(hashed, hostUrl, uploadPath, password);
 
-    if (handshakeResult.alreadyOnServer) {
-      return (hashed, handshakeResult);
-    }
-
-    // Step 3: upload chunks
+    // Step 3: upload any missing chunks (no-op when neededChunks is empty).
     await uploadChunks(
       hashed,
       handshakeResult.wark,
@@ -347,7 +346,7 @@ class CopypartyUploaderService {
       onProgress: onUploadProgress,
     );
 
-    // Step 4: confirm
+    // Step 4: confirmation handshake — triggers server finalization (.PARTIAL → file).
     final confirmed = await handshake(hashed, hostUrl, uploadPath, password);
     if (confirmed.neededChunks.isNotEmpty) {
       throw CopypartyUploadException(

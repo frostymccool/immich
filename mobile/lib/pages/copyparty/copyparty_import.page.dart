@@ -8,21 +8,57 @@ import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
+import 'package:immich_mobile/utils/upload_speed_calculator.dart';
 
 /// The full multi-step "Import from Memory Card" flow.
 ///
 /// Steps: directory picker → scan → options → progress → completion
-class CopypartyImportPage extends ConsumerWidget {
+class CopypartyImportPage extends ConsumerStatefulWidget {
   const CopypartyImportPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<CopypartyImportPage> createState() => _CopypartyImportPageState();
+}
+
+class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
+  @override
+  Widget build(BuildContext context) {
     final session = ref.watch(importSessionProvider);
+    final isUploading = session.step == ImportSessionStep.uploading;
 
     return PopScope(
-      onPopInvokedWithResult: (didPop, _) {
+      canPop: !isUploading,
+      onPopInvokedWithResult: (didPop, _) async {
         if (didPop) {
           ref.read(importSessionProvider.notifier).reset();
+          return;
+        }
+        // Upload in progress — ask whether to continue in background
+        if (!mounted) return;
+        final continueInBg = await showDialog<bool>(
+          context: context,
+          builder: (dlgCtx) => AlertDialog(
+            title: const Text('Upload in progress'),
+            content: const Text(
+              'Continue uploading in the background?\n\n'
+              'The upload will finish even after you navigate away. '
+              'Re-open "Import from Memory Card" to see the result.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dlgCtx, false),
+                child: const Text('Stay'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dlgCtx, true),
+                child: const Text('Continue in background'),
+              ),
+            ],
+          ),
+        );
+        if (continueInBg == true && mounted) {
+          Navigator.of(context).pop();
+          // Do NOT call reset() — upload continues, state persists.
         }
       },
       child: Scaffold(
@@ -612,6 +648,10 @@ class _SelectableFileTile extends StatelessWidget {
 // Step 4: Upload progress
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Step 4: Upload progress — Immich-style cards with speed + ETA
+// ---------------------------------------------------------------------------
+
 class _UploadProgressStep extends StatelessWidget {
   final ImportSessionState session;
   const _UploadProgressStep(this.session);
@@ -621,6 +661,12 @@ class _UploadProgressStep extends StatelessWidget {
     final allFiles = session.uploadSets.expand((s) => s.files).toList();
     final totalBytes = allFiles.fold<int>(0, (s, f) => s + f.sizeBytes);
     final doneBytes = allFiles.fold<int>(0, (s, f) => s + f.uploadedBytes);
+    final activeCount = allFiles
+        .where((f) =>
+            f.status != UploadFileStatus.receiptWritten &&
+            f.status != UploadFileStatus.failed &&
+            !(f.status == UploadFileStatus.confirmed && !f.needsImmich))
+        .length;
 
     return Column(
       children: [
@@ -633,16 +679,20 @@ class _UploadProgressStep extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                '${session.completedFiles} / ${session.totalFiles} files',
-                style: context.textTheme.titleSmall,
+              _SectionBadge(
+                label: 'Uploading',
+                count: activeCount,
+                color: context.colorScheme.primary,
               ),
+              const Spacer(),
               Text(
+                '${session.completedFiles} / ${session.totalFiles} files  '
                 '${formatHumanReadableBytes(doneBytes, 1)} / '
                 '${formatHumanReadableBytes(totalBytes, 1)}',
-                style: context.textTheme.bodySmall,
+                style: context.textTheme.bodySmall?.copyWith(
+                  color: context.colorScheme.onSurface.withValues(alpha: 0.6),
+                ),
               ),
             ],
           ),
@@ -650,9 +700,44 @@ class _UploadProgressStep extends StatelessWidget {
         const Divider(height: 1),
         Expanded(
           child: ListView.builder(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             itemCount: session.uploadSets.length,
             itemBuilder: (ctx, i) =>
                 _ProgressSetSection(set: session.uploadSets[i]),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SectionBadge extends StatelessWidget {
+  final String label;
+  final int count;
+  final Color color;
+  const _SectionBadge({required this.label, required this.count, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: context.textTheme.titleSmall
+              ?.copyWith(fontWeight: FontWeight.w600, color: color),
+        ),
+        const SizedBox(width: 6),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            '$count',
+            style: context.textTheme.labelSmall
+                ?.copyWith(fontWeight: FontWeight.bold, color: color),
           ),
         ),
       ],
@@ -670,7 +755,7 @@ class _ProgressSetSection extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+          padding: const EdgeInsets.only(top: 10, bottom: 4),
           child: Row(
             children: [
               Expanded(
@@ -690,98 +775,196 @@ class _ProgressSetSection extends StatelessWidget {
             ],
           ),
         ),
-        ...set.files.map((f) => _ProgressFileTile(file: f)),
-        const Divider(height: 8, indent: 16),
+        ...set.files.map((f) => Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _ProgressFileCard(file: f),
+            )),
+        const SizedBox(height: 4),
       ],
     );
   }
 }
 
-class _ProgressFileTile extends StatelessWidget {
+class _ProgressFileCard extends StatefulWidget {
   final UploadFile file;
-  const _ProgressFileTile({required this.file});
+  const _ProgressFileCard({required this.file});
+
+  @override
+  State<_ProgressFileCard> createState() => _ProgressFileCardState();
+}
+
+class _ProgressFileCardState extends State<_ProgressFileCard> {
+  final _speedCalc = UploadSpeedCalculator();
+  String _speed = '-- MB/s';
+  String _eta = '--:--';
+
+  @override
+  void didUpdateWidget(_ProgressFileCard old) {
+    super.didUpdateWidget(old);
+    if (widget.file.uploadedBytes != old.file.uploadedBytes) {
+      _speedCalc.update(widget.file.uploadedBytes, widget.file.sizeBytes);
+      _speed = _speedCalc.speedAsString;
+      _eta = _speedCalc.timeRemainingAsString;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final file = widget.file;
     final isDone = file.status == UploadFileStatus.receiptWritten ||
         (file.status == UploadFileStatus.confirmed && !file.needsImmich);
     final isFailed = file.status == UploadFileStatus.failed;
+    final isActive = !isDone && !isFailed;
 
-    Widget trailing;
-    if (isFailed) {
-      trailing = const Icon(Icons.error_rounded, color: Colors.red, size: 20);
-    } else if (isDone) {
-      trailing =
-          Icon(Icons.check_circle_rounded, color: context.primaryColor, size: 20);
-    } else {
-      trailing = SizedBox(
-        width: 20,
-        height: 20,
-        child: CircularProgressIndicator.adaptive(
-          strokeWidth: 2,
-          value: file.sizeBytes > 0 ? file.progress : null,
-        ),
-      );
-    }
+    final cardColor = isFailed
+        ? context.colorScheme.errorContainer
+        : isDone
+            ? context.colorScheme.surfaceContainerLow
+            : context.colorScheme.primaryContainer.withValues(alpha: 0.5);
+    final borderColor = isFailed
+        ? context.colorScheme.error.withValues(alpha: 0.3)
+        : isDone
+            ? context.colorScheme.outline.withValues(alpha: 0.15)
+            : context.colorScheme.primary.withValues(alpha: 0.3);
 
-    return ListTile(
-      dense: true,
-      contentPadding: const EdgeInsets.only(left: 32, right: 16),
-      title: Text(file.filename, style: context.textTheme.bodyMedium),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  _statusLabel(file.status),
-                  style: context.textTheme.bodySmall,
-                ),
-              ),
-              if (!isDone && !isFailed && file.sizeBytes > 0)
-                Text(
-                  '${formatHumanReadableBytes(file.uploadedBytes, 1)} / '
-                  '${formatHumanReadableBytes(file.sizeBytes, 1)}',
-                  style: context.textTheme.bodySmall?.copyWith(
-                    color: context.colorScheme.onSurface.withValues(alpha: 0.6),
-                  ),
-                ),
-            ],
-          ),
-          if (!isDone && !isFailed && file.sizeBytes > 0)
-            Padding(
-              padding: const EdgeInsets.only(top: 3),
-              child: LinearProgressIndicator(
-                value: file.progress,
-                minHeight: 2,
-                borderRadius: BorderRadius.circular(1),
-              ),
-            ),
-          if (isFailed && file.errorMessage != null)
-            Text(
-              file.errorMessage!,
-              style: context.textTheme.bodySmall
-                  ?.copyWith(color: context.colorScheme.error),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-        ],
+    return Card(
+      elevation: 0,
+      color: cardColor,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: borderColor),
       ),
-      trailing: trailing,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            _FileTypeIcon(filename: file.filename, isDone: isDone, isFailed: isFailed),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    file.filename,
+                    style: context.textTheme.bodyMedium
+                        ?.copyWith(fontWeight: FontWeight.w600),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    isFailed
+                        ? file.errorMessage ?? 'Upload failed'
+                        : isDone
+                            ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · Done'
+                            : '${formatHumanReadableBytes(file.sizeBytes, 1)} · '
+                              '${formatHumanReadableBytes(file.uploadedBytes, 1)} transferred · '
+                              '$_speed',
+                    style: context.textTheme.labelLarge?.copyWith(
+                      color: isFailed
+                          ? context.colorScheme.error
+                          : context.colorScheme.onSurface.withValues(alpha: 0.6),
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (isActive && file.sizeBytes > 0) ...[
+                    const SizedBox(height: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: file.progress,
+                        backgroundColor:
+                            context.colorScheme.primary.withValues(alpha: 0.2),
+                        valueColor: AlwaysStoppedAnimation(
+                          context.colorScheme.primary,
+                        ),
+                        minHeight: 4,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: 56,
+              child: isFailed
+                  ? Icon(Icons.error_rounded,
+                      color: context.colorScheme.error, size: 28)
+                  : isDone
+                      ? Icon(Icons.check_circle_rounded,
+                          color: Colors.green, size: 28)
+                      : Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
+                              textAlign: TextAlign.right,
+                              style: context.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                                color: context.colorScheme.primary,
+                              ),
+                            ),
+                            if (_eta != '--:--')
+                              Text(
+                                'est $_eta',
+                                textAlign: TextAlign.right,
+                                style: context.textTheme.labelSmall?.copyWith(
+                                  color: context.colorScheme.onSurface
+                                      .withValues(alpha: 0.5),
+                                ),
+                              ),
+                          ],
+                        ),
+            ),
+          ],
+        ),
+      ),
     );
   }
+}
 
-  String _statusLabel(UploadFileStatus status) => switch (status) {
-        UploadFileStatus.pending => 'Waiting…',
-        UploadFileStatus.hashing => 'Hashing…',
-        UploadFileStatus.handshaking => 'Handshaking…',
-        UploadFileStatus.uploading => 'Uploading…',
-        UploadFileStatus.confirmed => 'Copyparty verified',
-        UploadFileStatus.immichUploading => 'Uploading to Immich…',
-        UploadFileStatus.receiptWritten => 'Done ✓',
-        UploadFileStatus.failed => 'Failed',
-      };
+class _FileTypeIcon extends StatelessWidget {
+  final String filename;
+  final bool isDone;
+  final bool isFailed;
+
+  const _FileTypeIcon({
+    required this.filename,
+    required this.isDone,
+    required this.isFailed,
+  });
+
+  static IconData _iconFor(String name) {
+    final ext = name.toLowerCase().split('.').last;
+    return switch (ext) {
+      'jpg' || 'jpeg' || 'png' || 'heic' || 'heif' || 'webp' => Icons.image_rounded,
+      'mp4' || 'mov' || 'lrv' || 'avi' || 'mkv' => Icons.videocam_rounded,
+      _ => Icons.insert_drive_file_rounded,
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isFailed
+        ? context.colorScheme.error
+        : isDone
+            ? Colors.green
+            : context.colorScheme.primary;
+    return Container(
+      width: 48,
+      height: 48,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(_iconFor(filename), size: 24, color: color),
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
