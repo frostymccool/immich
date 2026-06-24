@@ -179,7 +179,14 @@ class CopypartyUploaderService {
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;
     final wark = json['wark'] as String;
-    final need = (json['need'] as List<dynamic>?)?.cast<int>() ?? [];
+
+    // Server returns needed chunk HASHES (not indices) in the 'hash' field.
+    // Convert to indices by matching against the file's chunk hash list.
+    final neededHashes = (json['hash'] as List<dynamic>?)?.cast<String>() ?? <String>[];
+    final need = neededHashes
+        .map((h) => file.chunkHashes.indexOf(h))
+        .where((i) => i >= 0)
+        .toList();
 
     return HandshakeResult(wark: wark, neededChunks: need);
   }
@@ -194,7 +201,8 @@ class CopypartyUploaderService {
     String uploadPath,
     String password,
     String wark,
-    String chunkHash,
+    int chunkIdx,
+    List<String> allChunkHashes,
     Uint8List chunkBytes,
   ) async {
     final uri = _buildUri(hostUrl, uploadPath, password);
@@ -202,18 +210,42 @@ class CopypartyUploaderService {
     final request = http.Request('POST', uri);
     request.headers['Content-Type'] = 'application/octet-stream';
     request.headers['X-Up2k-Wark'] = wark;
-    request.headers['X-Up2k-Hash'] = chunkHash;
+    request.headers['X-Up2k-Hash'] = _buildChunkHashHeader(chunkIdx, allChunkHashes);
     request.bodyBytes = chunkBytes;
 
     final response = await _client.send(request);
     final statusCode = response.statusCode;
-    if (statusCode != 200 && statusCode != 204) {
+    // 204 = accepted; 200 = accepted with body; 400 can mean "already got that" (chunk
+    // was already on server) which is benign — the confirmation handshake verifies.
+    if (statusCode >= 400 && statusCode != 400) {
+      final body = await response.stream.bytesToString();
       throw CopypartyUploadException(
-        'Chunk upload failed: HTTP $statusCode (wark=$wark, hash=$chunkHash)',
+        'Chunk upload failed: HTTP $statusCode (wark=$wark, idx=$chunkIdx)\n$body',
       );
     }
-    // Drain the response body
+    if (statusCode == 400) {
+      await response.stream.drain<void>();
+      return; // "already got that" — chunk exists, continue
+    }
     await response.stream.drain<void>();
+  }
+
+  /// Builds the X-Up2k-Hash header value for a chunk upload.
+  ///
+  /// For single-chunk files: just the chunk hash.
+  /// For multi-chunk files: full hash of current chunk, then abbreviated
+  /// hashes of all sibling chunks (matches the u2c.py reference format).
+  static String _buildChunkHashHeader(int chunkIdx, List<String> allChunkHashes) {
+    final current = allChunkHashes[chunkIdx];
+    if (allChunkHashes.length <= 1) return current;
+
+    // n = chars to use from each sibling; matches: min(9, max(2, 192 // numChunks))
+    final n = (192 ~/ allChunkHashes.length).clamp(2, 9);
+    final buffer = StringBuffer('$current,$n,');
+    for (int i = 0; i < allChunkHashes.length; i++) {
+      if (i != chunkIdx) buffer.write(allChunkHashes[i].substring(0, n));
+    }
+    return buffer.toString();
   }
 
   /// Uploads the required chunks in parallel (up to [parallelism] at once).
@@ -245,7 +277,8 @@ class CopypartyUploaderService {
           uploadPath,
           password,
           wark,
-          file.chunkHashes[chunkIdx],
+          chunkIdx,
+          file.chunkHashes,
           chunkBytes,
         );
         done++;
