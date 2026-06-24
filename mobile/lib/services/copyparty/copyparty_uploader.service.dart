@@ -117,7 +117,7 @@ class CopypartyUploaderService {
         final chunkBytes = chunkBuf.takeBytes();
         if (chunkBytes.isEmpty) break;
 
-        chunkHashes.add(sha512.convert(chunkBytes).toString());
+        chunkHashes.add(_chunkId(chunkBytes));
         bytesRead += chunkBytes.length;
         onProgress?.call(bytesRead, fileSize);
       }
@@ -163,7 +163,6 @@ class CopypartyUploaderService {
       'size': file.totalBytes,
       'lmod': file.lastModifiedMs / 1000.0,
       'hash': file.chunkHashes,
-      'sz': file.chunkSizeBytes,
     });
 
     final response = await _client.post(
@@ -356,6 +355,14 @@ class CopypartyUploaderService {
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
+
+  /// Copyparty chunk ID: SHA-512 of chunk bytes, first 33 bytes, URL-safe base64.
+  /// Matches the cid format used by copyparty's up2k protocol.
+  static String _chunkId(List<int> bytes) {
+    final digest = sha512.convert(bytes);
+    final truncated = Uint8List.fromList(digest.bytes.sublist(0, 33));
+    return base64Url.encode(truncated);
+  }
 
   Uri _buildUri(String hostUrl, String uploadPath, String password) {
     final base = hostUrl.trimRight();
