@@ -37,6 +37,30 @@ Correct solution: a native Kotlin plugin using the public
 `StorageVolume.getDirectory()` API. Two prior Dart-side iterations were wasted
 because the root cause was not identified as an OS-level API restriction first.
 
+### Protocol implementation — read the reference client first
+When implementing a third-party protocol, **always read the reference client
+source before writing any protocol code**. Never derive the wire format from
+general knowledge or assumptions — look at what the canonical client actually
+sends.
+
+**When a server says a value "doesn't match spec":** the FIRST action is to find
+and read the spec (i.e. the server's validation logic or the reference client).
+Do not assume your format is correct and debug why the content is wrong. The
+error is equally likely to be a format error as a content error.
+
+**Disambiguation rule:** a "not according to spec" server error has two possible
+meanings: (a) wrong format/encoding, or (b) wrong content/value. Always rule out
+(a) by reading the reference implementation before debugging (b).
+
+**Worked example (copyparty up2k chunk hash format):**
+The handshake returned HTTP 400 "at least one hash is not according to spec".
+Two successive wrong diagnoses were made: (1) missing `sz` field, (2) partial
+reads producing wrong hash bytes. Both assumed SHA-512 hex was the correct
+format. The actual issue: copyparty expects `base64url(sha512(bytes)[:33])`
+(44-char URL-safe base64), not `hex(sha512(bytes))` (128-char hex). Reading
+`u2c.py` (the reference client, one WebFetch away) would have revealed this
+immediately. Three commits and two builds were wasted on wrong diagnoses.
+
 ### APK builds
 `Build Custom APK` (`.github/workflows/build-custom-apk.yml`) triggers
 automatically on every push to `feature/**`. The signed release APK artifact
