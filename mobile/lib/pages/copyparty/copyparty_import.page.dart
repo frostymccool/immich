@@ -252,7 +252,11 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
   @override
   void initState() {
     super.initState();
-    _selectedPaths = _allPaths(widget.session.uploadSets);
+    _selectedPaths = widget.session.uploadSets
+        .expand((s) => s.files)
+        .where((f) => !f.alreadyUploaded)
+        .map((f) => f.localPath)
+        .toSet();
   }
 
   Set<String> _allPaths(List<UploadSet> sets) =>
@@ -368,6 +372,39 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
             ],
           ),
         ),
+        Builder(
+          builder: (ctx) {
+            final alreadyCount = sets
+                .expand((s) => s.files)
+                .where((f) => f.alreadyUploaded)
+                .length;
+            if (alreadyCount == 0) return const SizedBox.shrink();
+            return Container(
+              margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: ctx.colorScheme.secondaryContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.check_circle_outline,
+                      size: 16,
+                      color: ctx.colorScheme.onSecondaryContainer),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '$alreadyCount file${alreadyCount == 1 ? '' : 's'} already uploaded — unchecked by default.',
+                      style: ctx.textTheme.bodySmall?.copyWith(
+                        color: ctx.colorScheme.onSecondaryContainer,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
         Expanded(
           child: ListView.builder(
             itemCount: sets.length,
@@ -436,7 +473,7 @@ class _SelectableUploadSetTile extends StatelessWidget {
     final total = set.files.length;
     final bool? groupChecked =
         filesSelected == 0 ? false : (filesSelected == total ? true : null);
-    final relPath = _relPath(rootPath, set.directoryPath);
+    final relPath = _relPathUtil(rootPath, set.directoryPath);
 
     return ExpansionTile(
       leading: Checkbox(
@@ -477,13 +514,6 @@ class _SelectableUploadSetTile extends StatelessWidget {
     );
   }
 
-  String _relPath(String? root, String? dir) {
-    if (dir == null) return '';
-    if (root == null) return dir.split('/').last;
-    if (dir == root) return dir.split('/').last;
-    if (dir.startsWith('$root/')) return dir.substring(root.length + 1);
-    return dir.split('/').last;
-  }
 }
 
 class _SelectableFileTile extends StatelessWidget {
@@ -522,6 +552,24 @@ class _SelectableFileTile extends StatelessWidget {
               : null,
           dense: true,
         ),
+        if (file.alreadyUploaded)
+          Padding(
+            padding: const EdgeInsets.only(left: 72, bottom: 4),
+            child: Row(
+              children: [
+                Icon(Icons.check_circle_outline,
+                    size: 13,
+                    color: Colors.green.shade600),
+                const SizedBox(width: 4),
+                Text(
+                  'Already uploaded',
+                  style: context.textTheme.labelSmall?.copyWith(
+                    color: Colors.green.shade600,
+                  ),
+                ),
+              ],
+            ),
+          ),
         // Destination selector — only for files Immich handles natively
         if (file.isNativeImmichFile && selected)
           Padding(
@@ -569,31 +617,30 @@ class _UploadProgressStep extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final allFiles = session.uploadSets.expand((s) => s.files).toList();
+    final totalBytes = allFiles.fold<int>(0, (s, f) => s + f.sizeBytes);
+    final doneBytes = allFiles.fold<int>(0, (s, f) => s + f.uploadedBytes);
 
     return Column(
       children: [
-        // Overall progress bar
         LinearProgressIndicator(
           value: session.totalFiles > 0
               ? session.completedFiles / session.totalFiles
               : null,
-          minHeight: 6,
+          minHeight: 4,
         ),
         Padding(
-          padding: const EdgeInsets.all(16.0),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
                 '${session.completedFiles} / ${session.totalFiles} files',
-                style: context.textTheme.titleMedium,
+                style: context.textTheme.titleSmall,
               ),
               Text(
-                formatHumanReadableBytes(
-                  allFiles.fold<int>(0, (s, f) => s + f.uploadedBytes),
-                  1,
-                ),
-                style: context.textTheme.bodyMedium,
+                '${formatHumanReadableBytes(doneBytes, 1)} / '
+                '${formatHumanReadableBytes(totalBytes, 1)}',
+                style: context.textTheme.bodySmall,
               ),
             ],
           ),
@@ -601,10 +648,48 @@ class _UploadProgressStep extends StatelessWidget {
         const Divider(height: 1),
         Expanded(
           child: ListView.builder(
-            itemCount: allFiles.length,
-            itemBuilder: (ctx, i) => _ProgressFileTile(file: allFiles[i]),
+            itemCount: session.uploadSets.length,
+            itemBuilder: (ctx, i) =>
+                _ProgressSetSection(set: session.uploadSets[i]),
           ),
         ),
+      ],
+    );
+  }
+}
+
+class _ProgressSetSection extends StatelessWidget {
+  final UploadSet set;
+  const _ProgressSetSection({required this.set});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  set.displayName,
+                  style: context.textTheme.labelMedium
+                      ?.copyWith(fontWeight: FontWeight.w600),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Text(
+                formatHumanReadableBytes(set.totalBytes, 1),
+                style: context.textTheme.labelSmall?.copyWith(
+                  color: context.colorScheme.onSurface.withValues(alpha: 0.5),
+                ),
+              ),
+            ],
+          ),
+        ),
+        ...set.files.map((f) => _ProgressFileTile(file: f)),
+        const Divider(height: 8, indent: 16),
       ],
     );
   }
@@ -624,7 +709,8 @@ class _ProgressFileTile extends StatelessWidget {
     if (isFailed) {
       trailing = const Icon(Icons.error_rounded, color: Colors.red, size: 20);
     } else if (isDone) {
-      trailing = Icon(Icons.check_circle_rounded, color: context.primaryColor, size: 20);
+      trailing =
+          Icon(Icons.check_circle_rounded, color: context.primaryColor, size: 20);
     } else {
       trailing = SizedBox(
         width: 20,
@@ -638,18 +724,36 @@ class _ProgressFileTile extends StatelessWidget {
 
     return ListTile(
       dense: true,
+      contentPadding: const EdgeInsets.only(left: 32, right: 16),
       title: Text(file.filename, style: context.textTheme.bodyMedium),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(_statusLabel(file.status), style: context.textTheme.bodySmall),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _statusLabel(file.status),
+                  style: context.textTheme.bodySmall,
+                ),
+              ),
+              if (!isDone && !isFailed && file.sizeBytes > 0)
+                Text(
+                  '${formatHumanReadableBytes(file.uploadedBytes, 1)} / '
+                  '${formatHumanReadableBytes(file.sizeBytes, 1)}',
+                  style: context.textTheme.bodySmall?.copyWith(
+                    color: context.colorScheme.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
+            ],
+          ),
           if (!isDone && !isFailed && file.sizeBytes > 0)
             Padding(
-              padding: const EdgeInsets.only(top: 4),
+              padding: const EdgeInsets.only(top: 3),
               child: LinearProgressIndicator(
                 value: file.progress,
-                minHeight: 3,
-                borderRadius: BorderRadius.circular(2),
+                minHeight: 2,
+                borderRadius: BorderRadius.circular(1),
               ),
             ),
           if (isFailed && file.errorMessage != null)
@@ -682,97 +786,161 @@ class _ProgressFileTile extends StatelessWidget {
 // Step 5: Completion
 // ---------------------------------------------------------------------------
 
-class _CompletionStep extends ConsumerWidget {
+class _CompletionStep extends ConsumerStatefulWidget {
   final ImportSessionState session;
-
   const _CompletionStep(this.session);
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final allFiles = session.uploadSets.expand((s) => s.files).toList();
-    final succeeded =
-        allFiles.where((f) => f.status == UploadFileStatus.receiptWritten).length;
-    final failed = allFiles.where((f) => f.status == UploadFileStatus.failed).length;
-    final safeToDelete = allFiles.where((f) => f.safeToDelete).toList();
+  ConsumerState<_CompletionStep> createState() => _CompletionStepState();
+}
 
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+class _CompletionStepState extends ConsumerState<_CompletionStep> {
+  late Set<String> _checkedForDeletion;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkedForDeletion = widget.session.uploadSets
+        .expand((s) => s.files)
+        .where((f) => f.safeToDelete)
+        .map((f) => f.localPath)
+        .toSet();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = ref.watch(importSessionProvider);
+    final allFiles = session.uploadSets.expand((s) => s.files).toList();
+
+    final cpSucceeded = allFiles.where((f) => f.copypartyConfirmed).length;
+    final cpNeeded = allFiles.where((f) => f.needsCopyparty).length;
+    final imSucceeded = allFiles.where((f) => f.immichConfirmed).length;
+    final imNeeded = allFiles.where((f) => f.needsImmich).length;
+    final failed = allFiles.where((f) => f.status == UploadFileStatus.failed).length;
+    final hasErrors = failed > 0 || cpSucceeded < cpNeeded;
+
+    final checkedFiles = allFiles
+        .where((f) => _checkedForDeletion.contains(f.localPath))
+        .toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Header banner
+        Container(
+          color: hasErrors
+              ? context.colorScheme.errorContainer
+              : context.colorScheme.primaryContainer,
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+          child: Row(
             children: [
               Icon(
-                failed == 0
-                    ? Icons.check_circle_rounded
-                    : Icons.warning_rounded,
-                color: failed == 0
-                    ? context.primaryColor
-                    : context.colorScheme.error,
-                size: 36,
+                hasErrors
+                    ? Icons.warning_rounded
+                    : Icons.check_circle_rounded,
+                color: hasErrors
+                    ? context.colorScheme.onErrorContainer
+                    : context.colorScheme.onPrimaryContainer,
+                size: 26,
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Text(
-                failed == 0 ? 'Upload Complete' : 'Completed with errors',
-                style: context.textTheme.headlineSmall,
+                hasErrors ? 'Completed with errors' : 'Upload Complete',
+                style: context.textTheme.titleLarge?.copyWith(
+                  color: hasErrors
+                      ? context.colorScheme.onErrorContainer
+                      : context.colorScheme.onPrimaryContainer,
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          _SummaryRow('Uploaded', '$succeeded files'),
-          if (failed > 0)
-            _SummaryRow('Failed', '$failed files', isError: true),
-          _SummaryRow('Safe to delete', '${safeToDelete.length} files'),
-          const SizedBox(height: 24),
-          if (safeToDelete.isNotEmpty) ...[
-            Text(
-              'The following files are verified and have receipts written. '
-              'You can safely delete them from the memory card.',
-              style: context.textTheme.bodyMedium,
-            ),
-            const SizedBox(height: 12),
-            Container(
-              height: 160,
-              decoration: BoxDecoration(
-                border: Border.all(color: context.colorScheme.outlineVariant),
-                borderRadius: BorderRadius.circular(8),
+        ),
+        // Stats chips
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+          child: Wrap(
+            spacing: 12,
+            children: [
+              _StatChip(
+                icon: Icons.cloud_done_rounded,
+                label: 'CP $cpSucceeded/$cpNeeded',
+                ok: cpSucceeded == cpNeeded,
               ),
-              child: ListView.builder(
-                itemCount: safeToDelete.length,
-                itemBuilder: (ctx, i) {
-                  final f = safeToDelete[i];
-                  return ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.check_circle_outline, size: 18),
-                    title: Text(f.filename, style: context.textTheme.bodySmall),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => _confirmDelete(context, ref, safeToDelete),
-                icon: const Icon(Icons.delete_outline_rounded),
-                label: Text('Delete ${safeToDelete.length} verified files'),
-              ),
-            ),
-            const SizedBox(height: 8),
-          ],
-          const Spacer(),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: () {
-                ref.read(importSessionProvider.notifier).reset();
-                Navigator.of(context).pop();
-              },
-              child: const Text('Done'),
+              if (imNeeded > 0)
+                _StatChip(
+                  icon: Icons.photo_library_rounded,
+                  label: 'Immich $imSucceeded/$imNeeded',
+                  ok: imSucceeded == imNeeded,
+                ),
+              if (failed > 0)
+                _StatChip(
+                  icon: Icons.error_outline_rounded,
+                  label: '$failed failed',
+                  ok: false,
+                ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        // Per-group file list
+        Expanded(
+          child: ListView.builder(
+            itemCount: session.uploadSets.length,
+            itemBuilder: (ctx, i) {
+              final set = session.uploadSets[i];
+              return _CompletionSetSection(
+                set: set,
+                rootPath: session.directoryPath,
+                checkedForDeletion: _checkedForDeletion,
+                onToggle: (path, v) => setState(() {
+                  if (v) {
+                    _checkedForDeletion.add(path);
+                  } else {
+                    _checkedForDeletion.remove(path);
+                  }
+                }),
+              );
+            },
+          ),
+        ),
+        // Footer
+        const Divider(height: 1),
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (checkedFiles.isNotEmpty) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () =>
+                          _confirmDelete(context, ref, checkedFiles),
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      label: Text(
+                        'Delete ${checkedFiles.length} selected '
+                        'file${checkedFiles.length == 1 ? '' : 's'}',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: () {
+                      ref.read(importSessionProvider.notifier).reset();
+                      Navigator.of(context).pop();
+                    },
+                    child: const Text('Done'),
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -786,8 +954,8 @@ class _CompletionStep extends ConsumerWidget {
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Source Files'),
         content: Text(
-          'Delete ${files.length} files from the memory card? '
-          'All files have been uploaded and verified.',
+          'Delete ${files.length} file${files.length == 1 ? '' : 's'} '
+          'from the memory card?',
         ),
         actions: [
           TextButton(
@@ -795,7 +963,9 @@ class _CompletionStep extends ConsumerWidget {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: ctx.colorScheme.error),
+            style: FilledButton.styleFrom(
+              backgroundColor: ctx.colorScheme.error,
+            ),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Delete'),
           ),
@@ -813,37 +983,207 @@ class _CompletionStep extends ConsumerWidget {
       }
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Deleted $deleted / ${files.length} files')),
+          SnackBar(
+            content: Text(
+              'Deleted $deleted / ${files.length} '
+              'file${files.length == 1 ? '' : 's'}',
+            ),
+          ),
         );
       }
     }
   }
 }
 
-class _SummaryRow extends StatelessWidget {
+class _StatChip extends StatelessWidget {
+  final IconData icon;
   final String label;
-  final String value;
-  final bool isError;
-
-  const _SummaryRow(this.label, this.value, {this.isError = false});
+  final bool ok;
+  const _StatChip({required this.icon, required this.label, required this.ok});
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: context.textTheme.bodyMedium),
-          Text(
-            value,
-            style: context.textTheme.bodyMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-              color: isError ? context.colorScheme.error : null,
-            ),
-          ),
-        ],
-      ),
+    final color = ok ? context.colorScheme.primary : context.colorScheme.error;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: context.textTheme.labelSmall?.copyWith(color: color),
+        ),
+      ],
     );
   }
+}
+
+class _CompletionSetSection extends StatelessWidget {
+  final UploadSet set;
+  final String? rootPath;
+  final Set<String> checkedForDeletion;
+  final void Function(String, bool) onToggle;
+
+  const _CompletionSetSection({
+    required this.set,
+    required this.rootPath,
+    required this.checkedForDeletion,
+    required this.onToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final relPath = _relPathUtil(rootPath, set.directoryPath);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                set.displayName,
+                style: context.textTheme.labelLarge
+                    ?.copyWith(fontWeight: FontWeight.w600),
+              ),
+              if (relPath.isNotEmpty)
+                Text(
+                  relPath,
+                  style: context.textTheme.bodySmall?.copyWith(
+                    color:
+                        context.colorScheme.onSurface.withValues(alpha: 0.5),
+                    fontFamily: 'monospace',
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+            ],
+          ),
+        ),
+        ...set.files.map(
+          (f) => _CompletionFileTile(
+            file: f,
+            checked: checkedForDeletion.contains(f.localPath),
+            onToggle: (v) => onToggle(f.localPath, v),
+          ),
+        ),
+        const Divider(height: 8),
+      ],
+    );
+  }
+}
+
+class _CompletionFileTile extends StatelessWidget {
+  final UploadFile file;
+  final bool checked;
+  final void Function(bool) onToggle;
+
+  const _CompletionFileTile({
+    required this.file,
+    required this.checked,
+    required this.onToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cpOk = file.copypartyConfirmed;
+    final imOk = file.immichConfirmed;
+    final failed = file.status == UploadFileStatus.failed;
+    final skipped = file.status == UploadFileStatus.pending;
+
+    Widget cpIcon = const SizedBox.shrink();
+    if (file.needsCopyparty) {
+      if (cpOk) {
+        cpIcon = const Icon(Icons.cloud_done_rounded,
+            size: 16, color: Colors.green);
+      } else if (failed || (!skipped && !cpOk)) {
+        cpIcon = Icon(Icons.cloud_off_rounded,
+            size: 16, color: context.colorScheme.error);
+      } else {
+        cpIcon = Icon(Icons.cloud_outlined,
+            size: 16,
+            color: context.colorScheme.onSurface.withValues(alpha: 0.3));
+      }
+    }
+
+    Widget imIcon = const SizedBox.shrink();
+    if (file.needsImmich) {
+      if (imOk) {
+        imIcon = const Icon(Icons.photo_library_rounded,
+            size: 16, color: Colors.green);
+      } else if (failed || (!skipped && !imOk)) {
+        imIcon = Icon(Icons.image_not_supported_rounded,
+            size: 16, color: context.colorScheme.error);
+      } else {
+        imIcon = Icon(Icons.photo_library_outlined,
+            size: 16,
+            color: context.colorScheme.onSurface.withValues(alpha: 0.3));
+      }
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ListTile(
+          dense: true,
+          contentPadding: const EdgeInsets.only(left: 8, right: 16),
+          leading: Checkbox(
+            value: checked,
+            onChanged: (v) => onToggle(v ?? false),
+          ),
+          title: Text(
+            file.filename,
+            style: context.textTheme.bodyMedium?.copyWith(
+              color: skipped
+                  ? context.colorScheme.onSurface.withValues(alpha: 0.4)
+                  : null,
+            ),
+          ),
+          subtitle: skipped
+              ? Text(
+                  'Skipped',
+                  style: context.textTheme.bodySmall?.copyWith(
+                    color:
+                        context.colorScheme.onSurface.withValues(alpha: 0.3),
+                  ),
+                )
+              : null,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              cpIcon,
+              if (file.needsImmich) ...[
+                const SizedBox(width: 6),
+                imIcon,
+              ],
+              const SizedBox(width: 8),
+              Text(
+                formatHumanReadableBytes(file.sizeBytes, 1),
+                style: context.textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+        if (failed && file.errorMessage != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(56, 0, 16, 4),
+            child: Text(
+              file.errorMessage!,
+              style: context.textTheme.bodySmall
+                  ?.copyWith(color: context.colorScheme.error),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+String _relPathUtil(String? root, String? dir) {
+  if (dir == null) return '';
+  if (root == null) return dir.split('/').last;
+  if (dir == root) return dir.split('/').last;
+  if (dir.startsWith('$root/')) return dir.substring(root.length + 1);
+  return dir.split('/').last;
 }

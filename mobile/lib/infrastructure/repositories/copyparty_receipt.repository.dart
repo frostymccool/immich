@@ -61,6 +61,17 @@ class CopypartyReceiptRepository {
     return _rowToReceipt(rows.first);
   }
 
+  Future<CopypartyReceipt?> findByLocalPath(String localPath) async {
+    final rows = await _db.customSelect(
+      '''SELECT * FROM copyparty_upload_receipts
+         WHERE local_path = ? AND source_deleted = 0
+         ORDER BY upload_timestamp DESC LIMIT 1''',
+      variables: [Variable.withString(localPath)],
+    ).get();
+    if (rows.isEmpty) return null;
+    return _rowToReceipt(rows.first);
+  }
+
   Future<List<CopypartyReceipt>> getPendingDeletion() async {
     final rows = await _db.customSelect(
       '''SELECT * FROM copyparty_upload_receipts

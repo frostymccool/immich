@@ -23,6 +23,7 @@ class UploadFile {
   int uploadedBytes;
   UploadDestination destination;
   String? immichAssetId;
+  CopypartyReceipt? existingReceipt;
 
   UploadFile({
     required this.localPath,
@@ -40,18 +41,26 @@ class UploadFile {
     this.uploadedBytes = 0,
     UploadDestination? destination,
     this.immichAssetId,
+    this.existingReceipt,
   }) : destination = destination ??
            (isNativeImmichFile ? UploadDestination.both : UploadDestination.copypartyOnly);
 
   double get progress => sizeBytes > 0 ? uploadedBytes / sizeBytes : 0.0;
 
-  bool get safeToDelete => sha512 != null && receiptWritten && dbRecordWritten;
+  bool get safeToDelete =>
+      sha512 != null &&
+      dbRecordWritten &&
+      (!needsImmich || immichAssetId != null);
 
   bool get needsCopyparty =>
       destination == UploadDestination.copypartyOnly || destination == UploadDestination.both;
 
   bool get needsImmich =>
       destination == UploadDestination.immichNative || destination == UploadDestination.both;
+
+  bool get alreadyUploaded => existingReceipt != null;
+  bool get copypartyConfirmed => sha512 != null && wark != null;
+  bool get immichConfirmed => immichAssetId != null;
 }
 
 class UploadSet {

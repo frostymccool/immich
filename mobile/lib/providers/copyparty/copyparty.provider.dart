@@ -135,6 +135,12 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         directoryPath,
         onFileFound: (count) => state = state.copyWith(scannedFiles: count),
       );
+      // Check which files have already been uploaded
+      for (final set in sets) {
+        for (final file in set.files) {
+          file.existingReceipt = await _receiptRepo.findByLocalPath(file.localPath);
+        }
+      }
       state = state.copyWith(
         step: ImportSessionStep.options,
         uploadSets: sets,

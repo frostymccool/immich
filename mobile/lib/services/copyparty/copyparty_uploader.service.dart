@@ -349,6 +349,12 @@ class CopypartyUploaderService {
 
     // Step 4: confirm
     final confirmed = await handshake(hashed, hostUrl, uploadPath, password);
+    if (confirmed.neededChunks.isNotEmpty) {
+      throw CopypartyUploadException(
+        'Upload confirmation failed: server still needs '
+        '${confirmed.neededChunks.length} chunk(s)',
+      );
+    }
     return (hashed, confirmed);
   }
 
