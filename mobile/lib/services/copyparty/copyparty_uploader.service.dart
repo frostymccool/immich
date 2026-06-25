@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 
 /// Implements the copyparty up2k upload protocol.
@@ -16,7 +17,14 @@ import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 class CopypartyUploaderService {
   final http.Client _client;
 
-  CopypartyUploaderService({http.Client? client}) : _client = client ?? http.Client();
+  CopypartyUploaderService({http.Client? client}) : _client = client ?? _createClient();
+
+  // Build an HTTP client that accepts self-signed certs (common for home servers).
+  static http.Client _createClient() {
+    final inner = HttpClient()
+      ..badCertificateCallback = (cert, host, port) => true;
+    return IOClient(inner);
+  }
 
   void dispose() => _client.close();
 
@@ -179,6 +187,7 @@ class CopypartyUploaderService {
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;
     final wark = json['wark'] as String;
+    final purl = json['purl'] as String? ?? '';
 
     // Server returns needed chunk HASHES (not indices) in the 'hash' field.
     // Convert to indices by matching against the file's chunk hash list.
@@ -188,7 +197,7 @@ class CopypartyUploaderService {
         .where((i) => i >= 0)
         .toList();
 
-    return HandshakeResult(wark: wark, neededChunks: need);
+    return HandshakeResult(wark: wark, neededChunks: need, purl: purl);
   }
 
   // ---------------------------------------------------------------------------
@@ -197,17 +206,13 @@ class CopypartyUploaderService {
 
   /// Uploads a single chunk to the server.
   Future<void> _uploadChunk(
-    String hostUrl,
-    String uploadPath,
-    String password,
+    Uri chunkUri,
     String wark,
     int chunkIdx,
     List<String> allChunkHashes,
     Uint8List chunkBytes,
   ) async {
-    final uri = _buildUri(hostUrl, uploadPath, password);
-
-    final request = http.Request('POST', uri);
+    final request = http.Request('POST', chunkUri);
     request.headers['Content-Type'] = 'application/octet-stream';
     request.headers['X-Up2k-Wark'] = wark;
     request.headers['X-Up2k-Hash'] = _buildChunkHashHeader(chunkIdx, allChunkHashes);
@@ -249,12 +254,15 @@ class CopypartyUploaderService {
   }
 
   /// Uploads the required chunks in parallel (up to [parallelism] at once).
+  ///
+  /// [purl] is the partial-upload URL returned by the handshake; chunks are
+  /// POSTed there (matching the u2c.py reference client behaviour).
   Future<void> uploadChunks(
     HashedFile file,
     String wark,
     List<int> neededChunkIndices,
     String hostUrl,
-    String uploadPath,
+    String purl,
     String password, {
     int parallelism = 4,
     void Function(int chunksDone, int chunksTotal)? onProgress,
@@ -262,6 +270,8 @@ class CopypartyUploaderService {
     if (neededChunkIndices.isEmpty) {
       return;
     }
+
+    final chunkUri = _buildChunkUri(hostUrl, purl, password);
 
     int done = 0;
     final semaphore = _Semaphore(parallelism);
@@ -273,9 +283,7 @@ class CopypartyUploaderService {
         final end = (start + file.chunkSizeBytes).clamp(0, file.totalBytes);
         final chunkBytes = await _readChunk(file.path, start, end - start);
         await _uploadChunk(
-          hostUrl,
-          uploadPath,
-          password,
+          chunkUri,
           wark,
           chunkIdx,
           file.chunkHashes,
@@ -368,12 +376,14 @@ class CopypartyUploaderService {
     final handshakeResult = await handshake(hashed, hostUrl, uploadPath, password);
 
     // Step 3: upload any missing chunks (no-op when neededChunks is empty).
+    // Use purl from handshake response as the chunk upload endpoint — this
+    // matches what the u2c.py reference client does.
     await uploadChunks(
       hashed,
       handshakeResult.wark,
       handshakeResult.neededChunks,
       hostUrl,
-      uploadPath,
+      handshakeResult.purl,
       password,
       parallelism: parallelism,
       onProgress: onUploadProgress,
@@ -409,6 +419,28 @@ class CopypartyUploaderService {
       queryParameters: password.isNotEmpty ? {'pw': password} : null,
     );
     return uri;
+  }
+
+  /// Builds the chunk upload URI from the server-provided [purl].
+  ///
+  /// [purl] may be an absolute URL or a path relative to the host.
+  /// The password query param is appended when present.
+  Uri _buildChunkUri(String hostUrl, String purl, String password) {
+    final Uri base;
+    if (purl.startsWith('http://') || purl.startsWith('https://')) {
+      base = Uri.parse(purl);
+    } else if (purl.isNotEmpty) {
+      final host = Uri.parse(hostUrl.trimRight());
+      base = host.replace(path: purl);
+    } else {
+      // Fallback: use the same base URL as the handshake
+      return _buildUri(hostUrl, '', password)
+          .replace(path: Uri.parse(hostUrl.trimRight()).path);
+    }
+    if (password.isEmpty) return base;
+    final params = Map<String, String>.from(base.queryParameters);
+    if (!params.containsKey('pw')) params['pw'] = password;
+    return base.replace(queryParameters: params);
   }
 
   Future<Uint8List> _readChunk(String filePath, int start, int length) async {

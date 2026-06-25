@@ -117,8 +117,9 @@ class HashedFile {
 class HandshakeResult {
   final String wark;
   final List<int> neededChunks;
+  final String purl;
 
-  const HandshakeResult({required this.wark, required this.neededChunks});
+  const HandshakeResult({required this.wark, required this.neededChunks, required this.purl});
 
   bool get alreadyOnServer => neededChunks.isEmpty;
 }
