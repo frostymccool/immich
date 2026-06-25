@@ -11,8 +11,43 @@ import 'package:immich_mobile/extensions/translate_extensions.dart';
 import 'package:immich_mobile/pages/common/large_leading_tile.dart';
 import 'package:immich_mobile/presentation/widgets/images/thumbnail.widget.dart';
 import 'package:immich_mobile/providers/backup/drift_backup.provider.dart';
+import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
+import 'package:immich_mobile/providers/infrastructure/storage.provider.dart';
 import 'package:immich_mobile/repositories/asset_media.repository.dart';
 import 'package:immich_mobile/routing/router.dart';
+import 'package:immich_mobile/utils/bytes_units.dart';
+
+// Fetches candidates with actual file sizes, sorted if sortSmallestFirst is enabled.
+final _candidatesWithSizeProvider = FutureProvider.autoDispose<List<(LocalAsset, int)>>((ref) async {
+  final candidates = await ref.watch(driftBackupCandidateProvider.future);
+  final storage = ref.read(storageRepositoryProvider);
+  final sortSmallest = ref.watch(appConfigProvider.select((c) => c.backup.sortSmallestFirst));
+
+  final sizeMap = <String, int>{};
+  var si = 0;
+  Future<void> fetchSize() async {
+    while (true) {
+      final i = si;
+      if (i >= candidates.length) break;
+      si++;
+      final asset = candidates[i];
+      try {
+        final file = await storage.getFileForAsset(asset.id);
+        sizeMap[asset.id] = file != null ? await file.length() : 0;
+      } catch (_) {
+        sizeMap[asset.id] = 0;
+      }
+    }
+  }
+
+  await Future.wait(List.generate(8, (_) => fetchSize()));
+
+  final list = candidates.map((a) => (a, sizeMap[a.id] ?? 0)).toList();
+  if (sortSmallest) {
+    list.sort((x, y) => x.$2.compareTo(y.$2));
+  }
+  return list;
+});
 
 @RoutePage()
 class DriftBackupAssetDetailPage extends ConsumerWidget {
@@ -20,17 +55,17 @@ class DriftBackupAssetDetailPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    AsyncValue<List<LocalAsset>> result = ref.watch(driftBackupCandidateProvider);
+    final result = ref.watch(_candidatesWithSizeProvider);
     return Scaffold(
       appBar: AppBar(title: Text('backup_controller_page_remainder'.t(context: context))),
       body: result.when(
-        data: (List<LocalAsset> candidates) {
+        data: (List<(LocalAsset, int)> candidates) {
           return ListView.separated(
             padding: const EdgeInsets.only(top: 16.0),
             separatorBuilder: (context, index) => Divider(color: context.colorScheme.outlineVariant),
             itemCount: candidates.length,
             itemBuilder: (context, index) {
-              final asset = candidates[index];
+              final (asset, fileSize) = candidates[index];
               final albumsAsyncValue = ref.watch(driftCandidateBackupAlbumInfoProvider(asset.id));
               final assetMediaRepository = ref.watch(assetMediaRepositoryProvider);
               return FutureBuilder<String?>(
@@ -50,9 +85,8 @@ class DriftBackupAssetDetailPage extends ConsumerWidget {
                           style: TextStyle(fontSize: 13.0, color: context.colorScheme.onSurfaceSecondary),
                         ),
                         Text(
-                          asset.checksum ?? "N/A",
+                          fileSize > 0 ? formatHumanReadableBytes(fileSize, 1) : '—',
                           style: TextStyle(fontSize: 13.0, color: context.colorScheme.onSurfaceSecondary),
-                          overflow: TextOverflow.ellipsis,
                         ),
                         albumsAsyncValue.when(
                           data: (albums) {

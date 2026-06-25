@@ -98,10 +98,9 @@ Future<void> initApp() async {
 
   // Initialize the file downloader
   await FileDownloader().configure(
-    // maxConcurrent: 6, maxConcurrentByHost(server):6, maxConcurrentByGroup: 3
-
+    // Upper bounds set high so user-configured parallelUploads (1–10) is never artificially capped.
     // On Android, if files are larger than 256MB, run in foreground service
-    globalConfig: [(Config.holdingQueue, (6, 6, 3)), (Config.runInForegroundIfFileLargerThan, 256)],
+    globalConfig: [(Config.holdingQueue, (10, 10, 10)), (Config.runInForegroundIfFileLargerThan, 256)],
   );
 
   await FileDownloader().trackTasksInGroup(kDownloadGroupLivePhoto, markDownloadedComplete: false);

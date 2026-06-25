@@ -2552,5 +2552,13 @@
   "your_wifi_name": "Your Wi-Fi name",
   "zero_to_clear_rating": "press 0 to clear asset rating",
   "zoom_image": "Zoom Image",
-  "zoom_to_bounds": "Zoom to bounds"
+  "zoom_to_bounds": "Zoom to bounds",
+  "backup_upload_settings": "Upload settings",
+  "backup_parallel_uploads": "Parallel uploads: {count}",
+  "backup_sort_smallest_first": "Upload smallest files first",
+  "backup_sort_smallest_first_description": "Photos are uploaded before videos; within each group, smaller files complete first",
+  "backup_reserve_photo_slot": "Reserve a slot for photos",
+  "backup_reserve_photo_slot_description": "When uploading in parallel, keeps at least one slot free for photos",
+  "backup_upload_progress": "{total} • {transferred} transferred • {speed}",
+  "backup_upload_eta": "est {time}"
 }

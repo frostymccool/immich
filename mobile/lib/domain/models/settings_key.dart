@@ -43,6 +43,9 @@ enum SettingsKey<T> {
   backupRequireCharging<bool>(),
   backupTriggerDelay<int>(),
   backupSyncAlbums<bool>(),
+  backupParallelUploads<int>(),
+  backupSortSmallestFirst<bool>(),
+  backupReserveSlotForPhotos<bool>(),
 
   // Timeline
   timelineTilesPerRow<int>(),

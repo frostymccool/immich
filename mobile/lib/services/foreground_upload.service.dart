@@ -85,6 +85,35 @@ class ForegroundUploadService {
       return;
     }
 
+    final backupConfig = SettingsRepository.instance.appConfig.backup;
+    if (backupConfig.sortSmallestFirst) {
+      // Fetch actual file sizes concurrently (8 workers) then sort smallest-first.
+      // file.length() is a metadata-only stat — no file data is read.
+      final sizeMap = <String, int>{};
+      var si = 0;
+      Future<void> fetchSize() async {
+        while (true) {
+          final i = si;
+          if (i >= candidates.length) break;
+          si++;
+          final asset = candidates[i];
+          try {
+            final file = await _storageRepository.getFileForAsset(asset.id);
+            sizeMap[asset.id] = (file != null) ? await file.length() : 0;
+          } catch (_) {
+            sizeMap[asset.id] = 0;
+          }
+        }
+      }
+      await Future.wait(List.generate(8, (_) => fetchSize()));
+      // Photos before videos; within each group, smallest first.
+      candidates.sort((a, b) {
+        final typeOrder = (a.isVideo ? 1 : 0).compareTo(b.isVideo ? 1 : 0);
+        if (typeOrder != 0) return typeOrder;
+        return (sizeMap[a.id] ?? 0).compareTo(sizeMap[b.id] ?? 0);
+      });
+    }
+
     final networkCapabilities = await _connectivityApi.getCapabilities();
     final hasWifi = networkCapabilities.isUnmetered;
     _logger.info('Network capabilities: $networkCapabilities, hasWifi/isUnmetered: $hasWifi');
@@ -92,15 +121,58 @@ class ForegroundUploadService {
     if (useSequentialUpload) {
       await _uploadSequentially(items: candidates, cancelToken: cancelToken, hasWifi: hasWifi, callbacks: callbacks);
     } else {
-      await _executeWithWorkerPool<LocalAsset>(
-        items: candidates,
-        cancelToken: cancelToken,
-        shouldSkip: (asset) {
-          final requireWifi = _shouldRequireWiFi(asset);
-          return requireWifi && !hasWifi;
-        },
-        processItem: (asset) => _uploadSingleAsset(asset, cancelToken, callbacks: callbacks),
-      );
+      await _storageRepository.clearCache();
+      shouldAbortUpload = false;
+
+      bool shouldSkip(LocalAsset asset) => _shouldRequireWiFi(asset) && !hasWifi;
+
+      // Single shared pool of 10 workers. Each re-reads parallelUploads on every item
+      // so the slider takes effect within ~200ms of the next pickup.
+      //
+      // When reserveSlotForPhotos is on, videos are additionally capped at
+      // (parallelUploads - 1) using a shared activeVideoCount counter.
+      // Because Dart is single-threaded the check-and-increment is effectively
+      // atomic (no await between them).
+      int idx = 0;
+      int activeVideoCount = 0;
+
+      Future<void> worker(int workerIndex) async {
+        while (true) {
+          if (shouldAbortUpload || cancelToken.isCompleted) break;
+
+          final limit = SettingsRepository.instance.appConfig.backup.parallelUploads.clamp(1, 10);
+          if (workerIndex >= limit) {
+            if (idx >= candidates.length) break;
+            await Future.delayed(const Duration(milliseconds: 200));
+            continue;
+          }
+
+          final i = idx;
+          if (i >= candidates.length) break;
+
+          final asset = candidates[i];
+
+          // If reserveSlotForPhotos is on and this is a video, enforce the cap.
+          final reserveSlot = SettingsRepository.instance.appConfig.backup.reserveSlotForPhotos;
+          if (asset.isVideo && reserveSlot && limit > 1 && activeVideoCount >= limit - 1) {
+            await Future.delayed(const Duration(milliseconds: 200));
+            continue;
+          }
+
+          idx++;
+          if (asset.isVideo) activeVideoCount++;
+
+          if (shouldSkip(asset)) {
+            if (asset.isVideo) activeVideoCount--;
+            continue;
+          }
+
+          await _uploadSingleAsset(asset, cancelToken, callbacks: callbacks);
+          if (asset.isVideo) activeVideoCount--;
+        }
+      }
+
+      await Future.wait(List.generate(10, worker));
     }
   }
 
