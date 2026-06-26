@@ -186,7 +186,7 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
                   Icon(Icons.error_outline, color: context.colorScheme.onErrorContainer, size: 18),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(
+                    child: SelectableText(
                       errorMessage,
                       style: context.textTheme.bodySmall?.copyWith(
                         color: context.colorScheme.onErrorContainer,
@@ -1352,12 +1352,10 @@ class _CompletionFileTile extends StatelessWidget {
         if (failed && file.errorMessage != null)
           Padding(
             padding: const EdgeInsets.fromLTRB(56, 0, 16, 4),
-            child: Text(
+            child: SelectableText(
               file.errorMessage!,
               style: context.textTheme.bodySmall
                   ?.copyWith(color: context.colorScheme.error),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
             ),
           ),
       ],

@@ -62,17 +62,13 @@ class CopypartyUploaderService {
   // ---------------------------------------------------------------------------
 
   static const List<(int maxBytes, int chunkBytes)> _chunkTable = [
-    (256 * 1024 * 1024, 1 * 1024 * 1024),           // ≤ 256 MiB → 1 MiB chunks
-    (402653184, 1572864),                              // ≤ 384 MiB → 1.5 MiB chunks
-    (512 * 1024 * 1024, 2 * 1024 * 1024),            // ≤ 512 MiB → 2 MiB chunks
-    (805306368, 3 * 1024 * 1024),                     // ≤ 768 MiB → 3 MiB chunks
-    (1 * 1024 * 1024 * 1024, 4 * 1024 * 1024),       // ≤ 1 GiB → 4 MiB chunks
-    (1610612736, 6 * 1024 * 1024),                    // ≤ 1.5 GiB → 6 MiB chunks
-    (2 * 1024 * 1024 * 1024, 8 * 1024 * 1024),       // ≤ 2 GiB → 8 MiB chunks
-    (3 * 1024 * 1024 * 1024, 12 * 1024 * 1024),      // ≤ 3 GiB → 12 MiB chunks
-    (4 * 1024 * 1024 * 1024, 16 * 1024 * 1024),      // ≤ 4 GiB → 16 MiB chunks
-    (6 * 1024 * 1024 * 1024, 24 * 1024 * 1024),      // ≤ 6 GiB → 24 MiB chunks
-    (128 * 1024 * 1024 * 1024, 32 * 1024 * 1024),    // ≤ 128 GiB → 32 MiB chunks
+    (256 * 1024 * 1024, 256 * 1024),                    // ≤ 256 MiB → 256 KiB chunks
+    (512 * 1024 * 1024, 512 * 1024),                    // ≤ 512 MiB → 512 KiB chunks
+    (1 * 1024 * 1024 * 1024, 1 * 1024 * 1024),          // ≤ 1 GiB → 1 MiB chunks
+    (2 * 1024 * 1024 * 1024, 2 * 1024 * 1024),          // ≤ 2 GiB → 2 MiB chunks
+    (4 * 1024 * 1024 * 1024, 4 * 1024 * 1024),          // ≤ 4 GiB → 4 MiB chunks
+    (8 * 1024 * 1024 * 1024, 8 * 1024 * 1024),          // ≤ 8 GiB → 8 MiB chunks
+    (128 * 1024 * 1024 * 1024, 16 * 1024 * 1024),       // ≤ 128 GiB → 16 MiB chunks
   ];
 
   /// Returns the chunk size in bytes for a given file size.
@@ -208,14 +204,13 @@ class CopypartyUploaderService {
   Future<void> _uploadChunk(
     Uri chunkUri,
     String wark,
-    int chunkIdx,
-    List<String> allChunkHashes,
+    String chunkHash,
     Uint8List chunkBytes,
   ) async {
     final request = http.Request('POST', chunkUri);
     request.headers['Content-Type'] = 'application/octet-stream';
     request.headers['X-Up2k-Wark'] = wark;
-    request.headers['X-Up2k-Hash'] = _buildChunkHashHeader(chunkIdx, allChunkHashes);
+    request.headers['X-Up2k-Hash'] = chunkHash;
     request.bodyBytes = chunkBytes;
 
     final response = await _client.send(request);
@@ -237,20 +232,11 @@ class CopypartyUploaderService {
 
   /// Builds the X-Up2k-Hash header value for a chunk upload.
   ///
-  /// For single-chunk files: just the chunk hash.
-  /// For multi-chunk files: full hash of current chunk, then abbreviated
-  /// hashes of all sibling chunks (matches the u2c.py reference format).
+  /// We upload one chunk per HTTP request, so only the current chunk's hash
+  /// is included. The sibling-hash optimisation in u2c.py is only used when
+  /// multiple chunks are batched into a single request body, which we don't do.
   static String _buildChunkHashHeader(int chunkIdx, List<String> allChunkHashes) {
-    final current = allChunkHashes[chunkIdx];
-    if (allChunkHashes.length <= 1) return current;
-
-    // n = chars to use from each sibling; matches: min(9, max(2, 192 // numChunks))
-    final n = (192 ~/ allChunkHashes.length).clamp(2, 9);
-    final buffer = StringBuffer('$current,$n,');
-    for (int i = 0; i < allChunkHashes.length; i++) {
-      if (i != chunkIdx) buffer.write(allChunkHashes[i].substring(0, n));
-    }
-    return buffer.toString();
+    return allChunkHashes[chunkIdx];
   }
 
   /// Uploads the required chunks in parallel (up to [parallelism] at once).
@@ -285,8 +271,7 @@ class CopypartyUploaderService {
         await _uploadChunk(
           chunkUri,
           wark,
-          chunkIdx,
-          file.chunkHashes,
+          file.chunkHashes[chunkIdx],
           chunkBytes,
         );
         done++;
