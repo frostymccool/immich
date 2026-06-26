@@ -220,7 +220,7 @@ class CopypartyUploaderService {
     if (statusCode >= 400 && statusCode != 400) {
       final body = await response.stream.bytesToString();
       throw CopypartyUploadException(
-        'Chunk upload failed: HTTP $statusCode (wark=$wark, idx=$chunkIdx)\n$body',
+        'Chunk upload failed: HTTP $statusCode (wark=$wark, hash=$chunkHash)\n$body',
       );
     }
     if (statusCode == 400) {
