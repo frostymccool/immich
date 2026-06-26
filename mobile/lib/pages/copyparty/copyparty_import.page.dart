@@ -21,6 +21,11 @@ class CopypartyImportPage extends ConsumerStatefulWidget {
 }
 
 class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
+  // True when the user has chosen "Continue in background" — prevents the
+  // didPop handler from calling reset() on the provider, which would kill
+  // the ongoing upload.
+  bool _backgroundLeave = false;
+
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(importSessionProvider);
@@ -30,7 +35,10 @@ class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
       canPop: !isUploading,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) {
-          ref.read(importSessionProvider.notifier).reset();
+          if (!_backgroundLeave) {
+            ref.read(importSessionProvider.notifier).reset();
+          }
+          _backgroundLeave = false;
           return;
         }
         // Upload in progress — ask whether to continue in background
@@ -57,6 +65,7 @@ class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
           ),
         );
         if (continueInBg == true && mounted) {
+          _backgroundLeave = true;
           Navigator.of(context).pop();
           // Do NOT call reset() — upload continues, state persists.
         }

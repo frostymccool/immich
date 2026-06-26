@@ -161,7 +161,15 @@ class CopypartyUploaderService {
     String password,
   ) async {
     final uri = _buildUri(hostUrl, uploadPath, password);
+    return _handshakeAtUri(file, uri, hostUrl, password);
+  }
 
+  Future<HandshakeResult> _handshakeAtUri(
+    HashedFile file,
+    Uri uri,
+    String hostUrl,
+    String password,
+  ) async {
     final body = jsonEncode({
       'name': file.filename,
       'size': file.totalBytes,
@@ -174,6 +182,19 @@ class CopypartyUploaderService {
       headers: {'Content-Type': 'application/json'},
       body: body,
     );
+
+    if (response.statusCode == 422) {
+      // A partial upload exists at a different location.
+      // The body contains the resume path — extract it and retry there.
+      final resumePath = _parsePurlFrom422(response.body);
+      if (resumePath == null) {
+        throw CopypartyUploadException(
+          'Handshake failed: HTTP 422 (could not parse resume URL)\n${response.body}',
+        );
+      }
+      final resumeUri = _buildChunkUri(hostUrl, resumePath, password);
+      return _handshakeAtUri(file, resumeUri, hostUrl, password);
+    }
 
     if (response.statusCode != 200) {
       throw CopypartyUploadException(
@@ -194,6 +215,23 @@ class CopypartyUploaderService {
         .toList();
 
     return HandshakeResult(wark: wark, neededChunks: need, purl: purl);
+  }
+
+  /// Extracts the resume path from a 422 response body.
+  ///
+  /// Body format (copyparty):
+  ///   <pre>partial upload exists at a different location; please resume uploading here instead:
+  ///   /uploads/filename-lmod-wark.ext
+  ///   URL: uploads
+  ///   </pre>
+  static String? _parsePurlFrom422(String body) {
+    const marker = 'please resume uploading here instead:\n';
+    final markerIdx = body.indexOf(marker);
+    if (markerIdx < 0) return null;
+    final start = markerIdx + marker.length;
+    final end = body.indexOf('\n', start);
+    final path = (end >= 0 ? body.substring(start, end) : body.substring(start)).trim();
+    return path.isEmpty ? null : path;
   }
 
   // ---------------------------------------------------------------------------
@@ -250,7 +288,7 @@ class CopypartyUploaderService {
     String hostUrl,
     String purl,
     String password, {
-    int parallelism = 4,
+    int parallelism = 2,
     void Function(int chunksDone, int chunksTotal)? onProgress,
   }) async {
     if (neededChunkIndices.isEmpty) {
@@ -347,7 +385,7 @@ class CopypartyUploaderService {
     String hostUrl,
     String uploadPath,
     String password, {
-    int parallelism = 4,
+    int parallelism = 2,
     void Function(int bytesHashed, int totalBytes)? onHashProgress,
     void Function(int chunksDone, int chunksTotal)? onUploadProgress,
   }) async {
