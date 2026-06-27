@@ -86,8 +86,19 @@ class CopypartyLogger {
   }
 
   /// Logs an HTTP response. Body is included (truncated) for diagnosis.
-  void response(int statusCode, {String? body}) {
+  /// Selected headers (Server version, any up2k status, redirect Location) are
+  /// logged when provided — the `Server:` header reveals the copyparty version,
+  /// which is essential for spotting client/server protocol-version mismatches.
+  void response(int statusCode, {Map<String, String>? headers, String? body}) {
     log('<<< HTTP $statusCode');
+    if (headers != null) {
+      headers.forEach((k, v) {
+        final lk = k.toLowerCase();
+        if (lk == 'server' || lk.startsWith('x-up2k') || lk == 'location') {
+          log('    $k: $v');
+        }
+      });
+    }
     if (body != null && body.isNotEmpty) {
       log('    body: ${_truncate(body, 2000)}');
     }

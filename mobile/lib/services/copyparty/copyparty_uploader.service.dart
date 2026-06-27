@@ -204,7 +204,7 @@ class CopypartyUploaderService {
       body: body,
     );
 
-    _log?.response(response.statusCode, body: response.body);
+    _log?.response(response.statusCode, headers: response.headers, body: response.body);
 
     if (response.statusCode == 422) {
       // copyparty: a stale/incomplete partial for this file already exists at a
@@ -302,6 +302,7 @@ class CopypartyUploaderService {
     _log?.request('GET', uri, const {'Accept': 'application/json'});
     final resp = await _client.get(uri, headers: {'Accept': 'application/json'});
     _log?.response(resp.statusCode,
+        headers: resp.headers,
         body: resp.body.length > 600 ? '${resp.body.substring(0, 600)}…' : resp.body);
 
     if (resp.statusCode != 200) {
@@ -419,7 +420,7 @@ class CopypartyUploaderService {
     final response = await _client.send(request);
     final statusCode = response.statusCode;
     final respBody = await response.stream.bytesToString();
-    _log?.response(statusCode, body: respBody);
+    _log?.response(statusCode, headers: response.headers, body: respBody);
 
     if (statusCode < 400) return; // 200/204 = accepted.
 
