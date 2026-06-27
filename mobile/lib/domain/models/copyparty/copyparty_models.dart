@@ -119,9 +119,23 @@ class HandshakeResult {
   final List<int> neededChunks;
   final String purl;
 
-  const HandshakeResult({required this.wark, required this.neededChunks, required this.purl});
+  /// Chunk hashes the server said it still needs that did NOT match any of our
+  /// locally-computed chunk hashes. A non-zero count means a protocol/hash
+  /// mismatch — the upload must NOT be treated as confirmed when this is set.
+  final List<String> unmatchedHashes;
 
-  bool get alreadyOnServer => neededChunks.isEmpty;
+  const HandshakeResult({
+    required this.wark,
+    required this.neededChunks,
+    required this.purl,
+    this.unmatchedHashes = const [],
+  });
+
+  /// True only when the server needs nothing AND every needed hash it ever
+  /// reported was one we recognise. Silent hash mismatches never count as done.
+  bool get fullyConfirmed => neededChunks.isEmpty && unmatchedHashes.isEmpty;
+
+  bool get alreadyOnServer => fullyConfirmed;
 }
 
 class CopypartyReceipt {

@@ -11,6 +11,7 @@ import 'package:immich_mobile/repositories/secure_storage.repository.dart';
 import 'package:immich_mobile/widgets/settings/setting_group_title.dart';
 import 'package:immich_mobile/widgets/settings/setting_list_tile.dart';
 import 'package:immich_mobile/widgets/settings/settings_sub_page_scaffold.dart';
+import 'package:share_plus/share_plus.dart';
 
 class CopypartySettings extends ConsumerWidget {
   const CopypartySettings({super.key});
@@ -37,8 +38,86 @@ class CopypartySettings extends ConsumerWidget {
         SettingGroupTitle(title: 'Import', icon: Icons.sd_card_rounded),
         _ImportFromMemoryCardButton(),
         _PendingCleanupTile(),
+        Divider(),
+        SettingGroupTitle(title: 'Diagnostics', icon: Icons.bug_report_outlined),
+        _DiagnosticLogTile(),
       ],
     );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic log — share / clear the verbose upload protocol log
+// ---------------------------------------------------------------------------
+
+class _DiagnosticLogTile extends ConsumerWidget {
+  const _DiagnosticLogTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+          child: Text(
+            'Every import writes a verbose protocol log (requests, responses, '
+            'chunk hashes). Share it after a failed run so the exact server '
+            'exchange can be inspected.',
+            style: context.textTheme.bodySmall?.copyWith(
+              color: context.colorScheme.onSurface.withValues(alpha: 0.6),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+          child: Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: () => _shareLog(context, ref),
+                  icon: const Icon(Icons.share_outlined),
+                  label: const Text('Share log'),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                onPressed: () => _clearLog(context, ref),
+                icon: const Icon(Icons.delete_outline_rounded),
+                label: const Text('Clear'),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _shareLog(BuildContext context, WidgetRef ref) async {
+    final logger = ref.read(copypartyLoggerProvider);
+    final path = await logger.flush();
+    final box = context.findRenderObject() as RenderBox?;
+    await Share.shareXFiles(
+      [XFile(path)],
+      subject: 'Copyparty diagnostic log',
+      sharePositionOrigin:
+          box != null ? box.localToGlobal(Offset.zero) & box.size : null,
+    );
+  }
+
+  Future<void> _clearLog(BuildContext context, WidgetRef ref) async {
+    await ref.read(copypartyLoggerProvider).clear();
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Diagnostic log cleared')),
+      );
+    }
   }
 }
 

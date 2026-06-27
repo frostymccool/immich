@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
 
 /// Implements the copyparty up2k upload protocol.
 ///
@@ -16,8 +17,11 @@ import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 ///   3. Upload needed chunks in parallel, then re-handshake to confirm
 class CopypartyUploaderService {
   final http.Client _client;
+  final CopypartyLogger? _log;
 
-  CopypartyUploaderService({http.Client? client}) : _client = client ?? _createClient();
+  CopypartyUploaderService({http.Client? client, CopypartyLogger? logger})
+      : _client = client ?? _createClient(),
+        _log = logger;
 
   // Build an HTTP client that accepts self-signed certs (common for home servers).
   static http.Client _createClient() {
@@ -135,6 +139,17 @@ class CopypartyUploaderService {
     final stat = await file.stat();
     final lastModifiedMs = stat.modified.millisecondsSinceEpoch;
 
+    _log?.log(
+      'hashed: ${filePath.split('/').last}  size=$fileSize  '
+      'chunkSize=$chunkSize  chunks=${chunkHashes.length}',
+    );
+    if (chunkHashes.isNotEmpty) {
+      _log?.log('    first cid: ${chunkHashes.first}');
+      if (chunkHashes.length > 1) {
+        _log?.log('    last  cid: ${chunkHashes.last}');
+      }
+    }
+
     return HashedFile(
       path: filePath,
       filename: filePath.split('/').last,
@@ -168,20 +183,27 @@ class CopypartyUploaderService {
     HashedFile file,
     Uri uri,
     String hostUrl,
-    String password,
-  ) async {
-    final body = jsonEncode({
+    String password, {
+    String label = 'handshake',
+  }) async {
+    final bodyMap = {
       'name': file.filename,
       'size': file.totalBytes,
       'lmod': file.lastModifiedMs / 1000.0,
       'hash': file.chunkHashes,
-    });
+    };
+    final body = jsonEncode(bodyMap);
+
+    _log?.request('POST', uri, const {'Content-Type': 'application/json'},
+        body: jsonEncode({...bodyMap, 'hash': '[${file.chunkHashes.length} cids]'}));
 
     final response = await _client.post(
       uri,
       headers: {'Content-Type': 'application/json'},
       body: body,
     );
+
+    _log?.response(response.statusCode, body: response.body);
 
     if (response.statusCode == 422) {
       // A partial upload exists at a different location.
@@ -192,8 +214,9 @@ class CopypartyUploaderService {
           'Handshake failed: HTTP 422 (could not parse resume URL)\n${response.body}',
         );
       }
+      _log?.log('422 → resuming at: $resumePath');
       final resumeUri = _buildChunkUri(hostUrl, resumePath, password);
-      return _handshakeAtUri(file, resumeUri, hostUrl, password);
+      return _handshakeAtUri(file, resumeUri, hostUrl, password, label: '$label/resume');
     }
 
     if (response.statusCode != 200) {
@@ -208,13 +231,41 @@ class CopypartyUploaderService {
 
     // Server returns needed chunk HASHES (not indices) in the 'hash' field.
     // Convert to indices by matching against the file's chunk hash list.
+    //
+    // CRITICAL: a server-needed hash that does NOT match any of our chunk
+    // hashes must be surfaced loudly, not silently dropped. Dropping it makes
+    // `need` look empty → false "confirmed". We track unmatched hashes so the
+    // caller refuses to confirm and the log shows the mismatch.
     final neededHashes = (json['hash'] as List<dynamic>?)?.cast<String>() ?? <String>[];
-    final need = neededHashes
-        .map((h) => file.chunkHashes.indexOf(h))
-        .where((i) => i >= 0)
-        .toList();
+    final need = <int>[];
+    final unmatched = <String>[];
+    for (final h in neededHashes) {
+      final idx = file.chunkHashes.indexOf(h);
+      if (idx >= 0) {
+        need.add(idx);
+      } else {
+        unmatched.add(h);
+      }
+    }
 
-    return HandshakeResult(wark: wark, neededChunks: need, purl: purl);
+    _log?.log(
+      '$label parsed: wark=$wark  purl=$purl  '
+      'needed=${need.length}/${file.chunkHashes.length}  '
+      'unmatched=${unmatched.length}',
+    );
+    if (unmatched.isNotEmpty) {
+      _log?.log('    !! server needs hashes we did not compute:');
+      for (final h in unmatched.take(8)) {
+        _log?.log('       $h');
+      }
+    }
+
+    return HandshakeResult(
+      wark: wark,
+      neededChunks: need,
+      purl: purl,
+      unmatchedHashes: unmatched,
+    );
   }
 
   /// Extracts the resume path from a 422 response body.
@@ -244,37 +295,43 @@ class CopypartyUploaderService {
     String wark,
     String chunkHash,
     Uint8List chunkBytes,
+    int chunkIdx,
   ) async {
+    final headers = {
+      'Content-Type': 'application/octet-stream',
+      'X-Up2k-Wark': wark,
+      'X-Up2k-Hash': chunkHash,
+    };
+    _log?.request('POST', chunkUri, headers,
+        body: 'chunk #$chunkIdx (${chunkBytes.length} bytes)');
+
     final request = http.Request('POST', chunkUri);
-    request.headers['Content-Type'] = 'application/octet-stream';
-    request.headers['X-Up2k-Wark'] = wark;
-    request.headers['X-Up2k-Hash'] = chunkHash;
+    request.headers.addAll(headers);
     request.bodyBytes = chunkBytes;
 
     final response = await _client.send(request);
     final statusCode = response.statusCode;
-    // 204 = accepted; 200 = accepted with body; 400 can mean "already got that" (chunk
-    // was already on server) which is benign — the confirmation handshake verifies.
-    if (statusCode >= 400 && statusCode != 400) {
-      final body = await response.stream.bytesToString();
-      throw CopypartyUploadException(
-        'Chunk upload failed: HTTP $statusCode (wark=$wark, hash=$chunkHash)\n$body',
-      );
-    }
-    if (statusCode == 400) {
-      await response.stream.drain<void>();
-      return; // "already got that" — chunk exists, continue
-    }
-    await response.stream.drain<void>();
-  }
+    final respBody = await response.stream.bytesToString();
+    _log?.response(statusCode, body: respBody);
 
-  /// Builds the X-Up2k-Hash header value for a chunk upload.
-  ///
-  /// We upload one chunk per HTTP request, so only the current chunk's hash
-  /// is included. The sibling-hash optimisation in u2c.py is only used when
-  /// multiple chunks are batched into a single request body, which we don't do.
-  static String _buildChunkHashHeader(int chunkIdx, List<String> allChunkHashes) {
-    return allChunkHashes[chunkIdx];
+    if (statusCode < 400) return; // 200/204 = accepted.
+
+    // A 400 is only benign when copyparty says the chunk is ALREADY present
+    // (a resume/retry race). Any other 400 (e.g. "some file got your folder
+    // name") is a real failure and must NOT be swallowed — swallowing it just
+    // resurfaces later as a confusing "still needs N chunks" at confirmation.
+    final lower = respBody.toLowerCase();
+    final alreadyHave = statusCode == 400 &&
+        (lower.contains('already') || lower.contains('got that'));
+    if (alreadyHave) {
+      _log?.log('    chunk #$chunkIdx → 400 already-present (benign)');
+      return;
+    }
+
+    throw CopypartyUploadException(
+      'Chunk #$chunkIdx upload failed: HTTP $statusCode '
+      '(wark=$wark, hash=$chunkHash)\n$respBody',
+    );
   }
 
   /// Uploads the required chunks in parallel (up to [parallelism] at once).
@@ -296,6 +353,10 @@ class CopypartyUploaderService {
     }
 
     final chunkUri = _buildChunkUri(hostUrl, purl, password);
+    _log?.log(
+      'uploading ${neededChunkIndices.length} chunk(s) to $chunkUri '
+      '(parallelism=$parallelism)',
+    );
 
     int done = 0;
     final semaphore = _Semaphore(parallelism);
@@ -311,6 +372,7 @@ class CopypartyUploaderService {
           wark,
           file.chunkHashes[chunkIdx],
           chunkBytes,
+          chunkIdx,
         );
         done++;
         onProgress?.call(done, neededChunkIndices.length);
@@ -333,7 +395,7 @@ class CopypartyUploaderService {
     String password,
   ) async {
     final result = await handshake(file, hostUrl, uploadPath, password);
-    return result.neededChunks.isEmpty;
+    return result.fullyConfirmed;
   }
 
   // ---------------------------------------------------------------------------
@@ -389,6 +451,9 @@ class CopypartyUploaderService {
     void Function(int bytesHashed, int totalBytes)? onHashProgress,
     void Function(int chunksDone, int chunksTotal)? onUploadProgress,
   }) async {
+    _log?.section('UPLOAD ${filePath.split('/').last}');
+    _log?.log('host=$hostUrl  uploadPath="$uploadPath"  parallelism=$parallelism');
+
     // Step 1: hash
     final hashed = await hashFile(filePath, onProgress: onHashProgress);
 
@@ -396,7 +461,8 @@ class CopypartyUploaderService {
     // Even if need==[] (server has all chunks from a prior attempt), we MUST
     // still send the confirmation handshake (step 4) to trigger server-side
     // finalization.  Skipping it leaves the file as .PARTIAL indefinitely.
-    final handshakeResult = await handshake(hashed, hostUrl, uploadPath, password);
+    final handshakeResult =
+        await handshake(hashed, hostUrl, uploadPath, password);
 
     // Step 3: upload any missing chunks (no-op when neededChunks is empty).
     // Use purl from handshake response as the chunk upload endpoint — this
@@ -413,13 +479,18 @@ class CopypartyUploaderService {
     );
 
     // Step 4: confirmation handshake — triggers server finalization (.PARTIAL → file).
-    final confirmed = await handshake(hashed, hostUrl, uploadPath, password);
-    if (confirmed.neededChunks.isNotEmpty) {
-      throw CopypartyUploadException(
-        'Upload confirmation failed: server still needs '
-        '${confirmed.neededChunks.length} chunk(s)',
-      );
+    final confirmed =
+        await handshake(hashed, hostUrl, uploadPath, password, label: 'confirm');
+    if (!confirmed.fullyConfirmed) {
+      final detail = confirmed.unmatchedHashes.isNotEmpty
+          ? 'server needs ${confirmed.unmatchedHashes.length} chunk(s) whose '
+              'hashes do not match what we computed — likely a hashing or '
+              'partial-file mismatch (see diagnostic log)'
+          : 'server still needs ${confirmed.neededChunks.length} chunk(s)';
+      _log?.log('!! CONFIRM FAILED: $detail');
+      throw CopypartyUploadException('Upload confirmation failed: $detail');
     }
+    _log?.log('✓ confirmed: wark=${confirmed.wark}');
     return (hashed, confirmed);
   }
 
@@ -436,9 +507,11 @@ class CopypartyUploaderService {
   }
 
   Uri _buildUri(String hostUrl, String uploadPath, String password) {
-    final base = hostUrl.trimRight();
+    final base = hostUrl.replaceAll(RegExp(r'/+$'), '');
     final cleanPath = uploadPath.replaceAll(RegExp(r'^/+|/+$'), '');
-    final uri = Uri.parse('$base/$cleanPath/').replace(
+    // Empty path → post to the server root ("$base/"), not "$base//".
+    final target = cleanPath.isEmpty ? '$base/' : '$base/$cleanPath/';
+    final uri = Uri.parse(target).replace(
       queryParameters: password.isNotEmpty ? {'pw': password} : null,
     );
     return uri;

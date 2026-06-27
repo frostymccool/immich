@@ -9,6 +9,7 @@ import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:immich_mobile/utils/upload_speed_calculator.dart';
+import 'package:share_plus/share_plus.dart';
 
 /// The full multi-step "Import from Memory Card" flow.
 ///
@@ -1122,6 +1123,15 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
                 ],
                 SizedBox(
                   width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => _shareDiagnosticLog(context, ref),
+                    icon: const Icon(Icons.bug_report_outlined),
+                    label: const Text('Share diagnostic log'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
                   child: FilledButton(
                     onPressed: () {
                       ref.read(importSessionProvider.notifier).reset();
@@ -1135,6 +1145,18 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
           ),
         ),
       ],
+    );
+  }
+
+  Future<void> _shareDiagnosticLog(BuildContext context, WidgetRef ref) async {
+    final logger = ref.read(copypartyLoggerProvider);
+    final path = await logger.flush();
+    final box = context.findRenderObject() as RenderBox?;
+    await Share.shareXFiles(
+      [XFile(path)],
+      subject: 'Copyparty diagnostic log',
+      sharePositionOrigin:
+          box != null ? box.localToGlobal(Offset.zero) & box.size : null,
     );
   }
 

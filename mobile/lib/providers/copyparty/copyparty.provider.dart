@@ -13,6 +13,7 @@ import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/repositories/secure_storage.repository.dart';
 import 'package:immich_mobile/repositories/upload.repository.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -21,6 +22,12 @@ const _copypartyPasswordKey = 'copyparty_password';
 // ---------------------------------------------------------------------------
 // Service providers
 // ---------------------------------------------------------------------------
+
+/// Shared diagnostic logger — single instance so the settings screen can read
+/// the same file the uploader writes to.
+final copypartyLoggerProvider = Provider<CopypartyLogger>(
+  (ref) => CopypartyLogger.instance,
+);
 
 final copypartyUploaderProvider = Provider<CopypartyUploaderService>(
   (ref) {
@@ -35,7 +42,10 @@ final copypartyUploaderProvider = Provider<CopypartyUploaderService>(
     } else {
       client = http.Client();
     }
-    final service = CopypartyUploaderService(client: client);
+    final service = CopypartyUploaderService(
+      client: client,
+      logger: ref.watch(copypartyLoggerProvider),
+    );
     ref.onDispose(service.dispose);
     return service;
   },
@@ -114,6 +124,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   final UploadRepository _immichUploadRepo;
   final Ref _ref;
 
+  CopypartyLogger get _log => _ref.read(copypartyLoggerProvider);
+
   ImportSessionNotifier(this._uploader, this._receiptRepo, this._immichUploadRepo, this._ref)
       : super(const ImportSessionState());
 
@@ -158,6 +170,16 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     final config = _ref.read(appConfigProvider).copyparty;
     final password = await _ref.read(copypartyPasswordProvider.future);
     final packageInfo = await PackageInfo.fromPlatform();
+
+    // Log the EXACT config this run will use so the diagnostic log proves
+    // whether settings (e.g. upload path) were picked up or stale-cached.
+    _log.section('IMPORT SESSION  app v${packageInfo.version}');
+    _log.log('config.hostUrl       = "${config.hostUrl}"');
+    _log.log('config.uploadPath    = "${config.uploadPath}"');
+    _log.log('config.parallelConns = ${config.parallelConnections}');
+    _log.log('config.selfSigned    = ${config.allowSelfSignedCert}');
+    _log.log('password set         = ${password.isNotEmpty}');
+    _log.log('files selected       = ${selectedFilePaths?.length ?? state.totalFiles}');
 
     final effectiveTotal = selectedFilePaths != null
         ? selectedFilePaths.length
@@ -271,11 +293,14 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         } catch (e) {
           file.status = UploadFileStatus.failed;
           file.errorMessage = e.toString();
+          _log.log('!! FAILED ${file.filename}: $e');
           _notify();
         }
       }
     }
 
+    _log.log('IMPORT SESSION complete: '
+        '${state.completedFiles}/${state.totalFiles} files done');
     state = state.copyWith(step: ImportSessionStep.complete);
   }
 
