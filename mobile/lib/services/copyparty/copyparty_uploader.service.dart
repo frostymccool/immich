@@ -173,10 +173,11 @@ class CopypartyUploaderService {
     HashedFile file,
     String hostUrl,
     String uploadPath,
-    String password,
-  ) async {
+    String password, {
+    String label = 'handshake',
+  }) async {
     final uri = _buildUri(hostUrl, uploadPath, password);
-    return _handshakeAtUri(file, uri, hostUrl, password);
+    return _handshakeAtUri(file, uri, hostUrl, password, label: label);
   }
 
   Future<HandshakeResult> _handshakeAtUri(
