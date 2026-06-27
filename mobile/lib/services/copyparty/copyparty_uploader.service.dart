@@ -207,17 +207,18 @@ class CopypartyUploaderService {
     _log?.response(response.statusCode, body: response.body);
 
     if (response.statusCode == 422) {
-      // A partial upload exists at a different location.
-      // The body contains the resume path — extract it and retry there.
+      // copyparty: a stale/incomplete partial for this file already exists at a
+      // different location and it refuses a fresh handshake over it. Re-POSTing
+      // the handshake to that partial's file URL just yields 400 "some file got
+      // your folder name", so don't — surface an honest, actionable error.
       final resumePath = _parsePurlFrom422(response.body);
-      if (resumePath == null) {
-        throw CopypartyUploadException(
-          'Handshake failed: HTTP 422 (could not parse resume URL)\n${response.body}',
-        );
-      }
-      _log?.log('422 → resuming at: $resumePath');
-      final resumeUri = _buildChunkUri(hostUrl, resumePath, password);
-      return _handshakeAtUri(file, resumeUri, hostUrl, password, label: '$label/resume');
+      _log?.log('422 → stale partial exists${resumePath != null ? ' at $resumePath' : ''}');
+      throw CopypartyUploadException(
+        'A stale/incomplete upload for "${file.filename}" already exists on the '
+        'server${resumePath != null ? ' at $resumePath' : ''}. copyparty will not '
+        'accept a fresh upload over it. Remove that partial on the server, or '
+        'point the upload path at an empty folder, then retry.',
+      );
     }
 
     if (response.statusCode != 200) {
@@ -284,6 +285,111 @@ class CopypartyUploaderService {
     final end = body.indexOf('\n', start);
     final path = (end >= 0 ? body.substring(start, end) : body.substring(start)).trim();
     return path.isEmpty ? null : path;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Server-side verification (for the cleanup screen)
+  // ---------------------------------------------------------------------------
+
+  /// Lists a copyparty folder via the `?ls` JSON API, returning name → size.
+  ///
+  /// [folderUri] must point at the folder (path ending in `/`).
+  Future<Map<String, int>> listFolderSizes(Uri folderUri, String password) async {
+    final params = <String, String>{'ls': ''};
+    if (password.isNotEmpty) params['pw'] = password;
+    final uri = folderUri.replace(queryParameters: params);
+
+    _log?.request('GET', uri, const {'Accept': 'application/json'});
+    final resp = await _client.get(uri, headers: {'Accept': 'application/json'});
+    _log?.response(resp.statusCode,
+        body: resp.body.length > 600 ? '${resp.body.substring(0, 600)}…' : resp.body);
+
+    if (resp.statusCode != 200) {
+      throw CopypartyUploadException('Listing failed: HTTP ${resp.statusCode}');
+    }
+    final json = jsonDecode(resp.body) as Map<String, dynamic>;
+    final files = (json['files'] as List<dynamic>?) ?? const [];
+    final result = <String, int>{};
+    for (final f in files) {
+      if (f is Map<String, dynamic>) {
+        final href = f['href'] as String?;
+        if (href == null) continue;
+        final name = Uri.decodeComponent(href.replaceAll(RegExp(r'/+$'), ''));
+        final sz = f['sz'];
+        result[name] = sz is int ? sz : int.tryParse('$sz') ?? -1;
+      }
+    }
+    return result;
+  }
+
+  /// Cheap presence check (states 1-3) for a file via a single folder listing.
+  /// Does NOT re-hash — that is the separate [verifyHash] step.
+  Future<ServerFileVerification> verifyPresence({
+    required String fileUrl,
+    required String filename,
+    required int expectedSize,
+    required String password,
+  }) async {
+    try {
+      final fileUri = Uri.parse(fileUrl);
+      final segs = List<String>.from(fileUri.pathSegments);
+      if (segs.isNotEmpty) segs.removeLast();
+      final folderUri = fileUri.replace(pathSegments: [...segs, ''], query: '');
+
+      final sizes = await listFolderSizes(folderUri, password);
+      final present = sizes.containsKey(filename);
+      final sizeOk = present && sizes[filename] == expectedSize;
+      // copyparty partials are named "<filename>-<time>-<token>.<ext>" (we saw
+      // this in the logs) or, older style, "<filename>.PARTIAL".
+      final partial = sizes.keys.any((n) => n != filename && n.startsWith(filename));
+
+      return ServerFileVerification(
+        filenamePresent: present ? VerifyState.yes : VerifyState.no,
+        sizeMatches: !present
+            ? VerifyState.unknown
+            : (sizeOk ? VerifyState.yes : VerifyState.no),
+        partialExists: partial ? VerifyState.yes : VerifyState.no,
+      );
+    } catch (e) {
+      return ServerFileVerification(error: e.toString());
+    }
+  }
+
+  /// Deep hash validation (state 4): re-hash the local file and run an up2k
+  /// handshake. If the server needs zero chunks, the content is fully present
+  /// and the hash is validated (timestamped now). Builds on a [base] presence
+  /// result so the cheap states are preserved.
+  Future<ServerFileVerification> verifyHash({
+    required String fileUrl,
+    required String localPath,
+    required String password,
+    ServerFileVerification base = const ServerFileVerification(),
+    DateTime? now,
+  }) async {
+    try {
+      final fileUri = Uri.parse(fileUrl);
+      final origin = '${fileUri.scheme}://${fileUri.authority}';
+      final segs = List<String>.from(fileUri.pathSegments)..removeLast();
+      final uploadPath = '/${segs.join('/')}';
+
+      final hashed = await hashFile(localPath);
+      final hs = await handshake(hashed, origin, uploadPath, password, label: 'verify');
+      if (hs.fullyConfirmed) {
+        return base.copyWith(
+          filenamePresent: VerifyState.yes,
+          sizeMatches: VerifyState.yes,
+          partialExists: VerifyState.no,
+          hashValidatedAt: now ?? DateTime.now(),
+        );
+      }
+      // Server still needs chunks → the upload is incomplete/different content.
+      return base.copyWith(partialExists: VerifyState.yes);
+    } on CopypartyUploadException catch (e) {
+      // 422 stale-partial path throws here — that IS a partial.
+      return base.copyWith(partialExists: VerifyState.yes, error: e.message);
+    } catch (e) {
+      return base.copyWith(error: e.toString());
+    }
   }
 
   // ---------------------------------------------------------------------------

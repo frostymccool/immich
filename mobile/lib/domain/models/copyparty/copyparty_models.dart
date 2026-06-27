@@ -138,6 +138,70 @@ class HandshakeResult {
   bool get alreadyOnServer => fullyConfirmed;
 }
 
+/// Tri-state for a single piece of server-side evidence.
+enum VerifyState { unknown, yes, no }
+
+/// Independent evidence signals about whether a file is really, completely and
+/// correctly on the copyparty server. Replaces the old single binary
+/// "copyparty confirmed" assumption — each signal is shown to the user so a
+/// delete decision is based on real, current server state, not a stored flag.
+class ServerFileVerification {
+  /// A file with the expected name exists in the target folder.
+  final VerifyState filenamePresent;
+
+  /// The server file's size equals the local file's size.
+  final VerifyState sizeMatches;
+
+  /// An incomplete/partial upload for this file exists on the server.
+  /// `yes` here is a RED flag (upload never finished).
+  final VerifyState partialExists;
+
+  /// When the content hash was last positively validated against the server
+  /// (via an up2k handshake that needed zero chunks). Null = never validated
+  /// this session.
+  final DateTime? hashValidatedAt;
+
+  /// Set when the listing/verification call itself failed (network, auth…).
+  final String? error;
+
+  const ServerFileVerification({
+    this.filenamePresent = VerifyState.unknown,
+    this.sizeMatches = VerifyState.unknown,
+    this.partialExists = VerifyState.unknown,
+    this.hashValidatedAt,
+    this.error,
+  });
+
+  /// A hash validation counts as fresh for 2 minutes (it can go stale if the
+  /// local file changes, so it is deliberately time-bounded).
+  bool hashFreshAt(DateTime now) =>
+      hashValidatedAt != null &&
+      now.difference(hashValidatedAt!) < const Duration(minutes: 2);
+
+  /// Strong enough to safely delete the local original: present, same size,
+  /// no lingering partial, and a fresh hash validation.
+  bool stronglyVerifiedAt(DateTime now) =>
+      filenamePresent == VerifyState.yes &&
+      sizeMatches == VerifyState.yes &&
+      partialExists != VerifyState.yes &&
+      hashFreshAt(now);
+
+  ServerFileVerification copyWith({
+    VerifyState? filenamePresent,
+    VerifyState? sizeMatches,
+    VerifyState? partialExists,
+    DateTime? hashValidatedAt,
+    String? error,
+  }) =>
+      ServerFileVerification(
+        filenamePresent: filenamePresent ?? this.filenamePresent,
+        sizeMatches: sizeMatches ?? this.sizeMatches,
+        partialExists: partialExists ?? this.partialExists,
+        hashValidatedAt: hashValidatedAt ?? this.hashValidatedAt,
+        error: error,
+      );
+}
+
 class CopypartyReceipt {
   final int? id;
   final String filename;
