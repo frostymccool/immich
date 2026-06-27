@@ -328,7 +328,12 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     final tmp = await getTemporaryDirectory();
     final results = <UploadAttemptResult>[];
 
-    Future<void> attempt(String path, String uploadPath, String label) async {
+    Future<void> attempt(
+      String path,
+      String uploadPath,
+      String label, {
+      bool sequential = false,
+    }) async {
       results.add(await _uploader.runInstrumentedUpload(
         filePath: path,
         hostUrl: config.hostUrl,
@@ -336,6 +341,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         password: password,
         label: label,
         parallelism: config.parallelConnections,
+        sequential: sequential,
       ));
     }
 
@@ -357,7 +363,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         _log.log('rename variation setup failed: $e');
       }
 
-      // 3 & 4. new name + appended bytes → brand-new wark
+      // 3 & 4. new name + appended bytes → brand-new wark (parallel upload)
       File? newc;
       try {
         newc = await File(path).copy('${tmp.path}/${stem}__nc$stamp$ext');
@@ -371,11 +377,29 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         _log.log('newcontent variation setup failed: $e');
       }
 
+      // 5. fresh wark uploaded SEQUENTIALLY in-order (parallelism=1). Head-to-head
+      // with the parallel #3 above: if this PASSES where parallel FAILS, the
+      // server mis-places concurrent/out-of-order chunks.
+      File? seqc;
+      try {
+        seqc = await File(path).copy('${tmp.path}/${stem}__sq$stamp$ext');
+        await seqc.writeAsBytes(
+          utf8.encode('\n#immich-selftest-SEQ-$stamp\n'),
+          mode: FileMode.append,
+        );
+        await attempt(seqc.path, config.uploadPath, 'seq-newcontent:$base', sequential: true);
+      } catch (e) {
+        _log.log('sequential variation setup failed: $e');
+      }
+
       try {
         await renamed?.delete();
       } catch (_) {}
       try {
         await newc?.delete();
+      } catch (_) {}
+      try {
+        await seqc?.delete();
       } catch (_) {}
     }
 

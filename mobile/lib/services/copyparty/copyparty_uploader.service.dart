@@ -520,22 +520,28 @@ class CopypartyUploaderService {
     required String password,
     required String label,
     int parallelism = 4,
+    bool sequential = false,
   }) async {
     final name = filePath.split('/').last;
     _log?.section('SELFTEST $label');
-    _log?.log('name="$name"  uploadPath="$uploadPath"');
+    _log?.log('name="$name"  uploadPath="$uploadPath"  '
+        'mode=${sequential ? 'sequential(in-order, parallelism=1)' : 'parallel($parallelism)'}');
     try {
       final hashed = await hashFile(filePath);
       final hs = await handshake(hashed, hostUrl, uploadPath, password, label: '$label/init');
-      final initialNeeded = hs.neededChunks.length;
+      // Sequential mode: upload one chunk at a time, in ascending offset order,
+      // to test whether this server mis-places concurrent/out-of-order chunks.
+      final needed =
+          sequential ? (List<int>.from(hs.neededChunks)..sort()) : hs.neededChunks;
+      final initialNeeded = needed.length;
       await uploadChunks(
         hashed,
         hs.wark,
-        hs.neededChunks,
+        needed,
         hostUrl,
         hs.purl,
         password,
-        parallelism: parallelism,
+        parallelism: sequential ? 1 : parallelism,
       );
       final confirm =
           await handshake(hashed, hostUrl, uploadPath, password, label: '$label/confirm');
@@ -546,7 +552,7 @@ class CopypartyUploaderService {
         wark: hs.wark,
         totalChunks: hashed.chunkHashes.length,
         initialNeeded: initialNeeded,
-        uploadedChunks: hs.neededChunks.length,
+        uploadedChunks: needed.length,
         finalNeeded: confirm.neededChunks.length,
         success: confirm.fullyConfirmed,
       );
