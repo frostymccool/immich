@@ -506,6 +506,70 @@ class CopypartyUploaderService {
   }
 
   // ---------------------------------------------------------------------------
+  // Self-test: one instrumented, non-throwing upload attempt
+  // ---------------------------------------------------------------------------
+
+  /// Runs a full up2k attempt for one file and returns a structured result
+  /// instead of throwing. Used by the self-test suite to compare variations
+  /// (same name vs renamed vs new content vs new folder) with hard numbers.
+  Future<UploadAttemptResult> runInstrumentedUpload({
+    required String filePath,
+    required String hostUrl,
+    required String uploadPath,
+    required String password,
+    required String label,
+    int parallelism = 4,
+  }) async {
+    final name = filePath.split('/').last;
+    _log?.section('SELFTEST $label');
+    _log?.log('name="$name"  uploadPath="$uploadPath"');
+    try {
+      final hashed = await hashFile(filePath);
+      final hs = await handshake(hashed, hostUrl, uploadPath, password, label: '$label/init');
+      final initialNeeded = hs.neededChunks.length;
+      await uploadChunks(
+        hashed,
+        hs.wark,
+        hs.neededChunks,
+        hostUrl,
+        hs.purl,
+        password,
+        parallelism: parallelism,
+      );
+      final confirm =
+          await handshake(hashed, hostUrl, uploadPath, password, label: '$label/confirm');
+      final result = UploadAttemptResult(
+        label: label,
+        sentName: name,
+        uploadPath: uploadPath,
+        wark: hs.wark,
+        totalChunks: hashed.chunkHashes.length,
+        initialNeeded: initialNeeded,
+        uploadedChunks: hs.neededChunks.length,
+        finalNeeded: confirm.neededChunks.length,
+        success: confirm.fullyConfirmed,
+      );
+      _log?.log('RESULT ${result.summaryLine}');
+      return result;
+    } catch (e) {
+      final result = UploadAttemptResult(
+        label: label,
+        sentName: name,
+        uploadPath: uploadPath,
+        wark: null,
+        totalChunks: -1,
+        initialNeeded: -1,
+        uploadedChunks: 0,
+        finalNeeded: -1,
+        success: false,
+        error: e.toString(),
+      );
+      _log?.log('RESULT ${result.summaryLine}');
+      return result;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Receipt file writing
   // ---------------------------------------------------------------------------
 

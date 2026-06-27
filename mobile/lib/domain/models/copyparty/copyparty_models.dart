@@ -138,6 +138,46 @@ class HandshakeResult {
   bool get alreadyOnServer => fullyConfirmed;
 }
 
+/// Result of one instrumented upload attempt in the self-test suite.
+class UploadAttemptResult {
+  final String label; // e.g. "newcontent:LIV…lrv"
+  final String sentName; // the name actually sent in the handshake
+  final String uploadPath;
+  final String? wark; // server-computed file identifier (null on early error)
+  final int totalChunks;
+  final int initialNeeded; // chunks the server wanted BEFORE we uploaded
+  final int uploadedChunks; // chunks we POSTed this attempt
+  final int finalNeeded; // chunks the server STILL wanted after upload+confirm
+  final bool success; // confirm reported nothing needed and all hashes matched
+  final String? error;
+
+  const UploadAttemptResult({
+    required this.label,
+    required this.sentName,
+    required this.uploadPath,
+    required this.wark,
+    required this.totalChunks,
+    required this.initialNeeded,
+    required this.uploadedChunks,
+    required this.finalNeeded,
+    required this.success,
+    this.error,
+  });
+
+  String get warkShort => wark == null ? '—' : '${wark!.substring(0, wark!.length.clamp(0, 8))}…';
+
+  String get summaryLine {
+    if (error != null) {
+      return '$label → ERROR: ${error!.split('\n').first}';
+    }
+    return '$label → wark=$warkShort  '
+        'init ${initialNeeded == -1 ? '?' : '$initialNeeded'}/$totalChunks  '
+        'sent $uploadedChunks  '
+        'final $finalNeeded/$totalChunks  '
+        '${success ? 'PASS ✓' : 'FAIL ✗'}';
+  }
+}
+
 /// Tri-state for a single piece of server-side evidence.
 enum VerifyState { unknown, yes, no }
 

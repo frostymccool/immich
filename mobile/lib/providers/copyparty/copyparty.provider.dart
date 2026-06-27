@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -16,6 +17,7 @@ import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path_provider/path_provider.dart';
 
 const _copypartyPasswordKey = 'copyparty_password';
 
@@ -302,6 +304,86 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     _log.log('IMPORT SESSION complete: '
         '${state.completedFiles}/${state.totalFiles} files done');
     state = state.copyWith(step: ImportSessionStep.complete);
+  }
+
+  /// Diagnostic self-test: uploads each selected file under several controlled
+  /// variations so the cause of upload failures can be isolated from hard data
+  /// instead of theory. Variations per file:
+  ///   • orig       — original name + content (baseline)
+  ///   • rename     — new name, SAME content  (does the wark change?)
+  ///   • newcontent — new name + appended bytes → a brand-new wark the server
+  ///                  has never seen (the real test of "a fresh upload works")
+  ///   • newfolder  — new content into a fresh subfolder
+  /// Everything is written to the diagnostic log; results are returned for UI.
+  Future<List<UploadAttemptResult>> runSelfTest(List<String> filePaths) async {
+    final config = _ref.read(appConfigProvider).copyparty;
+    final password = await _ref.read(copypartyPasswordProvider.future);
+    final packageInfo = await PackageInfo.fromPlatform();
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+
+    _log.section('SELF-TEST SUITE  app v${packageInfo.version}');
+    _log.log('host=${config.hostUrl}  uploadPath=${config.uploadPath}  '
+        'files=${filePaths.length}  stamp=$stamp');
+
+    final tmp = await getTemporaryDirectory();
+    final results = <UploadAttemptResult>[];
+
+    Future<void> attempt(String path, String uploadPath, String label) async {
+      results.add(await _uploader.runInstrumentedUpload(
+        filePath: path,
+        hostUrl: config.hostUrl,
+        uploadPath: uploadPath,
+        password: password,
+        label: label,
+        parallelism: config.parallelConnections,
+      ));
+    }
+
+    for (final path in filePaths) {
+      final base = path.split('/').last;
+      final dot = base.lastIndexOf('.');
+      final stem = dot > 0 ? base.substring(0, dot) : base;
+      final ext = dot > 0 ? base.substring(dot) : '';
+
+      // 1. baseline — original name + content
+      await attempt(path, config.uploadPath, 'orig:$base');
+
+      // 2. renamed copy, SAME bytes
+      File? renamed;
+      try {
+        renamed = await File(path).copy('${tmp.path}/${stem}__rn$stamp$ext');
+        await attempt(renamed.path, config.uploadPath, 'rename:$base');
+      } catch (e) {
+        _log.log('rename variation setup failed: $e');
+      }
+
+      // 3 & 4. new name + appended bytes → brand-new wark
+      File? newc;
+      try {
+        newc = await File(path).copy('${tmp.path}/${stem}__nc$stamp$ext');
+        await newc.writeAsBytes(
+          utf8.encode('\n#immich-selftest-$stamp\n'),
+          mode: FileMode.append,
+        );
+        await attempt(newc.path, config.uploadPath, 'newcontent:$base');
+        await attempt(newc.path, '${config.uploadPath}/selftest_$stamp', 'newfolder:$base');
+      } catch (e) {
+        _log.log('newcontent variation setup failed: $e');
+      }
+
+      try {
+        await renamed?.delete();
+      } catch (_) {}
+      try {
+        await newc?.delete();
+      } catch (_) {}
+    }
+
+    _log.section('SELF-TEST SUMMARY');
+    for (final r in results) {
+      _log.log(r.summaryLine);
+    }
+    return results;
   }
 
   Future<UploadResult> _uploadToImmich(UploadFile file) async {

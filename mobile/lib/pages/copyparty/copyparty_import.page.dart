@@ -352,6 +352,100 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     }
   }
 
+  Future<void> _runSelfTest() async {
+    final paths = _selectedPaths.toList();
+    if (paths.isEmpty) return;
+
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Upload self-test'),
+        content: Text(
+          'This uploads each of the ${paths.length} selected '
+          'file${paths.length == 1 ? '' : 's'} to copyparty several times under '
+          'controlled variations:\n\n'
+          '• original name + content\n'
+          '• renamed (same content)\n'
+          '• new name + changed content (brand-new identity)\n'
+          '• new content into a fresh subfolder\n\n'
+          'It records the server identity (wark) and whether each attempt '
+          'completes, so the cause of failures can be seen directly. This may '
+          'take a few minutes and uses bandwidth. Continue?',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Run test')),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const AlertDialog(
+        content: Row(
+          children: [
+            SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)),
+            SizedBox(width: 18),
+            Expanded(child: Text('Running upload self-test…')),
+          ],
+        ),
+      ),
+    );
+
+    List<UploadAttemptResult> results;
+    try {
+      results = await ref.read(importSessionProvider.notifier).runSelfTest(paths);
+    } catch (e) {
+      results = [];
+      if (mounted) {
+        Navigator.of(context).pop(); // close progress
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Self-test error: $e')),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    Navigator.of(context).pop(); // close progress
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Self-test results'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              results.isEmpty
+                  ? 'No results.'
+                  : results.map((r) => r.summaryLine).join('\n\n'),
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              final logger = ref.read(copypartyLoggerProvider);
+              final path = await logger.flush();
+              final box = ctx.findRenderObject() as RenderBox?;
+              await Share.shareXFiles(
+                [XFile(path)],
+                subject: 'Copyparty self-test log',
+                sharePositionOrigin:
+                    box != null ? box.localToGlobal(Offset.zero) & box.size : null,
+              );
+            },
+            child: const Text('Share log'),
+          ),
+          FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final sets = widget.session.uploadSets;
@@ -468,23 +562,37 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
         SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(16.0),
-            child: SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: selectedCount > 0
-                    ? () {
-                        _applyDestinations();
-                        ref
-                            .read(importSessionProvider.notifier)
-                            .startUpload(selectedFilePaths: Set.of(_selectedPaths));
-                      }
-                    : null,
-                icon: const Icon(Icons.upload_rounded),
-                label: Text(
-                  'Upload $selectedCount file${selectedCount == 1 ? '' : 's'}',
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: selectedCount > 0
+                        ? () {
+                            _applyDestinations();
+                            ref
+                                .read(importSessionProvider.notifier)
+                                .startUpload(selectedFilePaths: Set.of(_selectedPaths));
+                          }
+                        : null,
+                    icon: const Icon(Icons.upload_rounded),
+                    label: Text(
+                      'Upload $selectedCount file${selectedCount == 1 ? '' : 's'}',
+                    ),
+                    style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                  ),
                 ),
-                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
-              ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: selectedCount > 0 ? _runSelfTest : null,
+                    icon: const Icon(Icons.science_outlined),
+                    label: const Text('Run upload self-test (diagnostics)'),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
