@@ -187,10 +187,16 @@ class CopypartyUploaderService {
     String password, {
     String label = 'handshake',
   }) async {
+    // Match copyparty's browser client (up2k.js) EXACTLY: lmod is INTEGER
+    // seconds (Math.floor(mtime/1000)), and `life` is always present (null when
+    // the volume has no lifetime). Our earlier fractional lmod (….01) diverged
+    // from both the browser and python clients and is the prime suspect for the
+    // server spinning up a fresh partial on every handshake.
     final bodyMap = {
       'name': file.filename,
       'size': file.totalBytes,
-      'lmod': file.lastModifiedMs / 1000.0,
+      'lmod': file.lastModifiedMs ~/ 1000,
+      'life': null,
       'hash': file.chunkHashes,
     };
     final body = jsonEncode(bodyMap);
@@ -409,6 +415,9 @@ class CopypartyUploaderService {
       'Content-Type': 'application/octet-stream',
       'X-Up2k-Wark': wark,
       'X-Up2k-Hash': chunkHash,
+      // Browser sends this on every chunk ("{ok}/{ng}/{bz}/{q} {tot}/{rem} {eta}").
+      // Benign telemetry, but match the working client exactly.
+      'X-Up2k-Stat': '0/0/0/0 0/0 x',
     };
     _log?.request('POST', chunkUri, headers,
         body: 'chunk #$chunkIdx (${chunkBytes.length} bytes)');
