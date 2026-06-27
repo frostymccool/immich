@@ -187,16 +187,15 @@ class CopypartyUploaderService {
     String password, {
     String label = 'handshake',
   }) async {
-    // Match copyparty's browser client (up2k.js) EXACTLY: lmod is INTEGER
-    // seconds (Math.floor(mtime/1000)), and `life` is always present (null when
-    // the volume has no lifetime). Our earlier fractional lmod (….01) diverged
-    // from both the browser and python clients and is the prime suspect for the
-    // server spinning up a fresh partial on every handshake.
+    // lmod must be INTEGER seconds (floor(mtime/1000)) — both the browser
+    // (up2k.js) and python (u2c.py) clients send an int; our earlier fractional
+    // float (….01) was a divergence and is the prime suspect for the server
+    // spinning up a fresh partial on every handshake. We do NOT send `life`
+    // (the browser omits it when no lifetime is set; JS drops the undefined key).
     final bodyMap = {
       'name': file.filename,
       'size': file.totalBytes,
       'lmod': file.lastModifiedMs ~/ 1000,
-      'life': null,
       'hash': file.chunkHashes,
     };
     final body = jsonEncode(bodyMap);
@@ -411,13 +410,12 @@ class CopypartyUploaderService {
     Uint8List chunkBytes,
     int chunkIdx,
   ) async {
+    // X-Up2k-Stat is optional progress telemetry (u2c.py only sends it "if
+    // stats"); omit it rather than risk a malformed value confusing the server.
     final headers = {
       'Content-Type': 'application/octet-stream',
       'X-Up2k-Wark': wark,
       'X-Up2k-Hash': chunkHash,
-      // Browser sends this on every chunk ("{ok}/{ng}/{bz}/{q} {tot}/{rem} {eta}").
-      // Benign telemetry, but match the working client exactly.
-      'X-Up2k-Stat': '0/0/0/0 0/0 x',
     };
     _log?.request('POST', chunkUri, headers,
         body: 'chunk #$chunkIdx (${chunkBytes.length} bytes)');
