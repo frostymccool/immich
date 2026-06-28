@@ -62,27 +62,38 @@ class CopypartyUploaderService {
   }
 
   // ---------------------------------------------------------------------------
-  // Chunk size table — mirrors the up2k reference table from copyparty devnotes
+  // Chunk size — MUST match copyparty's server-side up2k_chunksize() EXACTLY.
+  //
+  // The server computes each chunk's write offset as (chunk_index * chunksize)
+  // using ITS OWN chunk size derived from the file size. If our chunk size
+  // differs, the server scatters our chunks across the wrong offsets — the file
+  // is corrupt/inflated and no chunk ever matches at the offset the server
+  // checks, so confirmation never completes. (A previous 256 KiB table broke
+  // this: a 6.3 MB file uploaded as 25 chunks landed at 1 MiB offsets → a
+  // ~25 MiB corrupt file. Proven from server folder snapshots.)
+  //
+  // Port of copyparty/util.py up2k_chunksize: start at 1 MiB and grow (by an
+  // accelerating step) until the chunk count is ≤ 256 (or ≤ 4096 once chunks
+  // reach 32 MiB).
   // ---------------------------------------------------------------------------
-
-  static const List<(int maxBytes, int chunkBytes)> _chunkTable = [
-    (256 * 1024 * 1024, 256 * 1024),                    // ≤ 256 MiB → 256 KiB chunks
-    (512 * 1024 * 1024, 512 * 1024),                    // ≤ 512 MiB → 512 KiB chunks
-    (1 * 1024 * 1024 * 1024, 1 * 1024 * 1024),          // ≤ 1 GiB → 1 MiB chunks
-    (2 * 1024 * 1024 * 1024, 2 * 1024 * 1024),          // ≤ 2 GiB → 2 MiB chunks
-    (4 * 1024 * 1024 * 1024, 4 * 1024 * 1024),          // ≤ 4 GiB → 4 MiB chunks
-    (8 * 1024 * 1024 * 1024, 8 * 1024 * 1024),          // ≤ 8 GiB → 8 MiB chunks
-    (128 * 1024 * 1024 * 1024, 16 * 1024 * 1024),       // ≤ 128 GiB → 16 MiB chunks
-  ];
 
   /// Returns the chunk size in bytes for a given file size.
   int computeChunkSizeBytes(int fileSizeBytes) {
-    for (final (maxBytes, chunkBytes) in _chunkTable) {
-      if (fileSizeBytes <= maxBytes) {
-        return chunkBytes;
+    int chunkSize = 1024 * 1024; // 1 MiB minimum
+    int stepSize = 512 * 1024;
+    while (true) {
+      for (final mul in const [1, 2]) {
+        final nchunks = fileSizeBytes <= 0
+            ? 0
+            : (fileSizeBytes + chunkSize - 1) ~/ chunkSize; // ceil
+        if (nchunks <= 256 ||
+            (chunkSize >= 32 * 1024 * 1024 && nchunks <= 4096)) {
+          return chunkSize;
+        }
+        chunkSize += stepSize;
+        stepSize *= mul;
       }
     }
-    return 32 * 1024 * 1024; // 32 MiB for anything larger
   }
 
   // ---------------------------------------------------------------------------
