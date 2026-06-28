@@ -533,8 +533,34 @@ class CopypartyUploaderService {
     _log?.section('SELFTEST $label');
     _log?.log('name="$name"  uploadPath="$uploadPath"  '
         'mode=${sequential ? 'sequential(in-order, parallelism=1)' : 'parallel($parallelism)'}');
+
+    // Snapshot the destination folder before/after so we can SEE what the
+    // server actually does with our chunks (partial created? grows? corrupt
+    // file left behind?). Filters to entries related to this file.
+    final prefix = name.length > 23 ? name.substring(0, 23) : name;
+    Future<void> snapshotFolder(String when) async {
+      try {
+        final folderUri = _buildUri(hostUrl, uploadPath, '');
+        final sizes = await listFolderSizes(folderUri, password);
+        final related = sizes.entries.where((e) => e.key.contains(prefix)).toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
+        _log?.log('FOLDER $when — ${sizes.length} total file(s); '
+            '${related.length} matching "$prefix*":');
+        if (related.isEmpty) {
+          _log?.log('    (none)');
+        } else {
+          for (final e in related.take(30)) {
+            _log?.log('    ${e.value} B  ${e.key}');
+          }
+        }
+      } catch (e) {
+        _log?.log('FOLDER $when — listing failed: $e');
+      }
+    }
+
     try {
       final hashed = await hashFile(filePath);
+      await snapshotFolder('BEFORE');
       final hs = await handshake(hashed, hostUrl, uploadPath, password, label: '$label/init');
       // Sequential mode: upload one chunk at a time, in ascending offset order,
       // to test whether this server mis-places concurrent/out-of-order chunks.
@@ -550,8 +576,10 @@ class CopypartyUploaderService {
         password,
         parallelism: sequential ? 1 : parallelism,
       );
+      await snapshotFolder('AFTER-UPLOAD (pre-confirm)');
       final confirm =
           await handshake(hashed, hostUrl, uploadPath, password, label: '$label/confirm');
+      await snapshotFolder('AFTER-CONFIRM');
       final result = UploadAttemptResult(
         label: label,
         sentName: name,
