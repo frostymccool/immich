@@ -188,6 +188,17 @@ Navigation note: `CopypartyImportPage` is NOT registered in `router.dart` (auto_
 It is pushed directly: `Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CopypartyImportPage()))`.
 
 ### copyparty up2k — verified protocol facts (from logs + `u2c.py`)
+- **Chunk SIZE must match the server EXACTLY** (this was THE upload bug — builds
+  32–48). copyparty computes each chunk's write offset as
+  `index * up2k_chunksize(filesize)`; if the client chunks at a different size,
+  the server scatters the bytes across the wrong offsets → corrupt, inflated
+  file and a confirm that never completes (no chunk sits where the server
+  verifies). Port `copyparty/util.py up2k_chunksize` exactly: start **1 MiB**,
+  grow by an accelerating step (`+512 KiB`, step `*1` then `*2`) until
+  `nchunks ≤ 256` (or `≤ 4096` once chunk ≥ 32 MiB). NEVER "tune" the chunk
+  size for transport reasons — it is a protocol invariant. (Proof: a 6.3 MB
+  file sent as 25×256 KiB chunks finalized server-side at
+  `24*1MiB + 79753 = 25,245,577 B`.)
 - **Chunk id**: `base64url(sha512(chunkBytes)[:33])` → 44-char URL-safe base64, no padding.
 - **Handshake**: POST JSON `{name,size,lmod,hash:[cids]}` to the **folder** URL
   (e.g. `/uploads/`). Response: `wark`, `purl` (the URL to POST chunks to — on
@@ -212,19 +223,16 @@ It is pushed directly: `Navigator.of(context).push(MaterialPageRoute(builder: (_
   file URL — copyparty answers `400 "some file got your folder name"`. We now
   surface an actionable error instead.
 
-### copyparty up2k — current debugging state (as of build 42)
-**Uploads do not yet complete.** Symptom: every chunk POST returns `200 thank`
-but the finalize handshake reports the *same* needed-chunk count it started
-with — chunks are accepted but never consolidated/finalized. `unmatched=0`
-always (our hashes are correct) and chunks from a timed-out run *did* persist
-once, so the client wire format is almost certainly correct. Leading
-hypothesis: corrupted/duplicated server-side up2k partial state for these
-content-warks that survives file deletion. **This is unconfirmed** — build 42's
-in-app **self-test suite** (orig / rename / new-content / new-folder variations)
-is the experiment that will isolate client-vs-server; await its log before any
-further fix. The `newcontent` variation (brand-new wark) is the decisive case:
-if it PASSES, the client is fine and the issue is stale server state; if it
-FAILS, the bug is client-side and the stale-state theory is wrong.
+### copyparty up2k — RESOLVED (build 49)
+**Uploads work.** Root cause was the chunk-size mismatch documented above: a
+256 KiB table introduced in build 36 (for a phantom "nginx body limit") diverged
+from copyparty's 1 MiB minimum, so the server wrote our chunks at the wrong
+offsets — corrupt files and a never-completing confirm. Fixed by porting
+`up2k_chunksize` exactly. The in-app **self-test suite** + **folder snapshots**
+(before/after `?ls` listings per attempt) were what finally proved it — the
+server-side file sizes exposed the 1 MiB-offset scatter. Lesson reinforced:
+the on-device log/snapshot is truth; every analysis-only theory in this saga
+(stale state, version mismatch, ordering, lmod) was wrong.
 
 Diagnostic tooling that already exists — use it, don't rebuild it:
 - `CopypartyLogger` (singleton) → `<app docs>/copyparty_diag.log`; "Share log"
