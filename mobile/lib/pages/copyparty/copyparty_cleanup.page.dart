@@ -37,6 +37,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   Map<int, ServerFileVerification> _verify = {};
   final Set<int> _verifying = {};
   final Set<int> _uploading = {};
+  final Set<int> _deleted = {};
   String _password = '';
   bool _loading = true;
 
@@ -156,9 +157,6 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         _verify[r.id!] =
             cp.copyWith(immich: immich, immichApplicable: applicable, error: cp.error);
         _verifying.remove(r.id);
-        if (_verify[r.id!]!.safeToDeleteAt(DateTime.now())) {
-          _selected.add(r.id!);
-        }
       });
     } catch (e) {
       if (!mounted) return;
@@ -166,11 +164,26 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     }
   }
 
-  Future<void> _verifyAll() async {
+  /// Verify the currently-ticked files (FB10). Selection is user-driven.
+  Future<void> _verifySelected() async {
     for (final r in _existing) {
+      if (!_selected.contains(r.id) || _deleted.contains(r.id)) continue;
       if (!mounted) return;
       await _verifyFile(r);
     }
+  }
+
+  void _toggleSelectAll(bool selectAll) {
+    setState(() {
+      if (selectAll) {
+        _selected = _existing
+            .where((r) => !_deleted.contains(r.id))
+            .map((r) => r.id!)
+            .toSet();
+      } else {
+        _selected = {};
+      }
+    });
   }
 
   /// Recovery (Issue 8): re-upload a file whose verification failed, then verify.
@@ -282,21 +295,26 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     }
     if (proceed != true) return;
 
-    int deleted = 0;
     final repo = ref.read(copypartyReceiptRepositoryProvider);
+    final deletedIds = <int>[];
     for (final receipt in toDelete) {
       try {
         await File(receipt.localPath).delete();
         await repo.markSourceDeleted(receipt.id!);
-        deleted++;
+        deletedIds.add(receipt.id!);
       } catch (_) {}
     }
     if (mounted) {
+      // Keep deleted rows visible, struck-through and unticked (FB7) — don't
+      // silently drop them, so the user sees what was removed.
+      setState(() {
+        _deleted.addAll(deletedIds);
+        _selected.removeAll(deletedIds);
+      });
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Deleted $deleted / ${toDelete.length} files')),
+        SnackBar(content: Text('Deleted ${deletedIds.length} / ${toDelete.length} files')),
       );
       ref.invalidate(pendingCleanupProvider);
-      await _loadExisting();
     }
   }
 
@@ -304,6 +322,10 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   Widget build(BuildContext context) {
     final now = DateTime.now();
     final busy = _verifying.isNotEmpty || _uploading.isNotEmpty;
+    final selectable =
+        _existing.where((r) => !_deleted.contains(r.id)).map((r) => r.id!).toSet();
+    final allSelected =
+        selectable.isNotEmpty && selectable.every(_selected.contains);
     final allSelectedSafe = _selected.isNotEmpty &&
         _existing
             .where((r) => _selected.contains(r.id))
@@ -314,11 +336,16 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         title: const Text('Pending Cleanup'),
         centerTitle: false,
         actions: [
-          if (!_loading && _existing.isNotEmpty)
+          if (!_loading && _existing.isNotEmpty) ...[
             TextButton(
-              onPressed: busy ? null : _verifyAll,
-              child: const Text('Verify all'),
+              onPressed: () => _toggleSelectAll(!allSelected),
+              child: Text(allSelected ? 'Deselect all' : 'Select all'),
             ),
+            TextButton(
+              onPressed: (busy || _selected.isEmpty) ? null : _verifySelected,
+              child: Text('Verify${_selected.isEmpty ? '' : ' (${_selected.length})'}'),
+            ),
+          ],
         ],
       ),
       body: _loading
@@ -348,8 +375,8 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                       child: Text(
                         'Files are only safe to delete once verified on copyparty '
-                        '(and present in Immich, if applicable). Tap "Verify" / '
-                        '"Verify all" to re-hash and confirm each file.',
+                        '(and present in Immich, if applicable). Select files and '
+                        'tap "Verify" to re-hash and confirm each one.',
                         style: context.textTheme.bodySmall?.copyWith(
                           color: context.colorScheme.onSurface.withValues(alpha: 0.7),
                         ),
@@ -362,16 +389,20 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                           itemCount: _existing.length,
                           itemBuilder: (ctx, i) {
                             final r = _existing[i];
+                            final deleted = _deleted.contains(r.id);
                             return _CleanupTile(
                               receipt: r,
                               isSelected: _selected.contains(r.id),
+                              deleted: deleted,
                               verification: _verify[r.id] ?? const ServerFileVerification(),
                               verifying: _verifying.contains(r.id),
                               uploading: _uploading.contains(r.id),
                               now: now,
                               onVerify: () => _verifyFile(r),
                               onUploadNow: () => _uploadNow(r),
-                              onChanged: (sel) => setState(() {
+                              onChanged: deleted
+                                  ? null
+                                  : (sel) => setState(() {
                                 if (sel == true) {
                                   _selected.add(r.id!);
                                 } else {
@@ -438,17 +469,19 @@ class _AllClearLine extends StatelessWidget {
 class _CleanupTile extends StatelessWidget {
   final CopypartyReceipt receipt;
   final bool isSelected;
+  final bool deleted;
   final ServerFileVerification verification;
   final bool verifying;
   final bool uploading;
   final DateTime now;
   final VoidCallback onVerify;
   final VoidCallback onUploadNow;
-  final ValueChanged<bool?> onChanged;
+  final ValueChanged<bool?>? onChanged;
 
   const _CleanupTile({
     required this.receipt,
     required this.isSelected,
+    required this.deleted,
     required this.verification,
     required this.verifying,
     required this.uploading,
@@ -475,10 +508,24 @@ class _CleanupTile extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           CheckboxListTile(
-            value: isSelected,
-            onChanged: onChanged,
-            title: Text(receipt.filename, style: context.textTheme.bodyMedium),
-            subtitle: Column(
+            value: deleted ? false : isSelected,
+            onChanged: deleted ? null : onChanged,
+            title: Text(
+              receipt.filename,
+              style: context.textTheme.bodyMedium?.copyWith(
+                decoration: deleted ? TextDecoration.lineThrough : null,
+                color: deleted
+                    ? context.colorScheme.onSurface.withValues(alpha: 0.4)
+                    : null,
+              ),
+            ),
+            subtitle: deleted
+                ? Text('Deleted from device',
+                    style: context.textTheme.bodySmall?.copyWith(
+                      decoration: TextDecoration.lineThrough,
+                      color: context.colorScheme.onSurface.withValues(alpha: 0.4),
+                    ))
+                : Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(

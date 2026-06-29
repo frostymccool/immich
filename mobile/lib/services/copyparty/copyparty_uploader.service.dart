@@ -357,11 +357,14 @@ class CopypartyUploaderService {
     bool immichApplicable = false,
   }) {
     final serverSize = sizes[filename];
-    final present = serverSize != null && serverSize > 0;
     final sizeOk = serverSize != null && serverSize == expectedSize;
     final partial = _hasPartialFor(sizes.keys, filename);
+    // The NAME is on the server if a (complete or 0-byte placeholder) entry
+    // exists OR a partial exists — a partial proves the name was created. The
+    // size/no-partial chips convey completeness. (Feedback #1)
+    final nameFound = sizes.containsKey(filename) || partial;
     return ServerFileVerification(
-      filenamePresent: present ? VerifyState.yes : VerifyState.no,
+      filenamePresent: nameFound ? VerifyState.yes : VerifyState.no,
       sizeMatches:
           serverSize == null ? VerifyState.unknown : (sizeOk ? VerifyState.yes : VerifyState.no),
       partialExists: partial ? VerifyState.yes : VerifyState.no,
@@ -400,12 +403,12 @@ class CopypartyUploaderService {
       // exactly <filename> PLUS a "<filename>.PARTIAL" (the sparse data file).
       // So a 0-byte file is NOT "present" — it's an incomplete upload. (Issue 9)
       final serverSize = sizes[filename];
-      final present = serverSize != null && serverSize > 0;
       final sizeOk = serverSize != null && serverSize == expectedSize;
       final partial = _hasPartialFor(sizes.keys, filename);
+      final nameFound = sizes.containsKey(filename) || partial;
 
       return ServerFileVerification(
-        filenamePresent: present ? VerifyState.yes : VerifyState.no,
+        filenamePresent: nameFound ? VerifyState.yes : VerifyState.no,
         sizeMatches: serverSize == null
             ? VerifyState.unknown
             : (sizeOk ? VerifyState.yes : VerifyState.no),
