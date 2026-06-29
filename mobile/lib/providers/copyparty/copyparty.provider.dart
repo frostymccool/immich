@@ -539,6 +539,20 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     return lines;
   }
 
+  /// Uploads a local file to Immich by path (used by the cleanup-page
+  /// "Upload now" recovery). Returns the Immich asset id on success, else null.
+  Future<String?> uploadPathToImmich(String localPath, String filename) async {
+    final stat = await File(localPath).stat();
+    final file = UploadFile(
+      localPath: localPath,
+      filename: filename,
+      sizeBytes: stat.size,
+      lastModifiedMs: stat.modified.millisecondsSinceEpoch,
+    );
+    final result = await _uploadToImmich(file);
+    return result.isSuccess ? result.remoteAssetId : null;
+  }
+
   Future<UploadResult> _uploadToImmich(UploadFile file) async {
     final f = File(file.localPath);
     final fields = {

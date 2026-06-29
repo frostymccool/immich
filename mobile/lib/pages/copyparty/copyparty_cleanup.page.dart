@@ -179,8 +179,11 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     setState(() => _uploading.add(r.id!));
     final config = ref.read(appConfigProvider).copyparty;
     final uploader = ref.read(copypartyUploaderProvider);
+    final notifier = ref.read(importSessionProvider.notifier);
+    final repo = ref.read(copypartyReceiptRepositoryProvider);
     String? error;
     try {
+      // Repair the copyparty side.
       await uploader.uploadFile(
         r.localPath,
         config.hostUrl,
@@ -188,6 +191,14 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         _password,
         parallelism: config.parallelConnections,
       );
+      // Also repair the Immich side if this file belongs in Immich and isn't
+      // there yet — otherwise "Upload now" would leave it permanently unsafe.
+      if (_immichApplies(r) && (_verify[r.id]?.immich != VerifyState.yes)) {
+        final assetId = await notifier.uploadPathToImmich(r.localPath, r.filename);
+        if (assetId != null && r.id != null) {
+          await repo.markImmichUploaded(r.id!, assetId);
+        }
+      }
     } catch (e) {
       error = e.toString();
     }

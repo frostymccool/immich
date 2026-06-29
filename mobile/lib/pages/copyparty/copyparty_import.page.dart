@@ -1641,7 +1641,29 @@ class _CompletionFileTile extends StatelessWidget {
                         context.colorScheme.onSurface.withValues(alpha: 0.3),
                   ),
                 )
-              : null,
+              : Builder(builder: (_) {
+                  final immichGood = !file.needsImmich || imOk;
+                  final good = !failed && cpOk && immichGood;
+                  final text = file.alreadyOnServer
+                      ? 'already on server · hash verified'
+                      : failed
+                          ? 'not confirmed'
+                          : cpOk
+                              ? (file.needsImmich
+                                  ? (imOk
+                                      ? 'copyparty ✓ · Immich ✓'
+                                      : 'copyparty ✓ · Immich missing')
+                                  : 'copyparty ✓ (hash verified)')
+                              : 'not confirmed';
+                  return Text(
+                    text,
+                    style: context.textTheme.bodySmall?.copyWith(
+                      color: good
+                          ? Colors.green
+                          : context.colorScheme.error,
+                    ),
+                  );
+                }),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
