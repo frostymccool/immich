@@ -189,6 +189,15 @@ class CopypartyFilePairer {
 
   static bool _isNativeImmichFile(String ext) =>
       _nativeImmichExtensions.contains(ext);
+
+  /// Whether a filename is a media type Immich would ingest. Used to decide if
+  /// the Immich axis applies to a file when its intended destination isn't
+  /// otherwise known (e.g. a stored receipt). Errs toward applicable for safety.
+  static bool isNativeImmichFilename(String filename) {
+    final dot = filename.lastIndexOf('.');
+    if (dot < 0 || dot == filename.length - 1) return false;
+    return _isNativeImmichFile(filename.substring(dot + 1).toLowerCase());
+  }
 }
 
 /// Lightweight file descriptor used during scanning.

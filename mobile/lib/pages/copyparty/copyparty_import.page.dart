@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
+import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:immich_mobile/utils/upload_speed_calculator.dart';
 import 'package:share_plus/share_plus.dart';
@@ -314,7 +315,8 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     final v = f.verification;
     return v != null &&
         v.filenamePresent == VerifyState.yes &&
-        v.sizeMatches == VerifyState.yes;
+        v.sizeMatches == VerifyState.yes &&
+        v.partialExists != VerifyState.yes;
   }
 
   Set<String> _allPaths(List<UploadSet> sets) =>
@@ -1389,9 +1391,40 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
     WidgetRef ref,
     List<UploadFile> files,
   ) async {
-    // Status-driven (Issue 5): one-tap all-clear when every file is safe to
-    // delete (copyparty-confirmed + Immich-ok), else an explicit warning.
-    final unsafe = files.where((f) => !f.safeToDelete).toList();
+    // Status-driven (Issue 5) with a LIVE re-check right before deleting — we
+    // never trust the upload-time flag alone. A file is safe only if it's still
+    // present on the server now (name+size, no partial), its content hash was
+    // confirmed this session, and Immich is satisfied where it applies.
+    final config = ref.read(appConfigProvider).copyparty;
+    final uploader = ref.read(copypartyUploaderProvider);
+    String password = '';
+    try {
+      password = await ref.read(copypartyPasswordProvider.future);
+    } catch (_) {}
+    final cleanPath = config.uploadPath.replaceAll(RegExp(r'^/+|/+$'), '');
+    final base = config.hostUrl.replaceAll(RegExp(r'/+$'), '');
+
+    final unsafe = <UploadFile>[];
+    for (final f in files) {
+      ServerFileVerification v;
+      try {
+        v = await uploader.verifyPresence(
+          fileUrl: '$base/$cleanPath/${f.filename}',
+          filename: f.filename,
+          expectedSize: f.sizeBytes,
+          password: password,
+        );
+      } catch (_) {
+        v = const ServerFileVerification();
+      }
+      final liveSafe = v.filenamePresent == VerifyState.yes &&
+          v.sizeMatches == VerifyState.yes &&
+          v.partialExists != VerifyState.yes &&
+          f.copypartyConfirmed &&
+          (!f.needsImmich || f.immichConfirmed);
+      if (!liveSafe) unsafe.add(f);
+    }
+    if (!context.mounted) return;
     final bool? confirm;
     if (unsafe.isEmpty) {
       confirm = await showDialog<bool>(

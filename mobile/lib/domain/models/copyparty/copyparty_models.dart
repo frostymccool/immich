@@ -229,11 +229,13 @@ class ServerFileVerification {
     this.error,
   });
 
-  /// A hash validation counts as fresh for 2 minutes (it can go stale if the
-  /// local file changes, so it is deliberately time-bounded).
+  /// A hash validation counts as fresh for 10 minutes — long enough that a
+  /// slow sequential "Verify all" over many large clips doesn't expire the
+  /// first files before the user taps delete, but still time-bounded so a
+  /// long-stale verification isn't trusted.
   bool hashFreshAt(DateTime now) =>
       hashValidatedAt != null &&
-      now.difference(hashValidatedAt!) < const Duration(minutes: 2);
+      now.difference(hashValidatedAt!) < const Duration(minutes: 10);
 
   /// Copyparty side is fully proven: present, same size, no lingering partial,
   /// and a fresh hash validation.

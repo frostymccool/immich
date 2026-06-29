@@ -29,10 +29,16 @@ const _copypartyPasswordKey = 'copyparty_password';
 /// the sentinel 'present' when Immich confirms a duplicate but gives no id.
 /// Throws on network/API failure so callers can show an error state.
 Future<String?> immichAssetIdByChecksum(AssetsApi api, String localPath) async {
-  // Immich identifies content by SHA-1 (base64). Camera files are tens of MB,
-  // so reading fully is acceptable for an on-demand verify.
-  final bytes = await File(localPath).readAsBytes();
-  final sha1b64 = base64.encode(sha1.convert(bytes).bytes);
+  // Immich identifies content by SHA-1 (base64). STREAM the hash — these are
+  // memory-card videos that can be multiple GB; readAsBytes would OOM.
+  final sink = _DigestSink();
+  final input = sha1.startChunkedConversion(sink);
+  await for (final chunk in File(localPath).openRead()) {
+    input.add(chunk);
+  }
+  input.close();
+  final sha1b64 = base64.encode(sink.value!.bytes);
+
   final resp = await api.checkBulkUpload(
     AssetBulkUploadCheckDto(
       assets: [AssetBulkUploadCheckItem(checksum: sha1b64, id: localPath)],
@@ -40,11 +46,21 @@ Future<String?> immichAssetIdByChecksum(AssetsApi api, String localPath) async {
   );
   if (resp == null || resp.results.isEmpty) return null;
   final r = resp.results.first;
-  // 'reject' with the duplicate reason means the content is already in Immich.
+  // 'reject' means the content is already in Immich (duplicate). Treat ANY
+  // reject as present even if the server omits/nulls the asset id.
   if (r.action == AssetUploadAction.reject) {
-    return r.assetId.isPresent ? r.assetId.value : 'present';
+    return r.assetId.isPresent ? (r.assetId.value ?? 'present') : 'present';
   }
   return null;
+}
+
+/// Captures the final Digest from a chunked hash conversion.
+class _DigestSink implements Sink<Digest> {
+  Digest? value;
+  @override
+  void add(Digest data) => value = data;
+  @override
+  void close() {}
 }
 
 // ---------------------------------------------------------------------------
@@ -497,13 +513,16 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
           password: password,
           base: v,
         );
+        final applicable = CopypartyFilePairer.isNativeImmichFilename(name);
         VerifyState immich = VerifyState.unknown;
-        try {
-          immich = (await immichAssetIdByChecksum(api, path)) != null
-              ? VerifyState.yes
-              : VerifyState.no;
-        } catch (_) {}
-        v = v.copyWith(immich: immich, immichApplicable: immich != VerifyState.unknown);
+        if (applicable) {
+          try {
+            immich = (await immichAssetIdByChecksum(api, path)) != null
+                ? VerifyState.yes
+                : VerifyState.no;
+          } catch (_) {}
+        }
+        v = v.copyWith(immich: immich, immichApplicable: applicable);
         final line = '$name → name=${v.filenamePresent.name} '
             'size=${v.sizeMatches.name} partial=${v.partialExists.name} '
             'hash=${v.hashFreshAt(now) ? "ok" : "no"} immich=${immich.name} '

@@ -359,8 +359,7 @@ class CopypartyUploaderService {
     final serverSize = sizes[filename];
     final present = serverSize != null && serverSize > 0;
     final sizeOk = serverSize != null && serverSize == expectedSize;
-    final partial =
-        sizes.keys.any((n) => n.startsWith(filename) && n.endsWith('.PARTIAL'));
+    final partial = _hasPartialFor(sizes.keys, filename);
     return ServerFileVerification(
       filenamePresent: present ? VerifyState.yes : VerifyState.no,
       sizeMatches:
@@ -368,6 +367,17 @@ class CopypartyUploaderService {
       partialExists: partial ? VerifyState.yes : VerifyState.no,
       immichApplicable: immichApplicable,
     );
+  }
+
+  /// True if the listing contains a `.PARTIAL` that belongs to THIS file —
+  /// matched precisely so one filename being a prefix of another can't cross-
+  /// attribute partials. Covers "<name>.PARTIAL", dotpart ".<name>.PARTIAL",
+  /// and copyparty's suffixed "<name>-<time>-<token>.<ext>.PARTIAL".
+  static bool _hasPartialFor(Iterable<String> names, String filename) {
+    return names.any((n) =>
+        n == '$filename.PARTIAL' ||
+        n == '.$filename.PARTIAL' ||
+        (n.startsWith('$filename-') && n.endsWith('.PARTIAL')));
   }
 
   /// Cheap presence check (states 1-3) for a file via a single folder listing.
@@ -392,11 +402,7 @@ class CopypartyUploaderService {
       final serverSize = sizes[filename];
       final present = serverSize != null && serverSize > 0;
       final sizeOk = serverSize != null && serverSize == expectedSize;
-
-      // A lingering partial is any entry for this file ending in ".PARTIAL"
-      // (covers "<filename>.PARTIAL" and "<filename>-<time>-<token>.ext.PARTIAL").
-      final partial =
-          sizes.keys.any((n) => n.startsWith(filename) && n.endsWith('.PARTIAL'));
+      final partial = _hasPartialFor(sizes.keys, filename);
 
       return ServerFileVerification(
         filenamePresent: present ? VerifyState.yes : VerifyState.no,

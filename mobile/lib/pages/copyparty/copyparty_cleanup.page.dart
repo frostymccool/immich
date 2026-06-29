@@ -7,6 +7,7 @@ import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/providers/api.provider.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -23,6 +24,12 @@ class CopypartyCleanupPage extends ConsumerStatefulWidget {
   @override
   ConsumerState<CopypartyCleanupPage> createState() => _CopypartyCleanupPageState();
 }
+
+/// Immich applies to a file if it was confirmed in Immich OR it's a media type
+/// Immich would ingest (intended destination). Errs toward applicable so an
+/// Immich-destined file is never deleted on copyparty-only proof.
+bool _immichApplies(CopypartyReceipt r) =>
+    r.immichAssetId != null || CopypartyFilePairer.isNativeImmichFilename(r.filename);
 
 class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   List<CopypartyReceipt> _existing = [];
@@ -55,7 +62,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         _selected = {}; // nothing pre-selected — must verify first
         _verify = {
           for (final r in existing)
-            r.id!: ServerFileVerification(immichApplicable: r.immichAssetId != null),
+            r.id!: ServerFileVerification(immichApplicable: _immichApplies(r)),
         };
         _password = password;
         _loading = false;
@@ -102,8 +109,8 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   Future<void> _checkImmichStatuses(List<CopypartyReceipt> receipts) async {
     final api = ref.read(apiServiceProvider).assetsApi;
     for (final r in receipts) {
-      if (r.immichAssetId == null) {
-        _mergeVerify(r.id!, (cur) => cur.copyWith(immichApplicable: false));
+      if (!_immichApplies(r)) {
+        _mergeVerify(r.id!, (cur) => cur.copyWith(immichApplicable: false, error: cur.error));
         continue;
       }
       VerifyState immich;
@@ -113,7 +120,9 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       } catch (_) {
         immich = VerifyState.unknown;
       }
-      _mergeVerify(r.id!, (cur) => cur.copyWith(immich: immich, immichApplicable: true));
+      // Preserve any presence error (copyWith would otherwise clear it).
+      _mergeVerify(r.id!,
+          (cur) => cur.copyWith(immich: immich, immichApplicable: true, error: cur.error));
     }
   }
 
@@ -132,7 +141,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         base: _verify[r.id!] ?? const ServerFileVerification(),
       );
       VerifyState immich = VerifyState.unknown;
-      bool applicable = r.immichAssetId != null;
+      bool applicable = _immichApplies(r);
       if (applicable) {
         try {
           immich = (await immichAssetIdByChecksum(api, r.localPath)) != null
@@ -145,7 +154,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       if (!mounted) return;
       setState(() {
         _verify[r.id!] =
-            cp.copyWith(immich: immich, immichApplicable: applicable);
+            cp.copyWith(immich: immich, immichApplicable: applicable, error: cp.error);
         _verifying.remove(r.id);
         if (_verify[r.id!]!.safeToDeleteAt(DateTime.now())) {
           _selected.add(r.id!);
@@ -478,8 +487,10 @@ class _CleanupTile extends StatelessWidget {
                     // when one is present; "no partial" in green only when none.
                     if (v.partialExists == VerifyState.yes)
                       const _RawChip(label: 'partial exists', state: VerifyState.no)
+                    else if (v.partialExists == VerifyState.no)
+                      const _RawChip(label: 'no partial', state: VerifyState.yes)
                     else
-                      _RawChip(label: 'no partial', state: v.partialExists),
+                      const _RawChip(label: 'partial ?', state: VerifyState.unknown),
                     _HashChip(
                       verifying: verifying,
                       validatedFresh: v.hashFreshAt(now),
