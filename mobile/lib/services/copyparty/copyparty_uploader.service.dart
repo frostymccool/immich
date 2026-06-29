@@ -429,6 +429,7 @@ class CopypartyUploaderService {
     required String password,
     ServerFileVerification base = const ServerFileVerification(),
     DateTime? now,
+    void Function(int bytesHashed, int totalBytes)? onHashProgress,
   }) async {
     try {
       final fileUri = Uri.parse(fileUrl);
@@ -436,7 +437,7 @@ class CopypartyUploaderService {
       final segs = List<String>.from(fileUri.pathSegments)..removeLast();
       final uploadPath = '/${segs.join('/')}';
 
-      final hashed = await hashFile(localPath);
+      final hashed = await hashFile(localPath, onProgress: onHashProgress);
       final hs = await handshake(hashed, origin, uploadPath, password, label: 'verify');
       if (hs.fullyConfirmed) {
         return base.copyWith(

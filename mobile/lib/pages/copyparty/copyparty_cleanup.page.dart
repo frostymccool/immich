@@ -38,6 +38,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   final Set<int> _verifying = {};
   final Set<int> _uploading = {};
   final Set<int> _deleted = {};
+  final Map<int, double> _progress = {}; // 0..1 during verify/upload (FB2/FB8)
   String _password = '';
   bool _loading = true;
 
@@ -131,7 +132,10 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   /// Immich by checksum. Auto-selects the file if it becomes safe to delete.
   Future<void> _verifyFile(CopypartyReceipt r) async {
     if (_verifying.contains(r.id)) return;
-    setState(() => _verifying.add(r.id!));
+    setState(() {
+      _verifying.add(r.id!);
+      _progress[r.id!] = 0;
+    });
     final uploader = ref.read(copypartyUploaderProvider);
     final api = ref.read(apiServiceProvider).assetsApi;
     try {
@@ -140,6 +144,11 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         localPath: r.localPath,
         password: _password,
         base: _verify[r.id!] ?? const ServerFileVerification(),
+        onHashProgress: (done, total) {
+          if (total > 0 && mounted) {
+            setState(() => _progress[r.id!] = done / total);
+          }
+        },
       );
       VerifyState immich = VerifyState.unknown;
       bool applicable = _immichApplies(r);
@@ -157,10 +166,14 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         _verify[r.id!] =
             cp.copyWith(immich: immich, immichApplicable: applicable, error: cp.error);
         _verifying.remove(r.id);
+        _progress.remove(r.id);
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _verifying.remove(r.id));
+      setState(() {
+        _verifying.remove(r.id);
+        _progress.remove(r.id);
+      });
     }
   }
 
@@ -189,20 +202,33 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   /// Recovery (Issue 8): re-upload a file whose verification failed, then verify.
   Future<void> _uploadNow(CopypartyReceipt r) async {
     if (_uploading.contains(r.id)) return;
-    setState(() => _uploading.add(r.id!));
+    setState(() {
+      _uploading.add(r.id!);
+      _progress[r.id!] = 0;
+    });
     final config = ref.read(appConfigProvider).copyparty;
     final uploader = ref.read(copypartyUploaderProvider);
     final notifier = ref.read(importSessionProvider.notifier);
     final repo = ref.read(copypartyReceiptRepositoryProvider);
     String? error;
     try {
-      // Repair the copyparty side.
+      // Repair the copyparty side (hash 0-20%, chunk upload 20-100%).
       await uploader.uploadFile(
         r.localPath,
         config.hostUrl,
         config.uploadPath,
         _password,
         parallelism: config.parallelConnections,
+        onHashProgress: (done, total) {
+          if (total > 0 && mounted) {
+            setState(() => _progress[r.id!] = 0.2 * done / total);
+          }
+        },
+        onUploadProgress: (done, total) {
+          if (total > 0 && mounted) {
+            setState(() => _progress[r.id!] = 0.2 + 0.8 * done / total);
+          }
+        },
       );
       // Also repair the Immich side if this file belongs in Immich and isn't
       // there yet — otherwise "Upload now" would leave it permanently unsafe.
@@ -216,7 +242,10 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       error = e.toString();
     }
     if (!mounted) return;
-    setState(() => _uploading.remove(r.id));
+    setState(() {
+      _uploading.remove(r.id);
+      _progress.remove(r.id);
+    });
     if (error != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Upload failed: $error')),
@@ -397,6 +426,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                               verification: _verify[r.id] ?? const ServerFileVerification(),
                               verifying: _verifying.contains(r.id),
                               uploading: _uploading.contains(r.id),
+                              progress: _progress[r.id],
                               now: now,
                               onVerify: () => _verifyFile(r),
                               onUploadNow: () => _uploadNow(r),
@@ -473,6 +503,7 @@ class _CleanupTile extends StatelessWidget {
   final ServerFileVerification verification;
   final bool verifying;
   final bool uploading;
+  final double? progress;
   final DateTime now;
   final VoidCallback onVerify;
   final VoidCallback onUploadNow;
@@ -485,6 +516,7 @@ class _CleanupTile extends StatelessWidget {
     required this.verification,
     required this.verifying,
     required this.uploading,
+    required this.progress,
     required this.now,
     required this.onVerify,
     required this.onUploadNow,
@@ -563,6 +595,30 @@ class _CleanupTile extends StatelessWidget {
                     child: Text(v.error!,
                         style: context.textTheme.labelSmall
                             ?.copyWith(color: context.colorScheme.error)),
+                  ),
+                // Progress bar + % while verifying (hashing) or uploading (FB2/FB8).
+                if ((verifying || uploading))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(4),
+                            child: LinearProgressIndicator(
+                              value: progress,
+                              minHeight: 4,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          '${uploading ? 'Uploading' : 'Hashing'} '
+                          '${progress == null ? '' : '${(progress! * 100).round()}%'}',
+                          style: context.textTheme.labelSmall,
+                        ),
+                      ],
+                    ),
                   ),
                 const SizedBox(height: 4),
                 Row(
