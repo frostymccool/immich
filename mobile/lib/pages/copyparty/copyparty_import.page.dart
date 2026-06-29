@@ -919,11 +919,13 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
   @override
   void didUpdateWidget(_ProgressFileCard old) {
     super.didUpdateWidget(old);
-    if (widget.file.uploadedBytes != old.file.uploadedBytes) {
-      _speedCalc.update(widget.file.uploadedBytes, widget.file.sizeBytes);
-      _speed = _speedCalc.speedAsString;
-      _eta = _speedCalc.timeRemainingAsString;
-    }
+    // The provider mutates the SAME UploadFile instance in place, so
+    // widget.file and old.file are the same object — comparing uploadedBytes
+    // would never differ. Feed the calculator unconditionally; it throttles
+    // internally (100 ms) and tracks its own last-bytes/timestamp.
+    _speedCalc.update(widget.file.uploadedBytes, widget.file.sizeBytes);
+    _speed = _speedCalc.speedAsString;
+    _eta = _speedCalc.timeRemainingAsString;
   }
 
   @override
@@ -1115,11 +1117,17 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
     final session = ref.watch(importSessionProvider);
     final allFiles = session.uploadSets.expand((s) => s.files).toList();
 
-    final cpSucceeded = allFiles.where((f) => f.copypartyConfirmed).length;
-    final cpNeeded = allFiles.where((f) => f.needsCopyparty).length;
-    final imSucceeded = allFiles.where((f) => f.immichConfirmed).length;
-    final imNeeded = allFiles.where((f) => f.needsImmich).length;
-    final failed = allFiles.where((f) => f.status == UploadFileStatus.failed).length;
+    // Only files that were actually part of THIS upload count toward the
+    // success/error tally. Files left as `pending` were skipped (unselected)
+    // and must not turn a clean run into "Completed with errors". (Issue 1)
+    final attempted =
+        allFiles.where((f) => f.status != UploadFileStatus.pending).toList();
+    final cpSucceeded = attempted.where((f) => f.copypartyConfirmed).length;
+    final cpNeeded = attempted.where((f) => f.needsCopyparty).length;
+    final imSucceeded = attempted.where((f) => f.immichConfirmed).length;
+    final imNeeded = attempted.where((f) => f.needsImmich).length;
+    final failed =
+        attempted.where((f) => f.status == UploadFileStatus.failed).length;
     final hasErrors = failed > 0 || cpSucceeded < cpNeeded;
 
     final checkedFiles = allFiles

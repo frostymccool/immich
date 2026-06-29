@@ -24,6 +24,9 @@ class UploadFile {
   UploadDestination destination;
   String? immichAssetId;
   CopypartyReceipt? existingReceipt;
+  // True when the upload was skipped because the content was already on the
+  // server (hash matched at handshake) — surfaced as "already on server".
+  bool alreadyOnServer;
 
   UploadFile({
     required this.localPath,
@@ -42,6 +45,7 @@ class UploadFile {
     UploadDestination? destination,
     this.immichAssetId,
     this.existingReceipt,
+    this.alreadyOnServer = false,
   }) : destination = destination ??
            (isNativeImmichFile ? UploadDestination.both : UploadDestination.copypartyOnly);
 

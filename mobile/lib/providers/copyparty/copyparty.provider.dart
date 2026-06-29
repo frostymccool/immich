@@ -209,7 +209,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             _notify();
 
             final fileSizeBytes = file.sizeBytes;
-            final (hashed, confirmed) = await _uploader.uploadFile(
+            final (hashed, confirmed, alreadyOnServer) = await _uploader.uploadFile(
               file.localPath,
               config.hostUrl,
               config.uploadPath,
@@ -231,6 +231,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             file.sha512 = hashed.fileHash;
             file.wark = confirmed.wark;
             file.uploadedBytes = file.sizeBytes;
+            file.alreadyOnServer = alreadyOnServer;
             file.status = UploadFileStatus.confirmed;
 
             // Write DB receipt — upload_confirmed=true since uploadFile() only

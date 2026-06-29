@@ -666,7 +666,12 @@ class CopypartyUploaderService {
   /// Runs the complete up2k protocol for a single file.
   ///
   /// Returns the [HandshakeResult] from the final confirmation handshake.
-  Future<(HashedFile, HandshakeResult)> uploadFile(
+  /// Runs the up2k protocol for one file.
+  ///
+  /// Returns `(hashed, result, alreadyOnServer)`. When `alreadyOnServer` is
+  /// true the content was already fully present (hash matched) and NO bytes
+  /// were uploaded — the caller should show "already on server, hash verified".
+  Future<(HashedFile, HandshakeResult, bool)> uploadFile(
     String filePath,
     String hostUrl,
     String uploadPath,
@@ -682,15 +687,21 @@ class CopypartyUploaderService {
     final hashed = await hashFile(filePath, onProgress: onHashProgress);
 
     // Step 2: initial handshake — find out which chunks the server needs.
-    // Even if need==[] (server has all chunks from a prior attempt), we MUST
-    // still send the confirmation handshake (step 4) to trigger server-side
-    // finalization.  Skipping it leaves the file as .PARTIAL indefinitely.
+    // This IS the content hash check: if it comes back fullyConfirmed, the
+    // file's bytes are already on the server.
     final handshakeResult =
         await handshake(hashed, hostUrl, uploadPath, password);
 
-    // Step 3: upload any missing chunks (no-op when neededChunks is empty).
-    // Use purl from handshake response as the chunk upload endpoint — this
-    // matches what the u2c.py reference client does.
+    // If the content is already fully present, STOP. Sending a second
+    // (confirm) handshake here would re-register the now-existing name and make
+    // copyparty serialise a duplicate `<name>-<time>-<token>` file. (Issue 2.)
+    if (handshakeResult.fullyConfirmed) {
+      _log?.log('✓ already on server (hash verified, no upload): '
+          'wark=${handshakeResult.wark}');
+      return (hashed, handshakeResult, true);
+    }
+
+    // Step 3: upload the missing chunks to purl (matches u2c.py).
     await uploadChunks(
       hashed,
       handshakeResult.wark,
@@ -702,7 +713,8 @@ class CopypartyUploaderService {
       onProgress: onUploadProgress,
     );
 
-    // Step 4: confirmation handshake — triggers server finalization (.PARTIAL → file).
+    // Step 4: confirmation handshake — triggers server finalization
+    // (.PARTIAL → file). Only needed because we actually uploaded chunks.
     final confirmed =
         await handshake(hashed, hostUrl, uploadPath, password, label: 'confirm');
     if (!confirmed.fullyConfirmed) {
@@ -715,7 +727,7 @@ class CopypartyUploaderService {
       throw CopypartyUploadException('Upload confirmation failed: $detail');
     }
     _log?.log('✓ confirmed: wark=${confirmed.wark}');
-    return (hashed, confirmed);
+    return (hashed, confirmed, false);
   }
 
   // ---------------------------------------------------------------------------
