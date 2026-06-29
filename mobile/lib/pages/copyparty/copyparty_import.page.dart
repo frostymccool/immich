@@ -298,11 +298,23 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
   @override
   void initState() {
     super.initState();
+    // Default selection (Q4=A): tick only files NOT already on the server by
+    // name+size. Files that match are likely present (hash still unverified)
+    // and start unticked.
     _selectedPaths = widget.session.uploadSets
         .expand((s) => s.files)
-        .where((f) => !f.alreadyUploaded)
+        .where((f) => !_looksPresent(f))
         .map((f) => f.localPath)
         .toSet();
+  }
+
+  /// True when live verification says a file with this name AND size is already
+  /// on the server (hash not necessarily checked).
+  static bool _looksPresent(UploadFile f) {
+    final v = f.verification;
+    return v != null &&
+        v.filenamePresent == VerifyState.yes &&
+        v.sizeMatches == VerifyState.yes;
   }
 
   Set<String> _allPaths(List<UploadSet> sets) =>
@@ -350,6 +362,63 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
         if (override != null) file.destination = override;
       }
     }
+  }
+
+  Future<void> _runVerificationSelfTest() async {
+    final paths = _selectedPaths.toList();
+    if (paths.isEmpty) return;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const AlertDialog(
+        content: Row(
+          children: [
+            SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)),
+            SizedBox(width: 18),
+            Expanded(child: Text('Verifying selected files…')),
+          ],
+        ),
+      ),
+    );
+    List<String> lines;
+    try {
+      lines = await ref.read(importSessionProvider.notifier).runVerificationSelfTest(paths);
+    } catch (e) {
+      lines = ['error: $e'];
+    }
+    if (!mounted) return;
+    Navigator.of(context).pop(); // close progress
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Verification self-test'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              lines.isEmpty ? 'No results.' : lines.join('\n\n'),
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              final path = await ref.read(copypartyLoggerProvider).flush();
+              final box = ctx.findRenderObject() as RenderBox?;
+              await Share.shareXFiles(
+                [XFile(path)],
+                subject: 'Copyparty verification self-test',
+                sharePositionOrigin:
+                    box != null ? box.localToGlobal(Offset.zero) & box.size : null,
+              );
+            },
+            child: const Text('Share log'),
+          ),
+          FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        ],
+      ),
+    );
   }
 
   Future<void> _runSelfTest() async {
@@ -516,7 +585,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
           builder: (ctx) {
             final alreadyCount = sets
                 .expand((s) => s.files)
-                .where((f) => f.alreadyUploaded)
+                .where(_OptionsStepState._looksPresent)
                 .length;
             if (alreadyCount == 0) return const SizedBox.shrink();
             return Container(
@@ -534,7 +603,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      '$alreadyCount file${alreadyCount == 1 ? '' : 's'} already uploaded — unchecked by default.',
+                      '$alreadyCount file${alreadyCount == 1 ? '' : 's'} already on the server by name+size (hash not checked) — unchecked by default.',
                       style: ctx.textTheme.bodySmall?.copyWith(
                         color: ctx.colorScheme.onSecondaryContainer,
                       ),
@@ -590,6 +659,14 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                     onPressed: selectedCount > 0 ? _runSelfTest : null,
                     icon: const Icon(Icons.science_outlined),
                     label: const Text('Run upload self-test (diagnostics)'),
+                  ),
+                ),
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButton.icon(
+                    onPressed: selectedCount > 0 ? _runVerificationSelfTest : null,
+                    icon: const Icon(Icons.fact_check_outlined, size: 18),
+                    label: const Text('Run verification self-test'),
                   ),
                 ),
               ],
@@ -706,25 +783,12 @@ class _SelectableFileTile extends StatelessWidget {
               : null,
           dense: true,
         ),
-        if (file.alreadyUploaded)
+        // Live server state (Issue 3): name/size from copyparty, NOT a stored
+        // receipt. Hash is honestly shown as unchecked until upload/verify.
+        if (file.verification != null)
           Padding(
-            padding: const EdgeInsets.only(left: 72, bottom: 4),
-            child: Row(
-              children: [
-                Icon(Icons.check_circle_outline,
-                    size: 13,
-                    color: Colors.green.shade600),
-                const SizedBox(width: 4),
-                Text(
-                  file.alreadyUploadedToImmich
-                      ? 'Confirmed: copyparty + Immich'
-                      : 'Confirmed: copyparty',
-                  style: context.textTheme.labelSmall?.copyWith(
-                    color: Colors.green.shade600,
-                  ),
-                ),
-              ],
-            ),
+            padding: const EdgeInsets.only(left: 72, bottom: 6),
+            child: _LiveChips(v: file.verification!),
           ),
         // Destination selector — only for files Immich handles natively
         if (file.isNativeImmichFile && selected)
@@ -757,6 +821,48 @@ class _SelectableFileTile extends StatelessWidget {
               onSelectionChanged: (s) => onDestinationChange(s.first),
             ),
           ),
+      ],
+    );
+  }
+}
+
+/// Compact live name/size/partial chips + honest "hash not checked" for the
+/// import picker (Issue 3/4). Mirrors the cleanup-page evidence model.
+class _LiveChips extends StatelessWidget {
+  final ServerFileVerification v;
+  const _LiveChips({required this.v});
+
+  Widget _chip(BuildContext context, IconData icon, Color color, String label) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 3),
+          Text(label, style: context.textTheme.labelSmall?.copyWith(color: color)),
+        ],
+      );
+
+  Widget _state(BuildContext context, String label, VerifyState s) {
+    final (icon, color) = switch (s) {
+      VerifyState.yes => (Icons.check_circle, Colors.green.shade600),
+      VerifyState.no => (Icons.cancel, context.colorScheme.error),
+      VerifyState.unknown => (Icons.help_outline, context.colorScheme.onSurfaceVariant),
+    };
+    return _chip(context, icon, color, label);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final grey = context.colorScheme.onSurfaceVariant;
+    return Wrap(
+      spacing: 8,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        _state(context, 'name', v.filenamePresent),
+        _state(context, 'size', v.sizeMatches),
+        if (v.partialExists == VerifyState.yes)
+          _chip(context, Icons.cancel, context.colorScheme.error, 'partial exists'),
+        _chip(context, Icons.help_outline, grey, 'hash not checked'),
       ],
     );
   }
@@ -978,7 +1084,9 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                     isFailed
                         ? file.errorMessage ?? 'Upload failed'
                         : isDone
-                            ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · Done'
+                            ? (file.alreadyOnServer
+                                ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · already on server (hash verified)'
+                                : '${formatHumanReadableBytes(file.sizeBytes, 1)} · Done')
                             : '${formatHumanReadableBytes(file.sizeBytes, 1)} · '
                               '${formatHumanReadableBytes(file.uploadedBytes, 1)} transferred · '
                               '$_speed',
@@ -1281,29 +1389,50 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
     WidgetRef ref,
     List<UploadFile> files,
   ) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete Source Files'),
-        content: Text(
-          'Delete ${files.length} file${files.length == 1 ? '' : 's'} '
-          'from the memory card?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+    // Status-driven (Issue 5): one-tap all-clear when every file is safe to
+    // delete (copyparty-confirmed + Immich-ok), else an explicit warning.
+    final unsafe = files.where((f) => !f.safeToDelete).toList();
+    final bool? confirm;
+    if (unsafe.isEmpty) {
+      confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Delete ${files.length} source '
+              'file${files.length == 1 ? '' : 's'}?'),
+          content: const Text(
+            'All selected files are confirmed on copyparty (and in Immich where '
+            'applicable). This frees space on the memory card and cannot be undone.',
           ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: ctx.colorScheme.error,
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text('Delete all ${files.length}'),
             ),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
+          ],
+        ),
+      );
+    } else {
+      confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Some files not confirmed'),
+          content: Text(
+            '${unsafe.length} of ${files.length} selected '
+            'file${files.length == 1 ? '' : 's'} could not be confirmed as safely '
+            'stored. Deleting them risks data loss. Delete anyway?',
           ),
-        ],
-      ),
-    );
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: ctx.colorScheme.error),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Delete anyway'),
+            ),
+          ],
+        ),
+      );
+    }
 
     if (confirm == true) {
       int deleted = 0;

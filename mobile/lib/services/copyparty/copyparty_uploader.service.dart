@@ -339,6 +339,37 @@ class CopypartyUploaderService {
     return result;
   }
 
+  /// Lists the configured upload folder once (name → size). Used by the import
+  /// picker to verify many files against the server with a single request.
+  Future<Map<String, int>> listUploadFolder(
+    String hostUrl,
+    String uploadPath,
+    String password,
+  ) =>
+      listFolderSizes(_buildUri(hostUrl, uploadPath, ''), password);
+
+  /// Builds a name/size/partial verification for [filename] from an already
+  /// fetched folder listing (no network). Hash axis stays unchecked.
+  static ServerFileVerification verificationFromListing(
+    Map<String, int> sizes,
+    String filename,
+    int expectedSize, {
+    bool immichApplicable = false,
+  }) {
+    final serverSize = sizes[filename];
+    final present = serverSize != null && serverSize > 0;
+    final sizeOk = serverSize != null && serverSize == expectedSize;
+    final partial =
+        sizes.keys.any((n) => n.startsWith(filename) && n.endsWith('.PARTIAL'));
+    return ServerFileVerification(
+      filenamePresent: present ? VerifyState.yes : VerifyState.no,
+      sizeMatches:
+          serverSize == null ? VerifyState.unknown : (sizeOk ? VerifyState.yes : VerifyState.no),
+      partialExists: partial ? VerifyState.yes : VerifyState.no,
+      immichApplicable: immichApplicable,
+    );
+  }
+
   /// Cheap presence check (states 1-3) for a file via a single folder listing.
   /// Does NOT re-hash — that is the separate [verifyHash] step.
   Future<ServerFileVerification> verifyPresence({

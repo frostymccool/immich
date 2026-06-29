@@ -11,6 +11,7 @@ import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
 import 'package:immich_mobile/infrastructure/repositories/copyparty_receipt.repository.dart';
+import 'package:immich_mobile/providers/api.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/db.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/repositories/secure_storage.repository.dart';
@@ -174,12 +175,38 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         directoryPath,
         onFileFound: (count) => state = state.copyWith(scannedFiles: count),
       );
-      // Check which files have already been uploaded
       for (final set in sets) {
         for (final file in set.files) {
           file.existingReceipt = await _receiptRepo.findByLocalPath(file.localPath);
         }
       }
+
+      // LIVE server verification (Issue 3): trust the server, not receipts.
+      // One folder listing covers every file (all upload to config.uploadPath).
+      // Name/size/partial only — the content hash stays unchecked until upload.
+      if (config.hostUrl.isNotEmpty) {
+        try {
+          final password = await _ref.read(copypartyPasswordProvider.future);
+          final sizes = await _uploader.listUploadFolder(
+            config.hostUrl,
+            config.uploadPath,
+            password,
+          );
+          for (final set in sets) {
+            for (final file in set.files) {
+              file.verification = CopypartyUploaderService.verificationFromListing(
+                sizes,
+                file.filename,
+                file.sizeBytes,
+                immichApplicable: file.needsImmich,
+              );
+            }
+          }
+        } catch (e) {
+          _log.log('scan: live verification skipped: $e');
+        }
+      }
+
       state = state.copyWith(
         step: ImportSessionStep.options,
         uploadSets: sets,
@@ -434,6 +461,63 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       _log.log(r.summaryLine);
     }
     return results;
+  }
+
+  /// Verification self-test: runs the FULL live verification (name/size/partial
+  /// from `?ls`, content hash via handshake, Immich by checksum) for each file
+  /// and logs a clear pass/fail summary. Lets the cleanup/verification logic be
+  /// validated empirically in one shot instead of round-tripping. Returns the
+  /// human-readable summary lines.
+  Future<List<String>> runVerificationSelfTest(List<String> filePaths) async {
+    final config = _ref.read(appConfigProvider).copyparty;
+    final password = await _ref.read(copypartyPasswordProvider.future);
+    final api = _ref.read(apiServiceProvider).assetsApi;
+    final now = DateTime.now();
+
+    _log.section('VERIFICATION SELF-TEST  (${filePaths.length} files)');
+    final lines = <String>[];
+    Map<String, int> sizes;
+    try {
+      sizes = await _uploader.listUploadFolder(config.hostUrl, config.uploadPath, password);
+    } catch (e) {
+      _log.log('listing failed: $e');
+      sizes = {};
+    }
+
+    for (final path in filePaths) {
+      final name = path.split('/').last;
+      final fileUrl =
+          '${config.hostUrl.trimRight()}/${_stripSlashes(config.uploadPath)}/$name';
+      try {
+        final size = await File(path).length();
+        var v = CopypartyUploaderService.verificationFromListing(sizes, name, size);
+        v = await _uploader.verifyHash(
+          fileUrl: fileUrl,
+          localPath: path,
+          password: password,
+          base: v,
+        );
+        VerifyState immich = VerifyState.unknown;
+        try {
+          immich = (await immichAssetIdByChecksum(api, path)) != null
+              ? VerifyState.yes
+              : VerifyState.no;
+        } catch (_) {}
+        v = v.copyWith(immich: immich, immichApplicable: immich != VerifyState.unknown);
+        final line = '$name → name=${v.filenamePresent.name} '
+            'size=${v.sizeMatches.name} partial=${v.partialExists.name} '
+            'hash=${v.hashFreshAt(now) ? "ok" : "no"} immich=${immich.name} '
+            'SAFE=${v.safeToDeleteAt(now)}';
+        _log.log(line);
+        lines.add(line);
+      } catch (e) {
+        final line = '$name → ERROR: $e';
+        _log.log(line);
+        lines.add(line);
+      }
+    }
+    _log.section('VERIFICATION SELF-TEST done');
+    return lines;
   }
 
   Future<UploadResult> _uploadToImmich(UploadFile file) async {

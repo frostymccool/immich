@@ -27,6 +27,9 @@ class UploadFile {
   // True when the upload was skipped because the content was already on the
   // server (hash matched at handshake) — surfaced as "already on server".
   bool alreadyOnServer;
+  // Live server verification (name/size/partial) computed at scan time; the
+  // hash axis stays unchecked until upload or an explicit verify. (Issue 3)
+  ServerFileVerification? verification;
 
   UploadFile({
     required this.localPath,
@@ -46,6 +49,7 @@ class UploadFile {
     this.immichAssetId,
     this.existingReceipt,
     this.alreadyOnServer = false,
+    this.verification,
   }) : destination = destination ??
            (isNativeImmichFile ? UploadDestination.both : UploadDestination.copypartyOnly);
 
