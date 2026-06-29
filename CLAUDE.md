@@ -244,6 +244,70 @@ Diagnostic tooling that already exists — use it, don't rebuild it:
 
 ---
 
+## Copyparty cleanup-phase plan (PENDING — agreed after build 50)
+
+Uploads work (build 49). These 9 follow-up issues are the agreed next work,
+captured from on-device testing. **Locked design decisions (asked + answered):**
+- **Picker hashing [A]**: name/size verified LIVE on scan; the content HASH is
+  checked only at upload time (the handshake) or via a per-file "Verify hash"
+  button. Show "hash not checked" honestly until then. (Fast scans.)
+- **Immich presence [B]**: determined by **file CHECKSUM** via Immich's
+  bulk-upload-check endpoint, NOT just the stored asset id — user wants
+  certainty before any deletion.
+- **Delete UX [A]**: smart — one-tap "Delete all N" when every selected file is
+  hash-verified on copyparty AND Immich-good; drop to a per-file pick-list only
+  when something is unverified (unsafe rows start unticked).
+- **Picker default selection [A]**: tick only files whose name+size do NOT match
+  the server; already-present ones start unticked.
+
+**Unifying design**: ONE verification model — extend `ServerFileVerification`
+(name / size / partial / hash) with an Immich axis — used on BOTH the import
+picker and the cleanup page. NEVER trust a stored receipt as proof; always
+verify live. (Proposal mockups were rendered in-session via headless Chromium.)
+
+### Phase 1 — upload correctness & honesty
+1. **(Issue 2) Duplicate `-<time>-<token>` files.** `uploadFile` must NOT send
+   the confirm handshake when the INITIAL handshake already returns
+   `fullyConfirmed` (content deduped / already complete). The redundant confirm
+   re-registers the now-existing name → copyparty serialises a duplicate. Return
+   immediately when init is fullyConfirmed.
+2. **(Issue 1) False "Completed with errors".** Completion screen must count
+   only ATTEMPTED files (`status != pending`). Skipped/unselected files must not
+   count toward cp/immich needed totals or the error state.
+3. **(Issue 6) Upload rate (MiB/s) missing.** Fix the speed calc / progress
+   wiring (likely too few ticks now chunks are 1 MiB; ensure onUploadProgress
+   drives a visible live rate).
+
+### Phase 2 — unified live verification (picker + cleanup)
+4. **(Issue 3) Picker trusts receipts.** Verify LIVE (copyparty `?ls` name+size)
+   instead of the receipt DB; drop the blanket "Confirmed: copyparty"; show
+   "hash not checked" honestly.
+5. **(Issue 4) Hash drives skip/upload.** At upload, if the handshake is
+   `fullyConfirmed` (hash already on server) skip the byte upload and show
+   "already on server — hash verified"; else upload + confirm. Make hash state
+   visible per file.
+6. **(Issue 9) Partial/name accuracy + wording.** Treat a 0-byte file + a
+   `.PARTIAL` sibling as NOT present / incomplete. Relabel affirmatively:
+   "⚠ partial exists" (red) when one exists; "no partial ✓" only when none.
+   Re-verify on open / refresh — no stale snapshots.
+7. **(Issue 7) Immich axis on cleanup (and picker).** Per-file Immich presence
+   by checksum (decision B); "CP-only" files show Immich n/a.
+
+### Phase 3 — delete & recovery UX
+8. **(Issue 5) Status-driven delete.** All-verified → one-tap "Delete all N"
+   with an explicit all-clear; mixed → per-file pick-list with unsafe rows
+   unticked. Safe = copyparty hash-verified AND (Immich present OR not
+   Immich-bound). Applies to both the completion screen and Pending Cleanup.
+9. **(Issue 8) Recover from failed Verify.** On Pending Cleanup, a failed Verify
+   offers an "Upload now" action to re-upload that file (cleanup doubles as
+   recovery).
+
+Immich checksum lookup: use the generated openapi `AssetsApi` bulk-upload-check
+(`/assets/bulk-upload-check`; checksum = base64 SHA-1) — confirm the exact
+generated method name during implementation.
+
+---
+
 ## Test suite
 
 Run with `mise //mobile:test` (= `flutter test`). All tests must pass.
