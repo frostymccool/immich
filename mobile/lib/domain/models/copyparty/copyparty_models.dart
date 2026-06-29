@@ -205,6 +205,13 @@ class ServerFileVerification {
   /// this session.
   final DateTime? hashValidatedAt;
 
+  /// Immich presence (by checksum). `unknown` = not checked yet.
+  final VerifyState immich;
+
+  /// Whether Immich applies to this file at all. false = copyparty-only file
+  /// (Immich shown as "n/a", and it never blocks deletion).
+  final bool immichApplicable;
+
   /// Set when the listing/verification call itself failed (network, auth…).
   final String? error;
 
@@ -213,6 +220,8 @@ class ServerFileVerification {
     this.sizeMatches = VerifyState.unknown,
     this.partialExists = VerifyState.unknown,
     this.hashValidatedAt,
+    this.immich = VerifyState.unknown,
+    this.immichApplicable = false,
     this.error,
   });
 
@@ -222,19 +231,31 @@ class ServerFileVerification {
       hashValidatedAt != null &&
       now.difference(hashValidatedAt!) < const Duration(minutes: 2);
 
-  /// Strong enough to safely delete the local original: present, same size,
-  /// no lingering partial, and a fresh hash validation.
-  bool stronglyVerifiedAt(DateTime now) =>
+  /// Copyparty side is fully proven: present, same size, no lingering partial,
+  /// and a fresh hash validation.
+  bool copypartyVerifiedAt(DateTime now) =>
       filenamePresent == VerifyState.yes &&
       sizeMatches == VerifyState.yes &&
       partialExists != VerifyState.yes &&
       hashFreshAt(now);
+
+  /// Immich axis is satisfied: either it doesn't apply (CP-only) or the file
+  /// is confirmed present in Immich.
+  bool get immichOk => !immichApplicable || immich == VerifyState.yes;
+
+  /// Safe to delete the local original: copyparty hash-verified AND Immich-ok.
+  bool safeToDeleteAt(DateTime now) => copypartyVerifiedAt(now) && immichOk;
+
+  /// Back-compat alias used by the cleanup picker default-selection logic.
+  bool stronglyVerifiedAt(DateTime now) => safeToDeleteAt(now);
 
   ServerFileVerification copyWith({
     VerifyState? filenamePresent,
     VerifyState? sizeMatches,
     VerifyState? partialExists,
     DateTime? hashValidatedAt,
+    VerifyState? immich,
+    bool? immichApplicable,
     String? error,
   }) =>
       ServerFileVerification(
@@ -242,6 +263,8 @@ class ServerFileVerification {
         sizeMatches: sizeMatches ?? this.sizeMatches,
         partialExists: partialExists ?? this.partialExists,
         hashValidatedAt: hashValidatedAt ?? this.hashValidatedAt,
+        immich: immich ?? this.immich,
+        immichApplicable: immichApplicable ?? this.immichApplicable,
         error: error,
       );
 }

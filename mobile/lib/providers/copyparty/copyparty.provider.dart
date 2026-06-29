@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:openapi/api.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
@@ -20,6 +22,29 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 const _copypartyPasswordKey = 'copyparty_password';
+
+/// Returns the Immich asset id if a file with this content already exists in
+/// Immich (matched by CHECKSUM, decision B), or null if not present. Returns
+/// the sentinel 'present' when Immich confirms a duplicate but gives no id.
+/// Throws on network/API failure so callers can show an error state.
+Future<String?> immichAssetIdByChecksum(AssetsApi api, String localPath) async {
+  // Immich identifies content by SHA-1 (base64). Camera files are tens of MB,
+  // so reading fully is acceptable for an on-demand verify.
+  final bytes = await File(localPath).readAsBytes();
+  final sha1b64 = base64.encode(sha1.convert(bytes).bytes);
+  final resp = await api.checkBulkUpload(
+    AssetBulkUploadCheckDto(
+      assets: [AssetBulkUploadCheckItem(checksum: sha1b64, id: localPath)],
+    ),
+  );
+  if (resp == null || resp.results.isEmpty) return null;
+  final r = resp.results.first;
+  // 'reject' with the duplicate reason means the content is already in Immich.
+  if (r.action == AssetUploadAction.reject) {
+    return r.assetId.isPresent ? r.assetId.value : 'present';
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Service providers

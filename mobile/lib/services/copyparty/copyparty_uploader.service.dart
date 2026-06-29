@@ -354,15 +354,22 @@ class CopypartyUploaderService {
       final folderUri = fileUri.replace(pathSegments: [...segs, ''], query: '');
 
       final sizes = await listFolderSizes(folderUri, password);
-      final present = sizes.containsKey(filename);
-      final sizeOk = present && sizes[filename] == expectedSize;
-      // copyparty partials are named "<filename>-<time>-<token>.<ext>" (we saw
-      // this in the logs) or, older style, "<filename>.PARTIAL".
-      final partial = sizes.keys.any((n) => n != filename && n.startsWith(filename));
+
+      // An in-progress copyparty upload appears as a 0-byte placeholder named
+      // exactly <filename> PLUS a "<filename>.PARTIAL" (the sparse data file).
+      // So a 0-byte file is NOT "present" — it's an incomplete upload. (Issue 9)
+      final serverSize = sizes[filename];
+      final present = serverSize != null && serverSize > 0;
+      final sizeOk = serverSize != null && serverSize == expectedSize;
+
+      // A lingering partial is any entry for this file ending in ".PARTIAL"
+      // (covers "<filename>.PARTIAL" and "<filename>-<time>-<token>.ext.PARTIAL").
+      final partial =
+          sizes.keys.any((n) => n.startsWith(filename) && n.endsWith('.PARTIAL'));
 
       return ServerFileVerification(
         filenamePresent: present ? VerifyState.yes : VerifyState.no,
-        sizeMatches: !present
+        sizeMatches: serverSize == null
             ? VerifyState.unknown
             : (sizeOk ? VerifyState.yes : VerifyState.no),
         partialExists: partial ? VerifyState.yes : VerifyState.no,
