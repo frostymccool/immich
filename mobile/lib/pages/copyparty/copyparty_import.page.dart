@@ -50,7 +50,10 @@ class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
           ImportSessionStep.idle => const _DirectoryPickerStep(),
           ImportSessionStep.scanning => _ScanningStep(session),
           ImportSessionStep.options => _OptionsStep(session),
-          ImportSessionStep.uploading => _UploadProgressStep(session),
+          ImportSessionStep.uploading => _UploadProgressStep(
+              session,
+              onCancel: () => ref.read(importSessionProvider.notifier).cancelUpload(),
+            ),
           ImportSessionStep.complete => _CompletionStep(session),
         },
       ),
@@ -1008,7 +1011,30 @@ class _LiveChips extends StatelessWidget {
 
 class _UploadProgressStep extends StatelessWidget {
   final ImportSessionState session;
-  const _UploadProgressStep(this.session);
+  final VoidCallback onCancel;
+  const _UploadProgressStep(this.session, {required this.onCancel});
+
+  Future<void> _confirmCancel(BuildContext context) async {
+    final stop = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Stop uploading?'),
+        content: const Text(
+          'This stops the current upload. Files already uploaded are kept on '
+          'the server; the rest can be resumed later from where they left off.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep uploading')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: ctx.colorScheme.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Stop'),
+          ),
+        ],
+      ),
+    );
+    if (stop == true) onCancel();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1065,6 +1091,27 @@ class _UploadProgressStep extends StatelessWidget {
             itemCount: visibleSets.length,
             itemBuilder: (ctx, i) =>
                 _ProgressSetSection(set: visibleSets[i], selectedPaths: selected),
+          ),
+        ),
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+            child: SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => _confirmCancel(context),
+                icon: const Icon(Icons.stop_circle_outlined),
+                label: const Text('Stop uploading'),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48),
+                  foregroundColor: context.colorScheme.error,
+                  side: BorderSide(
+                    color: context.colorScheme.error.withValues(alpha: 0.5),
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ],

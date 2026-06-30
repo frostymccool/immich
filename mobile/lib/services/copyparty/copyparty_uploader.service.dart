@@ -470,8 +470,9 @@ class CopypartyUploaderService {
     String wark,
     String chunkHash,
     Uint8List chunkBytes,
-    int chunkIdx,
-  ) async {
+    int chunkIdx, {
+    Completer<void>? cancelToken,
+  }) async {
     // X-Up2k-Stat is optional progress telemetry (u2c.py only sends it "if
     // stats"); omit it rather than risk a malformed value confusing the server.
     final headers = {
@@ -486,7 +487,33 @@ class CopypartyUploaderService {
     request.headers.addAll(headers);
     request.bodyBytes = chunkBytes;
 
-    final response = await _client.send(request);
+    // A stuck socket (bad hotel/airport wifi) can hang a chunk POST forever.
+    // Bound it with a stall timeout AND let the user cancel mid-flight: race
+    // the send against the cancel token so "Cancel" takes effect immediately
+    // instead of waiting for the timeout.
+    final sendFuture = _client
+        .send(request)
+        .timeout(const Duration(seconds: 120),
+            onTimeout: () => throw const CopypartyUploadException(
+                'Chunk upload stalled (no response in 120s)'));
+    final http.StreamedResponse response;
+    if (cancelToken != null) {
+      final winner = await Future.any<http.StreamedResponse?>([
+        sendFuture,
+        cancelToken.future.then<http.StreamedResponse?>((_) => null),
+      ]);
+      if (winner == null) {
+        // Cancelled: drain/ignore the in-flight response when it arrives so it
+        // doesn't surface as an unhandled error, then bail.
+        unawaited(sendFuture
+            .then((r) => r.stream.drain<void>().catchError((_) {}))
+            .catchError((_) {}));
+        throw const CopypartyCancelledException();
+      }
+      response = winner;
+    } else {
+      response = await sendFuture;
+    }
     final statusCode = response.statusCode;
     final respBody = await response.stream.bytesToString();
     _log?.response(statusCode, headers: response.headers, body: respBody);
@@ -524,6 +551,7 @@ class CopypartyUploaderService {
     String password, {
     int parallelism = 2,
     void Function(int chunksDone, int chunksTotal)? onProgress,
+    Completer<void>? cancelToken,
   }) async {
     if (neededChunkIndices.isEmpty) {
       return;
@@ -541,6 +569,9 @@ class CopypartyUploaderService {
     final futures = neededChunkIndices.map((chunkIdx) async {
       await semaphore.acquire();
       try {
+        if (cancelToken?.isCompleted ?? false) {
+          throw const CopypartyCancelledException();
+        }
         final start = chunkIdx * file.chunkSizeBytes;
         final end = (start + file.chunkSizeBytes).clamp(0, file.totalBytes);
         final chunkBytes = await _readChunk(file.path, start, end - start);
@@ -550,6 +581,7 @@ class CopypartyUploaderService {
           file.chunkHashes[chunkIdx],
           chunkBytes,
           chunkIdx,
+          cancelToken: cancelToken,
         );
         done++;
         onProgress?.call(done, neededChunkIndices.length);
@@ -730,13 +762,22 @@ class CopypartyUploaderService {
     int parallelism = 2,
     void Function(int bytesHashed, int totalBytes)? onHashProgress,
     void Function(int chunksDone, int chunksTotal)? onUploadProgress,
+    Completer<void>? cancelToken,
   }) async {
     _log?.section('UPLOAD ${filePath.split('/').last}');
     _log?.log('host=$hostUrl  uploadPath="$uploadPath"  parallelism=$parallelism');
 
+    void throwIfCancelled() {
+      if (cancelToken?.isCompleted ?? false) {
+        throw const CopypartyCancelledException();
+      }
+    }
+
+    throwIfCancelled();
     // Step 1: hash
     final hashed = await hashFile(filePath, onProgress: onHashProgress);
 
+    throwIfCancelled();
     // Step 2: initial handshake — find out which chunks the server needs.
     // This IS the content hash check: if it comes back fullyConfirmed, the
     // file's bytes are already on the server.
@@ -762,8 +803,10 @@ class CopypartyUploaderService {
       password,
       parallelism: parallelism,
       onProgress: onUploadProgress,
+      cancelToken: cancelToken,
     );
 
+    throwIfCancelled();
     // Step 4: confirmation handshake — triggers server finalization
     // (.PARTIAL → file). Only needed because we actually uploaded chunks.
     final confirmed =
@@ -897,4 +940,15 @@ class CopypartyUploadException implements Exception {
 
   @override
   String toString() => 'CopypartyUploadException: $message';
+}
+
+/// Thrown when an upload is cancelled by the user (via the cancel token).
+/// Distinct from [CopypartyUploadException] so callers can treat a deliberate
+/// cancel differently from a real failure.
+class CopypartyCancelledException implements Exception {
+  final String message;
+  const CopypartyCancelledException([this.message = 'Upload cancelled']);
+
+  @override
+  String toString() => 'CopypartyCancelledException: $message';
 }

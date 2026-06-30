@@ -181,7 +181,28 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   ImportSessionNotifier(this._uploader, this._receiptRepo, this._immichUploadRepo, this._ref)
       : super(const ImportSessionState());
 
-  void reset() => state = const ImportSessionState();
+  /// Completed when the user cancels the in-progress upload. The uploader
+  /// races its in-flight chunk POST against this, and the per-file loop checks
+  /// it between files, so cancellation takes effect promptly even on a stalled
+  /// connection.
+  Completer<void>? _uploadCancelToken;
+
+  bool get isCancelling => _uploadCancelToken?.isCompleted ?? false;
+
+  /// Request cancellation of the current upload run. Safe to call repeatedly.
+  void cancelUpload() {
+    final token = _uploadCancelToken;
+    if (token != null && !token.isCompleted) {
+      _log.log('UPLOAD CANCEL requested by user');
+      token.complete();
+      _notify();
+    }
+  }
+
+  void reset() {
+    cancelUpload();
+    state = const ImportSessionState();
+  }
 
   Future<void> scan(String directoryPath) async {
     state = state.copyWith(
@@ -242,6 +263,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         ? selectedFilePaths.length
         : state.totalFiles;
 
+    final cancelToken = _uploadCancelToken = Completer<void>();
+
     state = state.copyWith(
       step: ImportSessionStep.uploading,
       completedFiles: 0,
@@ -249,8 +272,14 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       selectedPaths: selectedFilePaths,
     );
 
+    bool cancelled = false;
     for (final set in state.uploadSets) {
+      if (cancelled) break;
       for (final file in set.files) {
+        if (cancelToken.isCompleted) {
+          cancelled = true;
+          break;
+        }
         if (selectedFilePaths != null && !selectedFilePaths.contains(file.localPath)) {
           continue;
         }
@@ -287,6 +316,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                 file.uploadedBytes = (fileSizeBytes * (0.2 + 0.8 * chunkProgress)).round();
                 _notify();
               },
+              cancelToken: cancelToken,
             );
 
             file.sha512 = hashed.fileHash;
@@ -350,6 +380,15 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
 
           file.status = UploadFileStatus.receiptWritten;
           state = state.copyWith(completedFiles: state.completedFiles + 1);
+        } on CopypartyCancelledException {
+          // User cancelled mid-file: leave it pending (not failed) so it can be
+          // resumed cleanly next run, and stop the loop.
+          file.status = UploadFileStatus.pending;
+          file.uploadedBytes = 0;
+          cancelled = true;
+          _log.log('-- CANCELLED at ${file.filename}');
+          _notify();
+          break;
         } catch (e) {
           file.status = UploadFileStatus.failed;
           file.errorMessage = e.toString();
@@ -359,9 +398,14 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       }
     }
 
-    _log.log('IMPORT SESSION complete: '
+    _uploadCancelToken = null;
+    _log.log('IMPORT SESSION ${cancelled ? 'cancelled' : 'complete'}: '
         '${state.completedFiles}/${state.totalFiles} files done');
-    state = state.copyWith(step: ImportSessionStep.complete);
+    // Only advance to the completion screen if we're still uploading — a
+    // concurrent reset() (e.g. the user left the page) must not be clobbered.
+    if (state.step == ImportSessionStep.uploading) {
+      state = state.copyWith(step: ImportSessionStep.complete);
+    }
   }
 
   /// Diagnostic self-test: uploads each selected file under several controlled
