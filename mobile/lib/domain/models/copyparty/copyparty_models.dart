@@ -30,6 +30,11 @@ class UploadFile {
   // Live server verification (name/size/partial) computed at scan time; the
   // hash axis stays unchecked until upload or an explicit verify. (Issue 3)
   ServerFileVerification? verification;
+  // The copyparty FOLDER URL the file was actually uploaded to. With FB9
+  // "Recreate folder structure" this is the mirrored subfolder, not the base
+  // upload path — the completion-screen delete must re-verify against THIS,
+  // not config.uploadPath, or every mirrored upload looks "not present".
+  String? uploadFolderUrl;
 
   UploadFile({
     required this.localPath,
@@ -255,23 +260,30 @@ class ServerFileVerification {
   /// Back-compat alias used by the cleanup picker default-selection logic.
   bool stronglyVerifiedAt(DateTime now) => safeToDeleteAt(now);
 
+  /// `error` and `hashValidatedAt` are null-coalesced (a copyWith that omits
+  /// them PRESERVES the existing value) so a partial update can never silently
+  /// erase an offline/auth error or a fresh hash. To CLEAR them, pass the
+  /// explicit `clearError` / `clearHash` flags — used on every failed/non-
+  /// success verify so a file that can no longer be proven drops out of "safe".
   ServerFileVerification copyWith({
     VerifyState? filenamePresent,
     VerifyState? sizeMatches,
     VerifyState? partialExists,
     DateTime? hashValidatedAt,
+    bool clearHash = false,
     VerifyState? immich,
     bool? immichApplicable,
     String? error,
+    bool clearError = false,
   }) =>
       ServerFileVerification(
         filenamePresent: filenamePresent ?? this.filenamePresent,
         sizeMatches: sizeMatches ?? this.sizeMatches,
         partialExists: partialExists ?? this.partialExists,
-        hashValidatedAt: hashValidatedAt ?? this.hashValidatedAt,
+        hashValidatedAt: clearHash ? null : (hashValidatedAt ?? this.hashValidatedAt),
         immich: immich ?? this.immich,
         immichApplicable: immichApplicable ?? this.immichApplicable,
-        error: error,
+        error: clearError ? null : (error ?? this.error),
       );
 }
 

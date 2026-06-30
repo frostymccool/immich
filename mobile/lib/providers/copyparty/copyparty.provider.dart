@@ -286,10 +286,16 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             file.alreadyOnServer = alreadyOnServer;
             file.status = UploadFileStatus.confirmed;
 
+            // Record the ACTUAL folder this file went to (mirrored sub-path
+            // under FB9) so the completion-screen delete re-verifies the right
+            // location, not the flat base path. (Review BLOCKER 1)
+            final uploadFolderUrl =
+                '${config.hostUrl.trimRight()}/${_stripSlashes(uploadPath)}';
+            file.uploadFolderUrl = uploadFolderUrl;
+
             // Write DB receipt — upload_confirmed=true since uploadFile() only
             // returns successfully after the confirmation handshake passes.
-            final uploadUrl =
-                '${config.hostUrl.trimRight()}/${_stripSlashes(uploadPath)}/${file.filename}';
+            final uploadUrl = '$uploadFolderUrl/${file.filename}';
             receiptId = await _receiptRepo.insert(
               CopypartyReceipt(
                 filename: file.filename,

@@ -270,6 +270,21 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
   bool _verifyFailed = false;
   bool _userTouched = false;
 
+  // Cancellation for the background Immich-by-checksum pass: it hashes every
+  // native file on the card, so leaving the picker or starting a new verify
+  // must stop the in-flight pass rather than let it keep reading the card and
+  // mutating shared UploadFile.verification objects. Each _verify() run bumps
+  // the generation; a loop iteration bails the moment its generation is stale
+  // or the widget is disposed. (Adversarial review HIGH 2/3)
+  bool _disposed = false;
+  int _verifyGeneration = 0;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -295,6 +310,8 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
   /// On a network failure, surfaces an offline state + Refresh.
   Future<void> _verify() async {
     if (_verifying) return;
+    // Invalidate any background Immich pass still running from a prior _verify.
+    final generation = ++_verifyGeneration;
     setState(() {
       _verifying = true;
       _verifyFailed = false;
@@ -342,14 +359,18 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     // update as each completes. Skipped if the listing failed above.
     final api = ref.read(apiServiceProvider).assetsApi;
     for (final f in files) {
-      if (!mounted) return;
+      // Bail immediately if disposed or a newer _verify run superseded us — do
+      // NOT start hashing the next (possibly multi-GB) file.
+      if (_disposed || generation != _verifyGeneration) return;
       if (!CopypartyFilePairer.isNativeImmichFilename(f.filename)) continue;
       try {
         final id = await immichAssetIdByChecksum(api, f.localPath);
+        // Re-check after the await: the user may have left or refreshed while
+        // this file was hashing. Don't mutate shared state for a stale run.
+        if (_disposed || generation != _verifyGeneration) return;
         f.verification = (f.verification ?? const ServerFileVerification()).copyWith(
           immich: id != null ? VerifyState.yes : VerifyState.no,
           immichApplicable: true,
-          error: f.verification?.error,
         );
         if (mounted) setState(() {});
       } catch (_) {}
@@ -1499,9 +1520,14 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
     List<UploadFile> files,
   ) async {
     // Status-driven (Issue 5) with a LIVE re-check right before deleting — we
-    // never trust the upload-time flag alone. A file is safe only if it's still
-    // present on the server now (name+size, no partial), its content hash was
-    // confirmed this session, and Immich is satisfied where it applies.
+    // never trust the upload-time flag alone. A file is safe only if it is
+    // STILL on the server now with a freshly RE-VALIDATED content hash (the
+    // same bar as the cleanup page — not the stale upload-time flag, and not
+    // name+size alone), and Immich is satisfied where it applies. The re-check
+    // runs against the file's ACTUAL upload folder (mirrored sub-path when FB9
+    // "Recreate folder structure" was used), not the flat base path. If the
+    // server is unreachable we BLOCK deletion rather than offer a "delete
+    // anyway" that loses the only local copy while offline. (Review C1/C2/BLOCKER1)
     final config = ref.read(appConfigProvider).copyparty;
     final uploader = ref.read(copypartyUploaderProvider);
     String password = '';
@@ -1511,29 +1537,94 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
     final cleanPath = config.uploadPath.replaceAll(RegExp(r'^/+|/+$'), '');
     final base = config.hostUrl.replaceAll(RegExp(r'/+$'), '');
 
+    // Visible progress for the sequential re-verify loop (MEDIUM 5) — on a
+    // metered/slow link this is N round-trips + a re-hash each; never freeze
+    // the UI silently.
+    final progress = ValueNotifier<int>(0);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        content: ValueListenableBuilder<int>(
+          valueListenable: progress,
+          builder: (ctx, done, _) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 16),
+              Expanded(child: Text('Re-verifying $done / ${files.length}…')),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    final now = DateTime.now();
     final unsafe = <UploadFile>[];
+    bool offline = false;
     for (final f in files) {
-      ServerFileVerification v;
+      // The folder the file was actually uploaded to (mirrored sub-path under
+      // FB9), falling back to the flat base path for legacy uploads.
+      final folderUrl = f.uploadFolderUrl ?? '$base/$cleanPath';
+      final fileUrl = '$folderUrl/${f.filename}';
       try {
-        v = await uploader.verifyPresence(
-          fileUrl: '$base/$cleanPath/${f.filename}',
+        // Cheap presence first; its failure is the clean "server unreachable"
+        // signal (the folder listing itself failed).
+        final presence = await uploader.verifyPresence(
+          fileUrl: fileUrl,
           filename: f.filename,
           expectedSize: f.sizeBytes,
           password: password,
         );
+        if (presence.error != null) {
+          offline = true;
+          unsafe.add(f);
+          progress.value++;
+          continue;
+        }
+        // Reachable → re-validate the content hash (the strong proof).
+        final v = await uploader.verifyHash(
+          fileUrl: fileUrl,
+          localPath: f.localPath,
+          password: password,
+          base: presence,
+          now: now,
+        );
+        final liveSafe =
+            v.copypartyVerifiedAt(now) && (!f.needsImmich || f.immichConfirmed);
+        if (!liveSafe) unsafe.add(f);
       } catch (_) {
-        v = const ServerFileVerification();
+        offline = true;
+        unsafe.add(f);
       }
-      final liveSafe = v.filenamePresent == VerifyState.yes &&
-          v.sizeMatches == VerifyState.yes &&
-          v.partialExists != VerifyState.yes &&
-          f.copypartyConfirmed &&
-          (!f.needsImmich || f.immichConfirmed);
-      if (!liveSafe) unsafe.add(f);
+      progress.value++;
     }
+    if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
+    progress.dispose();
     if (!context.mounted) return;
+
     final bool? confirm;
-    if (unsafe.isEmpty) {
+    if (offline) {
+      // Can't prove the server has the files → never offer "delete anyway".
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text("Can't reach copyparty"),
+          content: const Text(
+            'The server could not be reached, so these files cannot be confirmed '
+            'as safely stored. Deletion is blocked — try again when online.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+          ],
+        ),
+      );
+      return;
+    } else if (unsafe.isEmpty) {
       confirm = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(

@@ -448,12 +448,15 @@ class CopypartyUploaderService {
         );
       }
       // Server still needs chunks → the upload is incomplete/different content.
-      return base.copyWith(partialExists: VerifyState.yes);
+      // Clear any prior fresh-hash stamp: this re-verify just FAILED, so the
+      // file must drop out of "safe to delete" rather than coast on a stale ✓.
+      return base.copyWith(partialExists: VerifyState.yes, clearHash: true);
     } on CopypartyUploadException catch (e) {
       // 422 stale-partial path throws here — that IS a partial.
-      return base.copyWith(partialExists: VerifyState.yes, error: e.message);
+      return base.copyWith(partialExists: VerifyState.yes, error: e.message, clearHash: true);
     } catch (e) {
-      return base.copyWith(error: e.toString());
+      // Network/offline: we could not re-prove the hash, so drop the stale ✓.
+      return base.copyWith(error: e.toString(), clearHash: true);
     }
   }
 

@@ -122,14 +122,13 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       } catch (_) {
         immich = VerifyState.unknown;
       }
-      // Preserve any presence error (copyWith would otherwise clear it).
-      _mergeVerify(r.id!,
-          (cur) => cur.copyWith(immich: immich, immichApplicable: true, error: cur.error));
+      _mergeVerify(r.id!, (cur) => cur.copyWith(immich: immich, immichApplicable: true));
     }
   }
 
   /// Deep verify for one file: re-hash + handshake (copyparty) and re-check
-  /// Immich by checksum. Auto-selects the file if it becomes safe to delete.
+  /// Immich by checksum. Selection is user-driven (FB10) — this never changes
+  /// the ticked set; it only updates the verification evidence.
   Future<void> _verifyFile(CopypartyReceipt r) async {
     if (_verifying.contains(r.id)) return;
     setState(() {
@@ -163,8 +162,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       }
       if (!mounted) return;
       setState(() {
-        _verify[r.id!] =
-            cp.copyWith(immich: immich, immichApplicable: applicable, error: cp.error);
+        _verify[r.id!] = cp.copyWith(immich: immich, immichApplicable: applicable);
         _verifying.remove(r.id);
         _progress.remove(r.id);
       });
@@ -210,13 +208,19 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     final uploader = ref.read(copypartyUploaderProvider);
     final notifier = ref.read(importSessionProvider.notifier);
     final repo = ref.read(copypartyReceiptRepositoryProvider);
+    // Re-upload to the file's ORIGINAL folder (its receipt URL minus the
+    // filename), not the base upload path — otherwise an FB9 mirrored-folder
+    // file gets re-uploaded to the wrong place and stays unverifiable. (L1)
+    final fileUri = Uri.parse(r.copypartyUrl);
+    final segs = List<String>.from(fileUri.pathSegments)..removeLast();
+    final uploadPath = '/${segs.join('/')}';
     String? error;
     try {
       // Repair the copyparty side (hash 0-20%, chunk upload 20-100%).
       await uploader.uploadFile(
         r.localPath,
         config.hostUrl,
-        config.uploadPath,
+        uploadPath,
         _password,
         parallelism: config.parallelConnections,
         onHashProgress: (done, total) {
@@ -257,7 +261,11 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
 
   Future<void> _deleteSelected() async {
     final now = DateTime.now();
-    final toDelete = _existing.where((r) => _selected.contains(r.id)).toList();
+    // Exclude already-deleted rows defensively — they can't be deleted twice
+    // and must not inflate counts. (Review MEDIUM 7)
+    final toDelete = _existing
+        .where((r) => _selected.contains(r.id) && !_deleted.contains(r.id))
+        .toList();
     if (toDelete.isEmpty) return;
 
     final unsafe = toDelete
@@ -463,10 +471,16 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                             ),
                             style: FilledButton.styleFrom(
                               minimumSize: const Size.fromHeight(52),
-                              backgroundColor:
-                                  _selected.isEmpty ? null : context.colorScheme.error,
-                              foregroundColor:
-                                  _selected.isEmpty ? null : context.colorScheme.onError,
+                              // Destructive-red ONLY when the selection contains
+                              // unverified files; the all-clear delete uses the
+                              // normal primary colour so safe vs unsafe are
+                              // visually distinct before the dialog. (M2)
+                              backgroundColor: (_selected.isEmpty || allSelectedSafe)
+                                  ? null
+                                  : context.colorScheme.error,
+                              foregroundColor: (_selected.isEmpty || allSelectedSafe)
+                                  ? null
+                                  : context.colorScheme.onError,
                             ),
                           ),
                         ),
