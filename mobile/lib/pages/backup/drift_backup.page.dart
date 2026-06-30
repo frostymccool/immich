@@ -686,6 +686,31 @@ class _PreparingStatusState extends ConsumerState {
 class _CopypartyUploadsSection extends ConsumerWidget {
   const _CopypartyUploadsSection();
 
+  Future<void> _confirmCancel(BuildContext context, WidgetRef ref) async {
+    final stop = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Stop uploading?'),
+        content: const Text(
+          'This stops the current copyparty upload. Files already uploaded are '
+          'kept on the server; the rest can be resumed later from where they '
+          'left off.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep uploading')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: ctx.colorScheme.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Stop'),
+          ),
+        ],
+      ),
+    );
+    if (stop == true) {
+      ref.read(importSessionProvider.notifier).cancelUpload();
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final session = ref.watch(importSessionProvider);
@@ -715,10 +740,21 @@ class _CopypartyUploadsSection extends ConsumerWidget {
               Icon(Icons.cloud_upload_rounded,
                   size: 20, color: context.colorScheme.primary),
               const SizedBox(width: 8),
-              Text(
-                'Copyparty — ${active.length} uploading',
-                style: context.textTheme.titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w600),
+              Expanded(
+                child: Text(
+                  'Copyparty — ${active.length} uploading',
+                  style: context.textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w600),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: () => _confirmCancel(context, ref),
+                icon: const Icon(Icons.stop_circle_outlined, size: 18),
+                label: const Text('Stop'),
+                style: TextButton.styleFrom(
+                  foregroundColor: context.colorScheme.error,
+                  visualDensity: VisualDensity.compact,
+                ),
               ),
             ],
           ),
