@@ -236,7 +236,10 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     }
   }
 
-  Future<void> startUpload({Set<String>? selectedFilePaths}) async {
+  Future<void> startUpload({
+    Set<String>? selectedFilePaths,
+    bool createFolders = false,
+  }) async {
     final config = _ref.read(appConfigProvider).copyparty;
     final password = await _ref.read(copypartyPasswordProvider.future);
     final packageInfo = await PackageInfo.fromPlatform();
@@ -269,6 +272,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         if (file.status == UploadFileStatus.failed) {
           continue;
         }
+        // FB9: when "create folders" is on, mirror the file's subfolder
+        // (relative to the selected root) beneath the configured upload path.
+        final uploadPath = createFolders
+            ? _mirroredUploadPath(config.uploadPath, state.directoryPath, file.localPath)
+            : config.uploadPath;
         int? receiptId;
         try {
           // ---- Copyparty upload ----
@@ -280,7 +288,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             final (hashed, confirmed, alreadyOnServer) = await _uploader.uploadFile(
               file.localPath,
               config.hostUrl,
-              config.uploadPath,
+              uploadPath,
               password,
               parallelism: config.parallelConnections,
               onHashProgress: (done, total) {
@@ -305,7 +313,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             // Write DB receipt — upload_confirmed=true since uploadFile() only
             // returns successfully after the confirmation handshake passes.
             final uploadUrl =
-                '${config.hostUrl.trimRight()}/${_stripSlashes(config.uploadPath)}/${file.filename}';
+                '${config.hostUrl.trimRight()}/${_stripSlashes(uploadPath)}/${file.filename}';
             receiptId = await _receiptRepo.insert(
               CopypartyReceipt(
                 filename: file.filename,
@@ -320,19 +328,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             );
             file.dbRecordWritten = true;
 
-            if (config.writeReceipts) {
-              final written = await _uploader.writeReceiptFile(
-                hashed,
-                confirmed.wark,
-                config.hostUrl,
-                config.uploadPath,
-                packageInfo.version,
-              );
-              if (written) {
-                file.receiptWritten = true;
-                await _receiptRepo.markReceiptWritten(receiptId);
-              }
-            }
+            // FB11: the .cpreceipt sidecar file is redundant now that presence
+            // is verified live against the server; we no longer write it. The
+            // DB receipt (above) remains — Pending Cleanup needs it.
 
             if (config.autoDeleteAfterVerify && file.safeToDelete && !file.needsImmich) {
               try {
@@ -604,3 +602,19 @@ final importSessionProvider = StateNotifierProvider<ImportSessionNotifier, Impor
 );
 
 String _stripSlashes(String s) => s.replaceAll(RegExp(r'^/+|/+$'), '');
+
+/// Mirrors a file's subfolder (relative to the selected [rootDir]) beneath the
+/// configured [base] upload path (FB9). e.g. base="/uploads",
+/// rootDir="/sd/Camera", file="/sd/Camera/DCIM/100/clip.mp4" → "/uploads/DCIM/100".
+String _mirroredUploadPath(String base, String? rootDir, String fileLocalPath) {
+  final cleanBase = base.replaceAll(RegExp(r'/+$'), '');
+  if (rootDir == null) return base;
+  final slash = fileLocalPath.lastIndexOf('/');
+  if (slash < 0) return base;
+  final fileDir = fileLocalPath.substring(0, slash);
+  final root = rootDir.replaceAll(RegExp(r'/+$'), '');
+  if (fileDir == root) return base;
+  if (!fileDir.startsWith('$root/')) return base;
+  final rel = fileDir.substring(root.length).replaceAll(RegExp(r'^/+|/+$'), '');
+  return rel.isEmpty ? base : '$cleanBase/$rel';
+}

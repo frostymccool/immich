@@ -29,7 +29,6 @@ class CopypartySettings extends ConsumerWidget {
         Divider(),
         SettingGroupTitle(title: 'Upload Behaviour', icon: Icons.tune_rounded),
         _ParallelConnectionsSlider(),
-        _WriteReceiptsTile(),
         _AutoDeleteTile(),
         Divider(),
         SettingGroupTitle(title: 'File Matching', icon: Icons.link_rounded),
@@ -283,26 +282,6 @@ class _ParallelConnectionsSlider extends ConsumerWidget {
 // Write receipts toggle
 // ---------------------------------------------------------------------------
 
-class _WriteReceiptsTile extends ConsumerWidget {
-  const _WriteReceiptsTile();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final value = ref.watch(appConfigProvider.select((c) => c.copyparty.writeReceipts));
-    return Padding(
-      padding: const EdgeInsets.only(left: 8.0),
-      child: SettingListTile(
-        title: 'Write receipt files',
-        subtitle: 'Write a .cpreceipt sidecar file next to each uploaded file',
-        trailing: Switch(
-          value: value,
-          onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyWriteReceipts, v),
-        ),
-      ),
-    );
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Auto-delete toggle
 // ---------------------------------------------------------------------------
@@ -377,6 +356,11 @@ class _ImportFromMemoryCardButton extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final hostUrl = ref.watch(appConfigProvider.select((c) => c.copyparty.hostUrl));
     final isConfigured = hostUrl.isNotEmpty;
+    // FB6: while a background upload is running, this becomes "Show active
+    // uploads" and reverts automatically when it finishes.
+    final uploading = ref.watch(
+      importSessionProvider.select((s) => s.step == ImportSessionStep.uploading),
+    );
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
@@ -386,8 +370,8 @@ class _ImportFromMemoryCardButton extends ConsumerWidget {
                 MaterialPageRoute(builder: (_) => const CopypartyImportPage()),
               )
             : null,
-        icon: const Icon(Icons.sd_card_rounded),
-        label: const Text('Import from Memory Card'),
+        icon: Icon(uploading ? Icons.cloud_upload_rounded : Icons.sd_card_rounded),
+        label: Text(uploading ? 'Show active uploads' : 'Import from Memory Card'),
         style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
       ),
     );

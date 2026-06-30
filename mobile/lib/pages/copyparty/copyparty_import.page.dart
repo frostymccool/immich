@@ -23,53 +23,19 @@ class CopypartyImportPage extends ConsumerStatefulWidget {
 }
 
 class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
-  // True when the user has chosen "Continue in background" — prevents the
-  // didPop handler from calling reset() on the provider, which would kill
-  // the ongoing upload.
-  bool _backgroundLeave = false;
-
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(importSessionProvider);
     final isUploading = session.step == ImportSessionStep.uploading;
 
+    // FB6: no "stay / continue in background" dialog. While uploading, allow the
+    // pop and just let it continue in the background (don't reset the session).
+    // When not uploading, popping resets the session for a clean next run.
     return PopScope(
-      canPop: !isUploading,
-      onPopInvokedWithResult: (didPop, _) async {
-        if (didPop) {
-          if (!_backgroundLeave) {
-            ref.read(importSessionProvider.notifier).reset();
-          }
-          _backgroundLeave = false;
-          return;
-        }
-        // Upload in progress — ask whether to continue in background
-        if (!mounted) return;
-        final continueInBg = await showDialog<bool>(
-          context: context,
-          builder: (dlgCtx) => AlertDialog(
-            title: const Text('Upload in progress'),
-            content: const Text(
-              'Continue uploading in the background?\n\n'
-              'The upload will finish even after you navigate away. '
-              'Re-open "Import from Memory Card" to see the result.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dlgCtx, false),
-                child: const Text('Stay'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(dlgCtx, true),
-                child: const Text('Continue in background'),
-              ),
-            ],
-          ),
-        );
-        if (continueInBg == true && mounted) {
-          _backgroundLeave = true;
-          Navigator.of(context).pop();
-          // Do NOT call reset() — upload continues, state persists.
+      canPop: true,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop && !isUploading) {
+          ref.read(importSessionProvider.notifier).reset();
         }
       },
       child: Scaffold(
@@ -295,6 +261,7 @@ class _OptionsStep extends ConsumerStatefulWidget {
 class _OptionsStepState extends ConsumerState<_OptionsStep> {
   late Set<String> _selectedPaths;
   final Map<String, UploadDestination> _destinationOverrides = {};
+  bool _createFolders = false;
 
   @override
   void initState() {
@@ -636,6 +603,18 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // FB9: recreate the USB subfolder structure under the upload path.
+                CheckboxListTile(
+                  value: _createFolders,
+                  onChanged: (v) => setState(() => _createFolders = v ?? false),
+                  controlAffinity: ListTileControlAffinity.leading,
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: const Text('Recreate folder structure on server'),
+                  subtitle: const Text(
+                    'Mirror each file\'s subfolders under the upload path',
+                  ),
+                ),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
@@ -644,7 +623,10 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                             _applyDestinations();
                             ref
                                 .read(importSessionProvider.notifier)
-                                .startUpload(selectedFilePaths: Set.of(_selectedPaths));
+                                .startUpload(
+                                  selectedFilePaths: Set.of(_selectedPaths),
+                                  createFolders: _createFolders,
+                                );
                           }
                         : null,
                     icon: const Icon(Icons.upload_rounded),
