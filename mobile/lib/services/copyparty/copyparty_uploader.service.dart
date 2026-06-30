@@ -796,11 +796,19 @@ class CopypartyUploaderService {
   Uri _buildUri(String hostUrl, String uploadPath, String password) {
     final base = hostUrl.replaceAll(RegExp(r'/+$'), '');
     final cleanPath = uploadPath.replaceAll(RegExp(r'^/+|/+$'), '');
-    // Empty path → post to the server root ("$base/"), not "$base//".
-    final target = cleanPath.isEmpty ? '$base/' : '$base/$cleanPath/';
-    final uri = Uri.parse(target).replace(
-      queryParameters: password.isNotEmpty ? {'pw': password} : null,
-    );
+    final baseUri = Uri.parse(base);
+    // Build the path from discrete segments so each is percent-encoded — a
+    // mirrored folder name can contain spaces or other reserved characters
+    // (FB9, e.g. "Camera 01"). A trailing empty segment yields the "/" suffix.
+    final segments = [
+      ...baseUri.pathSegments.where((s) => s.isNotEmpty),
+      ...cleanPath.split('/').where((s) => s.isNotEmpty),
+      '',
+    ];
+    var uri = baseUri.replace(pathSegments: segments);
+    if (password.isNotEmpty) {
+      uri = uri.replace(queryParameters: {'pw': password});
+    }
     return uri;
   }
 

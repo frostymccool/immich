@@ -600,18 +600,33 @@ final importSessionProvider = StateNotifierProvider<ImportSessionNotifier, Impor
 
 String _stripSlashes(String s) => s.replaceAll(RegExp(r'^/+|/+$'), '');
 
-/// Mirrors a file's subfolder (relative to the selected [rootDir]) beneath the
-/// configured [base] upload path (FB9). e.g. base="/uploads",
-/// rootDir="/sd/Camera", file="/sd/Camera/DCIM/100/clip.mp4" → "/uploads/DCIM/100".
+/// Recreates the picked folder's structure beneath the configured [base]
+/// upload path (FB9). The picked folder's OWN name becomes the top-level
+/// destination subfolder, and any nested subfolders are preserved under it.
+/// e.g. base="/uploads", rootDir="/sd/Camera 01":
+///   file="/sd/Camera 01/clip.mp4"          → "/uploads/Camera 01"
+///   file="/sd/Camera 01/DCIM/100/clip.mp4" → "/uploads/Camera 01/DCIM/100"
+/// A file that somehow sits outside the picked root falls back to [base].
 String _mirroredUploadPath(String base, String? rootDir, String fileLocalPath) {
   final cleanBase = base.replaceAll(RegExp(r'/+$'), '');
   if (rootDir == null) return base;
-  final slash = fileLocalPath.lastIndexOf('/');
-  if (slash < 0) return base;
-  final fileDir = fileLocalPath.substring(0, slash);
   final root = rootDir.replaceAll(RegExp(r'/+$'), '');
-  if (fileDir == root) return base;
-  if (!fileDir.startsWith('$root/')) return base;
-  final rel = fileDir.substring(root.length).replaceAll(RegExp(r'^/+|/+$'), '');
-  return rel.isEmpty ? base : '$cleanBase/$rel';
+  final rootName = root.split('/').where((s) => s.isNotEmpty).isEmpty
+      ? ''
+      : root.split('/').where((s) => s.isNotEmpty).last;
+  if (rootName.isEmpty) return base;
+
+  final slash = fileLocalPath.lastIndexOf('/');
+  final fileDir = slash < 0 ? '' : fileLocalPath.substring(0, slash);
+
+  String rel;
+  if (fileDir == root) {
+    rel = '';
+  } else if (fileDir.startsWith('$root/')) {
+    rel = fileDir.substring(root.length).replaceAll(RegExp(r'^/+|/+$'), '');
+  } else {
+    return base; // file outside the picked root — don't guess
+  }
+  final tail = rel.isEmpty ? rootName : '$rootName/$rel';
+  return '$cleanBase/$tail';
 }
