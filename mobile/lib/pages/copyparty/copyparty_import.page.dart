@@ -1012,7 +1012,14 @@ class _UploadProgressStep extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final allFiles = session.uploadSets.expand((s) => s.files).toList();
+    // Only show the files the user actually chose to upload this run — not the
+    // whole card. (selectedPaths is null only for legacy "upload everything".)
+    final selected = session.selectedPaths;
+    bool keep(UploadFile f) => selected == null || selected.contains(f.localPath);
+
+    final visibleSets =
+        session.uploadSets.where((s) => s.files.any(keep)).toList();
+    final allFiles = session.uploadSets.expand((s) => s.files).where(keep).toList();
     final totalBytes = allFiles.fold<int>(0, (s, f) => s + f.sizeBytes);
     final doneBytes = allFiles.fold<int>(0, (s, f) => s + f.uploadedBytes);
     final activeCount = allFiles
@@ -1055,9 +1062,9 @@ class _UploadProgressStep extends StatelessWidget {
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            itemCount: session.uploadSets.length,
+            itemCount: visibleSets.length,
             itemBuilder: (ctx, i) =>
-                _ProgressSetSection(set: session.uploadSets[i]),
+                _ProgressSetSection(set: visibleSets[i], selectedPaths: selected),
           ),
         ),
       ],
@@ -1101,10 +1108,15 @@ class _SectionBadge extends StatelessWidget {
 
 class _ProgressSetSection extends StatelessWidget {
   final UploadSet set;
-  const _ProgressSetSection({required this.set});
+  final Set<String>? selectedPaths;
+  const _ProgressSetSection({required this.set, this.selectedPaths});
 
   @override
   Widget build(BuildContext context) {
+    final files = selectedPaths == null
+        ? set.files
+        : set.files.where((f) => selectedPaths!.contains(f.localPath)).toList();
+    final setBytes = files.fold<int>(0, (s, f) => s + f.sizeBytes);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1121,7 +1133,7 @@ class _ProgressSetSection extends StatelessWidget {
                 ),
               ),
               Text(
-                formatHumanReadableBytes(set.totalBytes, 1),
+                formatHumanReadableBytes(setBytes, 1),
                 style: context.textTheme.labelSmall?.copyWith(
                   color: context.colorScheme.onSurface.withValues(alpha: 0.5),
                 ),
@@ -1129,7 +1141,7 @@ class _ProgressSetSection extends StatelessWidget {
             ],
           ),
         ),
-        ...set.files.map((f) => Padding(
+        ...files.map((f) => Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: _ProgressFileCard(file: f),
             )),

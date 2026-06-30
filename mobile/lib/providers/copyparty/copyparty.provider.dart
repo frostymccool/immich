@@ -131,6 +131,11 @@ class ImportSessionState {
   final int scannedFiles;
   final String? errorMessage;
 
+  /// The file paths the user chose to upload this run. Null until upload
+  /// starts (= "all"). The progress screen filters to these so deselected
+  /// files are not listed during upload.
+  final Set<String>? selectedPaths;
+
   const ImportSessionState({
     this.step = ImportSessionStep.idle,
     this.directoryPath,
@@ -139,6 +144,7 @@ class ImportSessionState {
     this.totalFiles = 0,
     this.scannedFiles = 0,
     this.errorMessage,
+    this.selectedPaths,
   });
 
   ImportSessionState copyWith({
@@ -149,6 +155,7 @@ class ImportSessionState {
     int? totalFiles,
     int? scannedFiles,
     String? errorMessage,
+    Set<String>? selectedPaths,
   }) => ImportSessionState(
     step: step ?? this.step,
     directoryPath: directoryPath ?? this.directoryPath,
@@ -157,6 +164,7 @@ class ImportSessionState {
     totalFiles: totalFiles ?? this.totalFiles,
     scannedFiles: scannedFiles ?? this.scannedFiles,
     errorMessage: errorMessage,
+    selectedPaths: selectedPaths ?? this.selectedPaths,
   );
 
   int get totalBytes => uploadSets.fold(0, (s, u) => s + u.totalBytes);
@@ -238,6 +246,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       step: ImportSessionStep.uploading,
       completedFiles: 0,
       totalFiles: effectiveTotal,
+      selectedPaths: selectedFilePaths,
     );
 
     for (final set in state.uploadSets) {
@@ -563,13 +572,19 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   }
 
   void _notify() {
-    // Force a state update so the UI rebuilds
+    // Force a state update so the UI rebuilds. Reconstruct ALL fields (a bare
+    // copyWith would clear errorMessage; an omission would drop scannedFiles /
+    // selectedPaths) so per-tick rebuilds don't lose the selection used to
+    // filter the progress list.
     state = ImportSessionState(
       step: state.step,
       directoryPath: state.directoryPath,
       uploadSets: state.uploadSets,
       completedFiles: state.completedFiles,
       totalFiles: state.totalFiles,
+      scannedFiles: state.scannedFiles,
+      errorMessage: state.errorMessage,
+      selectedPaths: state.selectedPaths,
     );
   }
 }
