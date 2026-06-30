@@ -6,8 +6,11 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
+import 'package:immich_mobile/providers/api.provider.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:immich_mobile/utils/upload_speed_calculator.dart';
 import 'package:share_plus/share_plus.dart';
@@ -263,17 +266,18 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
   final Map<String, UploadDestination> _destinationOverrides = {};
   bool _createFolders = false;
 
+  bool _verifying = false;
+  bool _verifyFailed = false;
+  bool _userTouched = false;
+
   @override
   void initState() {
     super.initState();
-    // Default selection (Q4=A): tick only files NOT already on the server by
-    // name+size. Files that match are likely present (hash still unverified)
-    // and start unticked.
-    _selectedPaths = widget.session.uploadSets
-        .expand((s) => s.files)
-        .where((f) => !_looksPresent(f))
-        .map((f) => f.localPath)
-        .toSet();
+    // FB3: don't block — show everything ticked immediately, then verify
+    // status lazily against the server. Default selection is refined once
+    // verification lands (unless the user has already changed it).
+    _selectedPaths = _allPaths(widget.session.uploadSets);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _verify());
   }
 
   /// True when live verification says a file with this name AND size is already
@@ -286,17 +290,85 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
         v.partialExists != VerifyState.yes;
   }
 
+  /// Lazily verify all files against the server (FB3/FB4): one folder listing
+  /// for name/size/partial, then a background per-file Immich-by-checksum pass.
+  /// On a network failure, surfaces an offline state + Refresh.
+  Future<void> _verify() async {
+    if (_verifying) return;
+    setState(() {
+      _verifying = true;
+      _verifyFailed = false;
+    });
+    final config = ref.read(appConfigProvider).copyparty;
+    final uploader = ref.read(copypartyUploaderProvider);
+    final files = widget.session.uploadSets.expand((s) => s.files).toList();
+    String password = '';
+    try {
+      password = await ref.read(copypartyPasswordProvider.future);
+    } catch (_) {}
+
+    try {
+      final sizes = await uploader.listUploadFolder(
+        config.hostUrl,
+        config.uploadPath,
+        password,
+      );
+      for (final f in files) {
+        f.verification = CopypartyUploaderService.verificationFromListing(
+          sizes,
+          f.filename,
+          f.sizeBytes,
+          immichApplicable: CopypartyFilePairer.isNativeImmichFilename(f.filename),
+        );
+      }
+      if (!mounted) return;
+      setState(() {
+        _verifying = false;
+        if (!_userTouched) {
+          _selectedPaths =
+              files.where((f) => !_looksPresent(f)).map((f) => f.localPath).toSet();
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _verifying = false;
+        _verifyFailed = true;
+      });
+      return;
+    }
+
+    // Background Immich-by-checksum pass for native-Immich files (FB4); rows
+    // update as each completes. Skipped if the listing failed above.
+    final api = ref.read(apiServiceProvider).assetsApi;
+    for (final f in files) {
+      if (!mounted) return;
+      if (!CopypartyFilePairer.isNativeImmichFilename(f.filename)) continue;
+      try {
+        final id = await immichAssetIdByChecksum(api, f.localPath);
+        f.verification = (f.verification ?? const ServerFileVerification()).copyWith(
+          immich: id != null ? VerifyState.yes : VerifyState.no,
+          immichApplicable: true,
+          error: f.verification?.error,
+        );
+        if (mounted) setState(() {});
+      } catch (_) {}
+    }
+  }
+
   Set<String> _allPaths(List<UploadSet> sets) =>
       sets.expand((s) => s.files).map((f) => f.localPath).toSet();
 
   void _toggleAll(bool select) {
     setState(() {
+      _userTouched = true;
       _selectedPaths = select ? _allPaths(widget.session.uploadSets) : {};
     });
   }
 
   void _toggleGroup(UploadSet set, bool select) {
     setState(() {
+      _userTouched = true;
       for (final f in set.files) {
         if (select) {
           _selectedPaths.add(f.localPath);
@@ -309,6 +381,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
 
   void _toggleFile(String path, bool select) {
     setState(() {
+      _userTouched = true;
       if (select) {
         _selectedPaths.add(path);
       } else {
@@ -550,6 +623,49 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
             ],
           ),
         ),
+        // FB3/FB4: lazy verify status banner — checking / offline + Refresh.
+        if (_verifying)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: Row(
+              children: [
+                const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+                const SizedBox(width: 10),
+                Text('Checking server…', style: context.textTheme.bodySmall),
+              ],
+            ),
+          )
+        else if (_verifyFailed)
+          Container(
+            margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
+            decoration: BoxDecoration(
+              color: context.colorScheme.errorContainer,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.cloud_off_rounded,
+                    size: 18, color: context.colorScheme.onErrorContainer),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Couldn\'t reach copyparty — upload status unknown.',
+                    style: context.textTheme.bodySmall
+                        ?.copyWith(color: context.colorScheme.onErrorContainer),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _verify,
+                  child: const Text('Refresh'),
+                ),
+              ],
+            ),
+          ),
         Builder(
           builder: (ctx) {
             final alreadyCount = sets
@@ -847,6 +963,15 @@ class _LiveChips extends StatelessWidget {
         if (v.partialExists == VerifyState.yes)
           _chip(context, Icons.cancel, context.colorScheme.error, 'partial exists'),
         _chip(context, Icons.help_outline, grey, 'hash not checked'),
+        if (v.immichApplicable)
+          switch (v.immich) {
+            VerifyState.yes =>
+              _chip(context, Icons.photo_library_rounded, Colors.green.shade600, 'Immich ✓'),
+            VerifyState.no =>
+              _chip(context, Icons.image_not_supported_outlined, context.colorScheme.error,
+                  'Immich missing'),
+            VerifyState.unknown => _chip(context, Icons.hourglass_empty, grey, 'Immich…'),
+          },
       ],
     );
   }

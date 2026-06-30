@@ -5,6 +5,7 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/album/local_album.model.dart';
+import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
@@ -15,6 +16,7 @@ import 'package:immich_mobile/generated/translations.g.dart';
 import 'package:immich_mobile/presentation/widgets/backup/backup_toggle_button.widget.dart';
 import 'package:immich_mobile/providers/background_sync.provider.dart';
 import 'package:immich_mobile/providers/backup/backup_album.provider.dart';
+import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/backup/drift_backup.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/providers/permission.provider.dart';
@@ -186,6 +188,8 @@ class _DriftBackupPageState extends ConsumerState<DriftBackupPage> {
                   },
                   const _BackupFooter(),
                 ],
+                // FB5: copyparty active uploads shown below the Immich section.
+                const _CopypartyUploadsSection(),
               ],
             ),
           ),
@@ -672,6 +676,89 @@ class _PreparingStatusState extends ConsumerState {
             ),
           ),
         ),
+      ],
+    );
+  }
+}
+
+/// FB5: shows active copyparty (memory-card import) uploads inside the standard
+/// backup view, below the Immich section. Renders nothing when none are active.
+class _CopypartyUploadsSection extends ConsumerWidget {
+  const _CopypartyUploadsSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final session = ref.watch(importSessionProvider);
+    if (session.step != ImportSessionStep.uploading) {
+      return const SizedBox.shrink();
+    }
+    final active = session.uploadSets
+        .expand((s) => s.files)
+        .where((f) =>
+            f.needsCopyparty &&
+            f.status != UploadFileStatus.pending &&
+            f.status != UploadFileStatus.receiptWritten &&
+            f.status != UploadFileStatus.failed)
+        .toList();
+    if (active.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Divider(),
+        Padding(
+          padding: const EdgeInsets.only(top: 4, bottom: 8),
+          child: Row(
+            children: [
+              Icon(Icons.cloud_upload_rounded,
+                  size: 20, color: context.colorScheme.primary),
+              const SizedBox(width: 8),
+              Text(
+                'Copyparty — ${active.length} uploading',
+                style: context.textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+        ),
+        ...active.map((f) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          f.filename,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: context.textTheme.bodyMedium,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${(f.progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
+                        style: context.textTheme.labelMedium?.copyWith(
+                          color: context.colorScheme.primary,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: f.progress,
+                      minHeight: 4,
+                    ),
+                  ),
+                ],
+              ),
+            )),
       ],
     );
   }

@@ -197,32 +197,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         }
       }
 
-      // LIVE server verification (Issue 3): trust the server, not receipts.
-      // One folder listing covers every file (all upload to config.uploadPath).
-      // Name/size/partial only — the content hash stays unchecked until upload.
-      if (config.hostUrl.isNotEmpty) {
-        try {
-          final password = await _ref.read(copypartyPasswordProvider.future);
-          final sizes = await _uploader.listUploadFolder(
-            config.hostUrl,
-            config.uploadPath,
-            password,
-          );
-          for (final set in sets) {
-            for (final file in set.files) {
-              file.verification = CopypartyUploaderService.verificationFromListing(
-                sizes,
-                file.filename,
-                file.sizeBytes,
-                immichApplicable: file.needsImmich,
-              );
-            }
-          }
-        } catch (e) {
-          _log.log('scan: live verification skipped: $e');
-        }
-      }
-
+      // FB3: do NOT block the picker on a server listing here — show the file
+      // list immediately and let the options step verify status lazily.
       state = state.copyWith(
         step: ImportSessionStep.options,
         uploadSets: sets,
