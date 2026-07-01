@@ -321,6 +321,13 @@ class CopypartyUploaderService {
         headers: resp.headers,
         body: resp.body.length > 600 ? '${resp.body.substring(0, 600)}…' : resp.body);
 
+    if (resp.statusCode == 404) {
+      // The folder doesn't exist yet — e.g. an FB9 mirrored subfolder that
+      // copyparty only creates on the first upload. That's "no files here",
+      // NOT a connection failure. Return an empty listing.
+      _log?.log('  folder not found (404) → treating as empty');
+      return const <String, int>{};
+    }
     if (resp.statusCode != 200) {
       throw CopypartyUploadException('Listing failed: HTTP ${resp.statusCode}');
     }

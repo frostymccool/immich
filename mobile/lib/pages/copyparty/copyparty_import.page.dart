@@ -342,8 +342,17 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
       final folders = files.map(targetFolder).toSet();
       final listings = <String, Map<String, int>>{};
       for (final folder in folders) {
-        listings[folder] =
-            await uploader.listUploadFolder(config.hostUrl, folder, password);
+        try {
+          listings[folder] =
+              await uploader.listUploadFolder(config.hostUrl, folder, password);
+        } on CopypartyUploadException {
+          // A folder-level HTTP error (e.g. this target folder doesn't exist on
+          // the server yet) means "no files here", NOT that copyparty is
+          // unreachable. Treat it as empty so the files show as not-present and
+          // upload normally — only a genuine CONNECTION failure (which is not a
+          // CopypartyUploadException) trips the offline banner below.
+          listings[folder] = const <String, int>{};
+        }
       }
       for (final f in files) {
         f.verification = CopypartyUploaderService.verificationFromListing(
