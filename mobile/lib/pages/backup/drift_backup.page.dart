@@ -5,7 +5,6 @@ import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/album/local_album.model.dart';
-import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
@@ -16,7 +15,6 @@ import 'package:immich_mobile/generated/translations.g.dart';
 import 'package:immich_mobile/presentation/widgets/backup/backup_toggle_button.widget.dart';
 import 'package:immich_mobile/providers/background_sync.provider.dart';
 import 'package:immich_mobile/providers/backup/backup_album.provider.dart';
-import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/backup/drift_backup.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/providers/permission.provider.dart';
@@ -123,16 +121,27 @@ class _DriftBackupPageState extends ConsumerState<DriftBackupPage> {
           IconButton(
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute(
-                builder: (_) => Scaffold(
-                  appBar: AppBar(
-                    title: const Text('Copyparty'),
-                    centerTitle: false,
-                  ),
-                  body: const CopypartySettings(),
+                builder: (_) => Consumer(
+                  builder: (ctx, ref2, _) {
+                    final cp = ref2.watch(appConfigProvider.select((c) => c.copyparty));
+                    final host = cp.hostUrl.replaceAll(RegExp(r'/+$'), '');
+                    final path = '/${cp.uploadPath.replaceAll(RegExp(r'^/+|/+$'), '')}';
+                    return Scaffold(
+                      appBar: AppBar(
+                        // item 4: show the full target URL in the heading since
+                        // the server section is hidden on this embedded page.
+                        title: Text('Copyparty ($host$path)'),
+                        centerTitle: false,
+                      ),
+                      // item 3: server config lives in main app settings only.
+                      body: const CopypartySettings(showServerConfig: false),
+                    );
+                  },
                 ),
               ),
             ),
-            icon: const Icon(Icons.cloud_upload_outlined),
+            // item 2: memory-card icon, consistent with the main settings entry.
+            icon: const Icon(Icons.sd_card_rounded),
             tooltip: 'Copyparty',
           ),
           IconButton(
@@ -188,8 +197,6 @@ class _DriftBackupPageState extends ConsumerState<DriftBackupPage> {
                   },
                   const _BackupFooter(),
                 ],
-                // FB5: copyparty active uploads shown below the Immich section.
-                const _CopypartyUploadsSection(),
               ],
             ),
           ),
@@ -677,130 +684,6 @@ class _PreparingStatusState extends ConsumerState {
           ),
         ),
       ],
-    );
-  }
-}
-
-/// FB5: shows active copyparty (memory-card import) uploads inside the standard
-/// backup view, below the Immich section. Renders nothing when none are active.
-class _CopypartyUploadsSection extends ConsumerWidget {
-  const _CopypartyUploadsSection();
-
-  Future<void> _confirmCancel(BuildContext context, WidgetRef ref) async {
-    final stop = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Stop uploading?'),
-        content: const Text(
-          'This stops the current copyparty upload. Files already uploaded are '
-          'kept on the server; the rest can be resumed later from where they '
-          'left off.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep uploading')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: ctx.colorScheme.error),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Stop'),
-          ),
-        ],
-      ),
-    );
-    if (stop == true) {
-      ref.read(importSessionProvider.notifier).cancelUpload();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final session = ref.watch(importSessionProvider);
-    if (session.step != ImportSessionStep.uploading) {
-      return const SizedBox.shrink();
-    }
-    final active = session.uploadSets
-        .expand((s) => s.files)
-        .where((f) =>
-            f.needsCopyparty &&
-            f.status != UploadFileStatus.pending &&
-            f.status != UploadFileStatus.receiptWritten &&
-            f.status != UploadFileStatus.failed)
-        .toList();
-    if (active.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    // Q5: match the standard Immich backup cards (rounded-20 outlined Card,
-    // ListTile header + divider) instead of a bare divider + text block.
-    return Card(
-      shape: RoundedRectangleBorder(
-        borderRadius: const BorderRadius.all(Radius.circular(20)),
-        side: BorderSide(color: context.colorScheme.outlineVariant, width: 1),
-      ),
-      elevation: 0,
-      borderOnForeground: false,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          ListTile(
-            minVerticalPadding: 18,
-            leading: Icon(Icons.cloud_upload_rounded, color: context.colorScheme.primary),
-            title: Text('Copyparty', style: context.textTheme.titleMedium),
-            subtitle: Padding(
-              padding: const EdgeInsets.only(top: 4.0),
-              child: Text(
-                '${active.length} file${active.length == 1 ? '' : 's'} uploading',
-                style: context.textTheme.bodyMedium
-                    ?.copyWith(color: context.colorScheme.onSurfaceSecondary),
-              ),
-            ),
-            trailing: TextButton.icon(
-              onPressed: () => _confirmCancel(context, ref),
-              icon: const Icon(Icons.stop_circle_outlined, size: 18),
-              label: const Text('Stop'),
-              style: TextButton.styleFrom(
-                foregroundColor: context.colorScheme.error,
-                visualDensity: VisualDensity.compact,
-              ),
-            ),
-          ),
-          const Divider(height: 0),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-            child: Column(
-              children: [
-                for (final f in active) ...[
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          f.filename,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: context.textTheme.bodyMedium,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '${(f.progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
-                        style: context.textTheme.labelLarge?.copyWith(
-                          color: context.colorScheme.primary,
-                          fontFeatures: [const FontFeature.tabularFigures()],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(value: f.progress, minHeight: 4),
-                  ),
-                  if (f != active.last) const SizedBox(height: 14),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

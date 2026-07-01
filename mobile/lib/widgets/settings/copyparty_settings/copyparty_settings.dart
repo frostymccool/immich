@@ -14,36 +14,42 @@ import 'package:immich_mobile/widgets/settings/settings_sub_page_scaffold.dart';
 import 'package:share_plus/share_plus.dart';
 
 class CopypartySettings extends ConsumerWidget {
-  const CopypartySettings({super.key});
+  /// When false, the "Copyparty Server" connection section is hidden — used for
+  /// the simplified page opened from the backup screen, where the server config
+  /// lives in the main app settings instead. (item 3)
+  final bool showServerConfig;
+  const CopypartySettings({super.key, this.showServerConfig = true});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Q4: make settings values long-press selectable + copyable (support).
-    return const SelectionArea(
+    return SelectionArea(
       child: SettingsSubPageScaffold(
-      settings: [
-        SettingGroupTitle(title: 'Copyparty Server', icon: Icons.cloud_upload_outlined),
-        _HostUrlTile(),
-        _PasswordTile(),
-        _UploadPathTile(),
-        _SelfSignedCertTile(),
-        _ConnectTestButton(),
-        Divider(),
-        SettingGroupTitle(title: 'Upload Behaviour', icon: Icons.tune_rounded),
-        _ParallelConnectionsSlider(),
-        _RecreateFolderStructureTile(),
-        _AutoDeleteTile(),
-        Divider(),
-        SettingGroupTitle(title: 'File Matching', icon: Icons.link_rounded),
-        _TriggerExtensionsTile(),
-        Divider(),
-        SettingGroupTitle(title: 'Import', icon: Icons.sd_card_rounded),
-        _ImportFromMemoryCardButton(),
-        _PendingCleanupTile(),
-        Divider(),
-        SettingGroupTitle(title: 'Diagnostics', icon: Icons.bug_report_outlined),
-        _DiagnosticLogTile(),
-      ],
+        settings: [
+          if (showServerConfig) ...const [
+            SettingGroupTitle(title: 'Copyparty Server', icon: Icons.cloud_upload_outlined),
+            _HostUrlTile(),
+            _PasswordTile(),
+            _UploadPathTile(),
+            _SelfSignedCertTile(),
+            _ConnectTestButton(),
+            Divider(),
+          ],
+          const SettingGroupTitle(title: 'Upload Behaviour', icon: Icons.tune_rounded),
+          const _ParallelConnectionsSlider(),
+          const _RecreateFolderStructureTile(),
+          const _AutoDeleteTile(),
+          const Divider(),
+          const SettingGroupTitle(title: 'File Matching', icon: Icons.link_rounded),
+          const _TriggerExtensionsTile(),
+          const Divider(),
+          const SettingGroupTitle(title: 'Import', icon: Icons.sd_card_rounded),
+          const _ImportFromMemoryCardButton(),
+          const _PendingCleanupTile(),
+          const Divider(),
+          const SettingGroupTitle(title: 'Diagnostics', icon: Icons.bug_report_outlined),
+          const _DiagnosticLogTile(),
+        ],
       ),
     );
   }
@@ -507,7 +513,7 @@ class _PendingCleanupTile extends ConsumerWidget {
         return Padding(
           padding: const EdgeInsets.only(left: 8.0),
           child: SettingListTile(
-            title: 'Delete uploaded source files',
+            title: 'Free up space — delete uploaded source files',
             subtitle: '$count file${count == 1 ? '' : 's'} uploaded and awaiting deletion',
             leading: Badge(
               label: Text('$count'),
