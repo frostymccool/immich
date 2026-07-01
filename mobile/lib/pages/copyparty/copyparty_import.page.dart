@@ -396,6 +396,12 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
           immich: id != null ? VerifyState.yes : VerifyState.no,
           immichApplicable: true,
         );
+        // Item 2: if Immich already has this file, there's no point re-uploading
+        // to Immich — default its destination to "CP only" (unless the user has
+        // already picked one for it).
+        if (id != null && !_destinationOverrides.containsKey(f.localPath)) {
+          _destinationOverrides[f.localPath] = UploadDestination.copypartyOnly;
+        }
         if (mounted) setState(() {});
       } catch (_) {}
     }
@@ -608,6 +614,8 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     // show groups sorted by total size (a sorted copy — session order untouched).
     final sortSmallest =
         ref.watch(appConfigProvider.select((c) => c.copyparty.sortSmallestFirst));
+    final debugMode =
+        ref.watch(appConfigProvider.select((c) => c.copyparty.debugMode));
     final sets = sortSmallest
         ? (List<UploadSet>.of(widget.session.uploadSets)
           ..sort((a, b) => a.totalBytes.compareTo(b.totalBytes)))
@@ -644,12 +652,21 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
 
     final allFiles = sets.expand((s) => s.files).toList();
     final totalFiles = allFiles.length;
-    final selectedCount =
-        allFiles.where((f) => _selectedPaths.contains(f.localPath)).length;
-    final selectedBytes = allFiles
-        .where((f) => _selectedPaths.contains(f.localPath))
-        .fold<int>(0, (s, f) => s + f.sizeBytes);
+    final selectedFiles =
+        allFiles.where((f) => _selectedPaths.contains(f.localPath)).toList();
+    final selectedCount = selectedFiles.length;
+    final selectedBytes = selectedFiles.fold<int>(0, (s, f) => s + f.sizeBytes);
     final allSelected = selectedCount == totalFiles;
+    // Item 3: destination breakdown, shown inline only when the selection isn't
+    // uniformly "Both" (no point otherwise). Kept on the same header line.
+    final cpCount = selectedFiles
+        .where((f) => _destinationFor(f) != UploadDestination.immichNative)
+        .length;
+    final immichCount = selectedFiles
+        .where((f) => _destinationFor(f) != UploadDestination.copypartyOnly)
+        .length;
+    final allBoth = selectedFiles.isNotEmpty &&
+        selectedFiles.every((f) => _destinationFor(f) == UploadDestination.both);
 
     return Column(
       children: [
@@ -663,9 +680,12 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
               Expanded(
                 child: Text(
                   '$selectedCount / $totalFiles files '
-                  '(${formatHumanReadableBytes(selectedBytes, 1)})',
+                  '(${formatHumanReadableBytes(selectedBytes, 1)})'
+                  '${allBoth ? '' : '  ·  CP $cpCount · Immich $immichCount'}',
                   style: context.textTheme.bodyMedium
                       ?.copyWith(fontWeight: FontWeight.w500),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               TextButton(
@@ -793,23 +813,26 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                     style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
                   ),
                 ),
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: selectedCount > 0 ? _runSelfTest : null,
-                    icon: const Icon(Icons.science_outlined),
-                    label: const Text('Run upload self-test (diagnostics)'),
+                // Self-test/diagnostic actions only when debug mode is on. (item 5)
+                if (debugMode) ...[
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: selectedCount > 0 ? _runSelfTest : null,
+                      icon: const Icon(Icons.science_outlined),
+                      label: const Text('Run upload self-test (diagnostics)'),
+                    ),
                   ),
-                ),
-                SizedBox(
-                  width: double.infinity,
-                  child: TextButton.icon(
-                    onPressed: selectedCount > 0 ? _runVerificationSelfTest : null,
-                    icon: const Icon(Icons.fact_check_outlined, size: 18),
-                    label: const Text('Run verification self-test'),
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextButton.icon(
+                      onPressed: selectedCount > 0 ? _runVerificationSelfTest : null,
+                      icon: const Icon(Icons.fact_check_outlined, size: 18),
+                      label: const Text('Run verification self-test'),
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           ),
@@ -931,30 +954,46 @@ class _GroupSummary extends StatelessWidget {
             )),
       );
     }
-    final n = files.length;
+    // name & size are determined together by the folder listing, so use the
+    // count of listing-checked files as the shared denominator (item 1: size
+    // must never show a smaller denominator than name). Immich fills in async,
+    // so it keeps a "known" denominator that hides the chip until resolved.
+    final checked = files.where((f) => f.verification != null).toList();
+    final n = checked.length;
+    final nameYes =
+        checked.where((f) => f.verification!.filenamePresent == VerifyState.yes).length;
+    final sizeYes =
+        checked.where((f) => f.verification!.sizeMatches == VerifyState.yes).length;
     final partial =
         files.where((f) => f.verification?.partialExists == VerifyState.yes).length;
     final immichApplicable =
         files.where((f) => f.verification?.immichApplicable ?? false).toList();
 
-    // Denominators are per-axis KNOWN counts, never the full file count — an
-    // unchecked/unknown axis (e.g. Immich still resolving in the background)
-    // must not read as "absent". A chip is hidden until something is known.
     return Padding(
       padding: const EdgeInsets.only(top: 4),
       child: Wrap(
         spacing: 10,
         runSpacing: 2,
         children: [
-          _axisChip(context, 'name', files, (v) => v.filenamePresent),
-          _axisChip(context, 'size', files, (v) => v.sizeMatches),
+          if (n > 0) _countChip(context, 'name', nameYes, n),
+          if (n > 0) _countChip(context, 'size', sizeYes, n),
           if (partial > 0)
-            _rawChip(context, 'partial $partial/$n', context.colorScheme.error,
-                Icons.error_outline),
+            _rawChip(context, 'partial $partial/${files.length}',
+                context.colorScheme.error, Icons.error_outline),
           _axisChip(context, 'Immich', immichApplicable, (v) => v.immich),
         ].whereType<Widget>().toList(),
       ),
     );
+  }
+
+  Widget _countChip(BuildContext context, String label, int yes, int total) {
+    final full = yes == total;
+    final none = yes == 0;
+    final color = full
+        ? Colors.green.shade600
+        : (none ? context.colorScheme.error : Colors.orange.shade700);
+    final icon = full ? Icons.check_circle : (none ? Icons.cancel : Icons.adjust);
+    return _rawChip(context, '$label $yes/$total', color, icon);
   }
 
   /// Rolls up one axis over [pool], counting only files whose state is KNOWN
@@ -1786,15 +1825,18 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
                   ),
                   const SizedBox(height: 8),
                 ],
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () => _shareDiagnosticLog(context, ref),
-                    icon: const Icon(Icons.bug_report_outlined),
-                    label: const Text('Share diagnostic log'),
+                if (ref.watch(
+                    appConfigProvider.select((c) => c.copyparty.debugMode))) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => _shareDiagnosticLog(context, ref),
+                      icon: const Icon(Icons.bug_report_outlined),
+                      label: const Text('Share diagnostic log'),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
+                  const SizedBox(height: 8),
+                ],
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton(
@@ -2233,10 +2275,20 @@ class _CompletionFileTile extends StatelessWidget {
   }
 }
 
+/// Relative folder shown in the picker/completion — INCLUDES the picked root
+/// folder's own name so it matches where the file lands on the server under
+/// FB9 (e.g. root "australia" + subfolder "sydney bridge" → "australia/sydney
+/// bridge"). (item 4)
 String _relPathUtil(String? root, String? dir) {
   if (dir == null) return '';
   if (root == null) return dir.split('/').last;
-  if (dir == root) return dir.split('/').last;
-  if (dir.startsWith('$root/')) return dir.substring(root.length + 1);
+  final rootName = root.split('/').where((s) => s.isNotEmpty).isEmpty
+      ? ''
+      : root.split('/').where((s) => s.isNotEmpty).last;
+  if (dir == root) return rootName;
+  if (dir.startsWith('$root/')) {
+    final rel = dir.substring(root.length + 1);
+    return rootName.isEmpty ? rel : '$rootName/$rel';
+  }
   return dir.split('/').last;
 }

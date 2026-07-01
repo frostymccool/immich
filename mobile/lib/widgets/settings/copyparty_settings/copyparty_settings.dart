@@ -22,6 +22,7 @@ class CopypartySettings extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final debug = ref.watch(appConfigProvider.select((c) => c.copyparty.debugMode));
     // Q4: make settings values long-press selectable + copyable (support).
     return SelectionArea(
       child: SettingsSubPageScaffold(
@@ -47,10 +48,73 @@ class CopypartySettings extends ConsumerWidget {
           const SettingGroupTitle(title: 'Import', icon: Icons.sd_card_rounded),
           const _ImportFromMemoryCardButton(),
           const _PendingCleanupTile(),
-          const Divider(),
-          const SettingGroupTitle(title: 'Diagnostics', icon: Icons.bug_report_outlined),
-          const _DiagnosticLogTile(),
+          // Diagnostics + the debug toggle only exist on the MAIN settings page
+          // (item 5), never on the simplified backup-entry copy.
+          if (showServerConfig) ...[
+            const Divider(),
+            const SettingGroupTitle(title: 'Diagnostics', icon: Icons.bug_report_outlined),
+            const _DebugModeTile(),
+            // A download-log button is always available; the full share/clear
+            // diagnostic tools appear only when debug mode is on.
+            if (debug) const _DiagnosticLogTile() else const _DownloadLogButton(),
+          ],
         ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Debug mode toggle + always-available "Download log"
+// ---------------------------------------------------------------------------
+
+class _DebugModeTile extends ConsumerWidget {
+  const _DebugModeTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final value = ref.watch(appConfigProvider.select((c) => c.copyparty.debugMode));
+    return Padding(
+      padding: const EdgeInsets.only(left: 8.0),
+      child: SettingListTile(
+        title: 'Enable debug mode',
+        subtitle: 'Show self-test and diagnostic-log actions across the '
+            'copyparty pages. Leave off for normal use.',
+        trailing: Switch(
+          value: value,
+          onChanged: (v) =>
+              ref.read(settingsProvider).write(SettingsKey.copypartyDebugMode, v),
+        ),
+      ),
+    );
+  }
+}
+
+class _DownloadLogButton extends ConsumerWidget {
+  const _DownloadLogButton();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+      child: SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: () async {
+            final logger = ref.read(copypartyLoggerProvider);
+            final path = await logger.flush();
+            final box = context.findRenderObject() as RenderBox?;
+            await Share.shareXFiles(
+              [XFile(path)],
+              subject: 'Copyparty diagnostic log',
+              sharePositionOrigin:
+                  box != null ? box.localToGlobal(Offset.zero) & box.size : null,
+            );
+          },
+          icon: const Icon(Icons.download_rounded),
+          label: const Text('Download log'),
+          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+        ),
       ),
     );
   }

@@ -82,6 +82,7 @@ enum SettingsKey<T> {
   copypartySelfSignedCert<bool>(),
   copypartyRecreateFolderStructure<bool>(),
   copypartySortSmallestFirst<bool>(),
+  copypartyDebugMode<bool>(),
 
   // Slideshow
   slideshowTransition<bool>(),

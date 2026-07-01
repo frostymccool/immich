@@ -47,9 +47,10 @@ String _folderOf(CopypartyReceipt r) {
 /// A group of receipts that belong together (Q2): same destination folder and
 /// same normalised stem — mirrors how the import picker groups a clip's files.
 class _CleanupGroup {
+  final String key;
   final String folder;
   final List<CopypartyReceipt> receipts;
-  _CleanupGroup({required this.folder, required this.receipts});
+  _CleanupGroup({required this.key, required this.folder, required this.receipts});
 
   /// Representative label — the shortest filename in the set reads best as the
   /// clip name (companions add suffixes/extensions).
@@ -67,6 +68,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   final Set<int> _uploading = {};
   final Set<int> _deleted = {};
   final Map<int, double> _progress = {}; // 0..1 during verify/upload (FB2/FB8)
+  final Set<String> _collapsed = {}; // group keys currently collapsed (item 7)
   String _password = '';
   bool _loading = true;
 
@@ -237,13 +239,53 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       final key = '$folder :: ${pairer.normalise(r.filename)}';
       final g = groups[key];
       if (g == null) {
-        groups[key] = _CleanupGroup(folder: folder, receipts: [r]);
+        groups[key] = _CleanupGroup(key: key, folder: folder, receipts: [r]);
         order.add(key);
       } else {
         g.receipts.add(r);
       }
     }
     return [for (final k in order) groups[k]!];
+  }
+
+  /// Select every file that is currently SAFE to delete (hash-verified on
+  /// copyparty and Immich-ok). Makes it a one-tap job to tick the deletable
+  /// ones. (item 9)
+  void _selectAllVerified() {
+    final now = DateTime.now();
+    setState(() {
+      _selected = _existing
+          .where((r) =>
+              !_deleted.contains(r.id) &&
+              (_verify[r.id]?.safeToDeleteAt(now) ?? false))
+          .map((r) => r.id!)
+          .toSet();
+    });
+  }
+
+  /// Remove a stale/unwanted receipt from the cleanup list WITHOUT touching the
+  /// local file — marks it sourceDeleted so it stops showing. (item 6)
+  Future<void> _removeFromList(CopypartyReceipt r) async {
+    if (r.id == null) return;
+    await ref.read(copypartyReceiptRepositoryProvider).markSourceDeleted(r.id!);
+    if (!mounted) return;
+    setState(() {
+      _existing = _existing.where((e) => e.id != r.id).toList();
+      _selected.remove(r.id);
+      _verify.remove(r.id);
+    });
+    ref.invalidate(pendingCleanupProvider);
+  }
+
+  void _setAllCollapsed(bool collapsed) {
+    setState(() {
+      _collapsed.clear();
+      if (collapsed) {
+        for (final g in _buildGroups()) {
+          if (g.receipts.length > 1) _collapsed.add(g.key);
+        }
+      }
+    });
   }
 
   /// Tri-state for a group's select box: true (all), false (none), null (some).
@@ -457,12 +499,32 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         actions: [
           if (!_loading && _existing.isNotEmpty) ...[
             TextButton(
-              onPressed: () => _toggleSelectAll(!allSelected),
-              child: Text(allSelected ? 'Deselect all' : 'Select all'),
+              onPressed: _selectAllVerified,
+              child: const Text('Select verified'),
             ),
             TextButton(
               onPressed: (busy || _selected.isEmpty) ? null : _verifySelected,
               child: Text('Verify${_selected.isEmpty ? '' : ' (${_selected.length})'}'),
+            ),
+            PopupMenuButton<String>(
+              onSelected: (v) {
+                switch (v) {
+                  case 'selectAll':
+                    _toggleSelectAll(!allSelected);
+                  case 'expandAll':
+                    _setAllCollapsed(false);
+                  case 'collapseAll':
+                    _setAllCollapsed(true);
+                }
+              },
+              itemBuilder: (ctx) => [
+                PopupMenuItem(
+                  value: 'selectAll',
+                  child: Text(allSelected ? 'Deselect all' : 'Select all'),
+                ),
+                const PopupMenuItem(value: 'expandAll', child: Text('Expand all')),
+                const PopupMenuItem(value: 'collapseAll', child: Text('Collapse all')),
+              ],
             ),
           ],
         ],
@@ -517,6 +579,10 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                                 groupValue: _groupValue(g),
                                 busy: busy,
                                 now: now,
+                                collapsed: _collapsed.contains(g.key),
+                                onToggleCollapse: () => setState(() {
+                                  if (!_collapsed.remove(g.key)) _collapsed.add(g.key);
+                                }),
                                 verifications: [
                                   for (final r in g.receipts)
                                     _verify[r.id] ?? const ServerFileVerification(),
@@ -537,6 +603,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                                       now: now,
                                       onVerify: () => _verifyFile(r),
                                       onUploadNow: () => _uploadNow(r),
+                                      onRemove: () => _removeFromList(r),
                                       onChanged: _deleted.contains(r.id)
                                           ? null
                                           : (sel) => setState(() {
@@ -622,6 +689,8 @@ class _CleanupGroupSection extends StatelessWidget {
   final bool? groupValue;
   final bool busy;
   final DateTime now;
+  final bool collapsed;
+  final VoidCallback onToggleCollapse;
   final List<ServerFileVerification> verifications;
   final ValueChanged<bool?> onGroupToggle;
   final VoidCallback onGroupVerify;
@@ -632,6 +701,8 @@ class _CleanupGroupSection extends StatelessWidget {
     required this.groupValue,
     required this.busy,
     required this.now,
+    required this.collapsed,
+    required this.onToggleCollapse,
     required this.verifications,
     required this.onGroupToggle,
     required this.onGroupVerify,
@@ -719,10 +790,18 @@ class _CleanupGroupSection extends StatelessWidget {
                 onPressed: busy ? null : onGroupVerify,
                 child: const Text('Verify'),
               ),
+              // Item 7: fold the group open/closed.
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                onPressed: onToggleCollapse,
+                icon: Icon(collapsed
+                    ? Icons.keyboard_arrow_down_rounded
+                    : Icons.keyboard_arrow_up_rounded),
+              ),
             ],
           ),
         ),
-        ...tiles,
+        if (!collapsed) ...tiles,
         const SizedBox(height: 4),
       ],
     );
@@ -735,50 +814,55 @@ class _CleanupGroupSection extends StatelessWidget {
         verifications.where((v) => v.partialExists == VerifyState.yes).length;
     final hashFresh = verifications.where((v) => v.hashFreshAt(now)).length;
     final immichPool = verifications.where((v) => v.immichApplicable).toList();
+    final immichYes = immichPool.where((v) => v.immich == VerifyState.yes).length;
     return Padding(
       padding: const EdgeInsets.only(top: 4),
       child: Wrap(
         spacing: 10,
         runSpacing: 2,
         children: [
-          _axisChip(context, 'name', verifications, (v) => v.filenamePresent),
-          _axisChip(context, 'size', verifications, (v) => v.sizeMatches),
+          // name & size share the SAME denominator (the whole group) — an
+          // absent file has no server size, but it still counts as "not size-
+          // matched" so size never reads a smaller denominator than name. (item 1)
+          _countChip(context, 'name',
+              verifications.where((v) => v.filenamePresent == VerifyState.yes).length,
+              verifications.length),
+          _countChip(context, 'size',
+              verifications.where((v) => v.sizeMatches == VerifyState.yes).length,
+              verifications.length),
           if (partial > 0)
             _rawChip(context, 'partial $partial/${verifications.length}',
                 context.colorScheme.error, Icons.error_outline),
-          _rawChip(
-            context,
-            'hash $hashFresh/${verifications.length}',
-            hashFresh == verifications.length
-                ? Colors.green.shade600
-                : (hashFresh == 0
-                    ? context.colorScheme.onSurfaceVariant
-                    : Colors.orange.shade700),
-            hashFresh == verifications.length ? Icons.check_circle : Icons.fingerprint,
-          ),
+          // hash: 0 means "not checked" (grey, fingerprint), not "absent".
+          _countChip(context, 'hash', hashFresh, verifications.length,
+              neutralWhenZero: true, zeroIcon: Icons.fingerprint),
           if (immichPool.isNotEmpty)
-            _axisChip(context, 'Immich', immichPool, (v) => v.immich),
+            _countChip(context, 'Immich', immichYes, immichPool.length),
         ].whereType<Widget>().toList(),
       ),
     );
   }
 
-  Widget? _axisChip(
+  Widget _countChip(
     BuildContext context,
     String label,
-    List<ServerFileVerification> pool,
-    VerifyState Function(ServerFileVerification v) get,
-  ) {
-    final known = pool.where((v) => get(v) != VerifyState.unknown).toList();
-    if (known.isEmpty) return null;
-    final yes = known.where((v) => get(v) == VerifyState.yes).length;
-    final total = known.length;
+    int yes,
+    int total, {
+    bool neutralWhenZero = false,
+    IconData? zeroIcon,
+  }) {
     final full = yes == total;
     final none = yes == 0;
     final color = full
         ? Colors.green.shade600
-        : (none ? context.colorScheme.error : Colors.orange.shade700);
-    final icon = full ? Icons.check_circle : (none ? Icons.cancel : Icons.adjust);
+        : (none
+            ? (neutralWhenZero
+                ? context.colorScheme.onSurfaceVariant
+                : context.colorScheme.error)
+            : Colors.orange.shade700);
+    final icon = full
+        ? Icons.check_circle
+        : (none ? (zeroIcon ?? Icons.cancel) : Icons.adjust);
     return _rawChip(context, '$label $yes/$total', color, icon);
   }
 
@@ -803,6 +887,7 @@ class _CleanupTile extends StatelessWidget {
   final DateTime now;
   final VoidCallback onVerify;
   final VoidCallback onUploadNow;
+  final VoidCallback onRemove;
   final ValueChanged<bool?>? onChanged;
 
   const _CleanupTile({
@@ -816,6 +901,7 @@ class _CleanupTile extends StatelessWidget {
     required this.now,
     required this.onVerify,
     required this.onUploadNow,
+    required this.onRemove,
     required this.onChanged,
   });
 
@@ -959,6 +1045,35 @@ class _CleanupTile extends StatelessWidget {
                         if (uri != null) {
                           await launchUrl(uri, mode: LaunchMode.externalApplication);
                         }
+                      },
+                    ),
+                    const Spacer(),
+                    // Item 6: drop a stale entry from the list (does NOT touch
+                    // the local file — just stops tracking it for cleanup).
+                    IconButton(
+                      icon: const Icon(Icons.playlist_remove_rounded, size: 20),
+                      tooltip: 'Remove from list',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () async {
+                        final ok = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: const Text('Remove from list?'),
+                            content: const Text(
+                              'This only stops tracking this file for cleanup. '
+                              'The local file and the server copy are NOT deleted.',
+                            ),
+                            actions: [
+                              TextButton(
+                                  onPressed: () => Navigator.pop(ctx, false),
+                                  child: const Text('Cancel')),
+                              FilledButton(
+                                  onPressed: () => Navigator.pop(ctx, true),
+                                  child: const Text('Remove')),
+                            ],
+                          ),
+                        );
+                        if (ok == true) onRemove();
                       },
                     ),
                   ],

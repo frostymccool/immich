@@ -16,6 +16,10 @@ class CopypartyConfig {
   /// so quick wins land first on slow links. (item 4)
   final bool sortSmallestFirst;
 
+  /// When true, self-test/diagnostic actions are shown across the copyparty
+  /// pages. Default off — normal use keeps those hidden. (item 5)
+  final bool debugMode;
+
   const CopypartyConfig({
     this.hostUrl = '',
     this.uploadPath = '/uploads',
@@ -26,6 +30,7 @@ class CopypartyConfig {
     this.allowSelfSignedCert = false,
     this.recreateFolderStructure = false,
     this.sortSmallestFirst = false,
+    this.debugMode = false,
   });
 
   CopypartyConfig copyWith({
@@ -38,6 +43,7 @@ class CopypartyConfig {
     bool? allowSelfSignedCert,
     bool? recreateFolderStructure,
     bool? sortSmallestFirst,
+    bool? debugMode,
   }) => CopypartyConfig(
     hostUrl: hostUrl ?? this.hostUrl,
     uploadPath: uploadPath ?? this.uploadPath,
@@ -48,6 +54,7 @@ class CopypartyConfig {
     allowSelfSignedCert: allowSelfSignedCert ?? this.allowSelfSignedCert,
     recreateFolderStructure: recreateFolderStructure ?? this.recreateFolderStructure,
     sortSmallestFirst: sortSmallestFirst ?? this.sortSmallestFirst,
+    debugMode: debugMode ?? this.debugMode,
   );
 
   @override
@@ -62,7 +69,8 @@ class CopypartyConfig {
           _listEquals(other.triggerExtensions, triggerExtensions) &&
           other.allowSelfSignedCert == allowSelfSignedCert &&
           other.recreateFolderStructure == recreateFolderStructure &&
-          other.sortSmallestFirst == sortSmallestFirst);
+          other.sortSmallestFirst == sortSmallestFirst &&
+          other.debugMode == debugMode);
 
   @override
   int get hashCode => Object.hash(
@@ -75,6 +83,7 @@ class CopypartyConfig {
     allowSelfSignedCert,
     recreateFolderStructure,
     sortSmallestFirst,
+    debugMode,
   );
 
   @override
@@ -84,7 +93,7 @@ class CopypartyConfig {
       'writeReceipts: $writeReceipts, triggerExtensions: $triggerExtensions, '
       'allowSelfSignedCert: $allowSelfSignedCert, '
       'recreateFolderStructure: $recreateFolderStructure, '
-      'sortSmallestFirst: $sortSmallestFirst)';
+      'sortSmallestFirst: $sortSmallestFirst, debugMode: $debugMode)';
 
   static bool _listEquals(List<String> a, List<String> b) {
     if (a.length != b.length) {
