@@ -18,7 +18,9 @@ class CopypartySettings extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return const SettingsSubPageScaffold(
+    // Q4: make settings values long-press selectable + copyable (support).
+    return const SelectionArea(
+      child: SettingsSubPageScaffold(
       settings: [
         SettingGroupTitle(title: 'Copyparty Server', icon: Icons.cloud_upload_outlined),
         _HostUrlTile(),
@@ -29,6 +31,7 @@ class CopypartySettings extends ConsumerWidget {
         Divider(),
         SettingGroupTitle(title: 'Upload Behaviour', icon: Icons.tune_rounded),
         _ParallelConnectionsSlider(),
+        _RecreateFolderStructureTile(),
         _AutoDeleteTile(),
         Divider(),
         SettingGroupTitle(title: 'File Matching', icon: Icons.link_rounded),
@@ -41,6 +44,7 @@ class CopypartySettings extends ConsumerWidget {
         SettingGroupTitle(title: 'Diagnostics', icon: Icons.bug_report_outlined),
         _DiagnosticLogTile(),
       ],
+      ),
     );
   }
 }
@@ -285,6 +289,31 @@ class _ParallelConnectionsSlider extends ConsumerWidget {
 // ---------------------------------------------------------------------------
 // Auto-delete toggle
 // ---------------------------------------------------------------------------
+
+class _RecreateFolderStructureTile extends ConsumerWidget {
+  const _RecreateFolderStructureTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final value =
+        ref.watch(appConfigProvider.select((c) => c.copyparty.recreateFolderStructure));
+    return Padding(
+      padding: const EdgeInsets.only(left: 8.0),
+      child: SettingListTile(
+        title: 'Recreate folder structure',
+        subtitle: 'Upload into a subfolder named after the picked folder '
+            '(preserving any nested folders) instead of the flat upload path',
+        trailing: Switch(
+          value: value,
+          onChanged: (v) => ref.read(settingsProvider).write(
+            SettingsKey.copypartyRecreateFolderStructure,
+            v,
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _AutoDeleteTile extends ConsumerWidget {
   const _AutoDeleteTile();

@@ -31,6 +31,34 @@ class CopypartyCleanupPage extends ConsumerStatefulWidget {
 bool _immichApplies(CopypartyReceipt r) =>
     r.immichAssetId != null || CopypartyFilePairer.isNativeImmichFilename(r.filename);
 
+/// The decoded server FOLDER a receipt was uploaded to (its URL minus the
+/// filename) — includes any FB9 mirrored sub-path. (Q1)
+String _folderOf(CopypartyReceipt r) {
+  try {
+    final uri = Uri.parse(r.copypartyUrl);
+    final segs = List<String>.from(uri.pathSegments)..removeWhere((s) => s.isEmpty);
+    if (segs.isNotEmpty) segs.removeLast(); // drop the filename
+    return '/${segs.join('/')}';
+  } catch (_) {
+    return '';
+  }
+}
+
+/// A group of receipts that belong together (Q2): same destination folder and
+/// same normalised stem — mirrors how the import picker groups a clip's files.
+class _CleanupGroup {
+  final String folder;
+  final List<CopypartyReceipt> receipts;
+  _CleanupGroup({required this.folder, required this.receipts});
+
+  /// Representative label — the shortest filename in the set reads best as the
+  /// clip name (companions add suffixes/extensions).
+  String get title =>
+      receipts.map((r) => r.filename).reduce((a, b) => a.length <= b.length ? a : b);
+
+  int get totalBytes => receipts.fold(0, (s, r) => s + r.sizeBytes);
+}
+
 class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   List<CopypartyReceipt> _existing = [];
   Set<int> _selected = {};
@@ -195,6 +223,60 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         _selected = {};
       }
     });
+  }
+
+  /// Groups receipts by (folder, normalised stem) preserving first-seen order,
+  /// mirroring the import picker's set grouping. (Q2)
+  List<_CleanupGroup> _buildGroups() {
+    final config = ref.read(appConfigProvider).copyparty;
+    final pairer = CopypartyFilePairer(triggerExtensions: config.triggerExtensions);
+    final groups = <String, _CleanupGroup>{};
+    final order = <String>[];
+    for (final r in _existing) {
+      final folder = _folderOf(r);
+      final key = '$folder :: ${pairer.normalise(r.filename)}';
+      final g = groups[key];
+      if (g == null) {
+        groups[key] = _CleanupGroup(folder: folder, receipts: [r]);
+        order.add(key);
+      } else {
+        g.receipts.add(r);
+      }
+    }
+    return [for (final k in order) groups[k]!];
+  }
+
+  /// Tri-state for a group's select box: true (all), false (none), null (some).
+  bool? _groupValue(_CleanupGroup g) {
+    final ids =
+        g.receipts.where((r) => !_deleted.contains(r.id)).map((r) => r.id!).toList();
+    if (ids.isEmpty) return false;
+    final selected = ids.where(_selected.contains).length;
+    if (selected == 0) return false;
+    if (selected == ids.length) return true;
+    return null;
+  }
+
+  void _toggleGroup(_CleanupGroup g, bool select) {
+    setState(() {
+      for (final r in g.receipts) {
+        if (_deleted.contains(r.id)) continue;
+        if (select) {
+          _selected.add(r.id!);
+        } else {
+          _selected.remove(r.id);
+        }
+      }
+    });
+  }
+
+  /// Verify just the (non-deleted) files in one group. (Q2 per-group verify)
+  Future<void> _verifyGroup(_CleanupGroup g) async {
+    for (final r in g.receipts) {
+      if (_deleted.contains(r.id)) continue;
+      if (!mounted) return;
+      await _verifyFile(r);
+    }
   }
 
   /// Recovery (Issue 8): re-upload a file whose verification failed, then verify.
@@ -385,7 +467,9 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
           ],
         ],
       ),
-      body: _loading
+      // Q4: long-press select + copy for all text on this page (support).
+      body: SelectionArea(
+        child: _loading
           ? const Center(child: CircularProgressIndicator.adaptive())
           : _existing.isEmpty
               ? Center(
@@ -422,34 +506,47 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                     Expanded(
                       child: RefreshIndicator(
                         onRefresh: _loadExisting,
-                        child: ListView.builder(
-                          itemCount: _existing.length,
-                          itemBuilder: (ctx, i) {
-                            final r = _existing[i];
-                            final deleted = _deleted.contains(r.id);
-                            return _CleanupTile(
-                              receipt: r,
-                              isSelected: _selected.contains(r.id),
-                              deleted: deleted,
-                              verification: _verify[r.id] ?? const ServerFileVerification(),
-                              verifying: _verifying.contains(r.id),
-                              uploading: _uploading.contains(r.id),
-                              progress: _progress[r.id],
-                              now: now,
-                              onVerify: () => _verifyFile(r),
-                              onUploadNow: () => _uploadNow(r),
-                              onChanged: deleted
-                                  ? null
-                                  : (sel) => setState(() {
-                                if (sel == true) {
-                                  _selected.add(r.id!);
-                                } else {
-                                  _selected.remove(r.id);
-                                }
-                              }),
-                            );
-                          },
-                        ),
+                        child: Builder(builder: (ctx) {
+                          final groups = _buildGroups();
+                          return ListView.builder(
+                            itemCount: groups.length,
+                            itemBuilder: (ctx, i) {
+                              final g = groups[i];
+                              return _CleanupGroupSection(
+                                group: g,
+                                groupValue: _groupValue(g),
+                                busy: busy,
+                                onGroupToggle: (v) => _toggleGroup(g, v ?? false),
+                                onGroupVerify: () => _verifyGroup(g),
+                                tiles: [
+                                  for (final r in g.receipts)
+                                    _CleanupTile(
+                                      receipt: r,
+                                      isSelected: _selected.contains(r.id),
+                                      deleted: _deleted.contains(r.id),
+                                      verification:
+                                          _verify[r.id] ?? const ServerFileVerification(),
+                                      verifying: _verifying.contains(r.id),
+                                      uploading: _uploading.contains(r.id),
+                                      progress: _progress[r.id],
+                                      now: now,
+                                      onVerify: () => _verifyFile(r),
+                                      onUploadNow: () => _uploadNow(r),
+                                      onChanged: _deleted.contains(r.id)
+                                          ? null
+                                          : (sel) => setState(() {
+                                                if (sel == true) {
+                                                  _selected.add(r.id!);
+                                                } else {
+                                                  _selected.remove(r.id);
+                                                }
+                                              }),
+                                    ),
+                                ],
+                              );
+                            },
+                          );
+                        }),
                       ),
                     ),
                     SafeArea(
@@ -488,6 +585,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                     ),
                   ],
                 ),
+      ),
     );
   }
 }
@@ -508,6 +606,92 @@ class _AllClearLine extends StatelessWidget {
           ],
         ),
       );
+}
+
+/// A grouped set of cleanup tiles under one header (Q2): folder + representative
+/// name, a group select box (tri-state), and a per-group Verify action.
+class _CleanupGroupSection extends StatelessWidget {
+  final _CleanupGroup group;
+  final bool? groupValue;
+  final bool busy;
+  final ValueChanged<bool?> onGroupToggle;
+  final VoidCallback onGroupVerify;
+  final List<Widget> tiles;
+
+  const _CleanupGroupSection({
+    required this.group,
+    required this.groupValue,
+    required this.busy,
+    required this.onGroupToggle,
+    required this.onGroupVerify,
+    required this.tiles,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          color: context.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+          padding: const EdgeInsets.fromLTRB(4, 6, 8, 6),
+          child: Row(
+            children: [
+              Checkbox(
+                value: groupValue,
+                tristate: true,
+                onChanged: (v) => onGroupToggle(v ?? false),
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      group.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: context.textTheme.titleSmall
+                          ?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    Row(
+                      children: [
+                        Icon(Icons.folder_outlined,
+                            size: 13,
+                            color: context.colorScheme.onSurface.withValues(alpha: 0.5)),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            group.folder,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: context.textTheme.labelSmall?.copyWith(
+                              color: context.colorScheme.onSurface.withValues(alpha: 0.6),
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '  ${group.receipts.length} · ${formatHumanReadableBytes(group.totalBytes, 1)}',
+                          style: context.textTheme.labelSmall?.copyWith(
+                            color: context.colorScheme.onSurface.withValues(alpha: 0.6),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              TextButton(
+                onPressed: busy ? null : onGroupVerify,
+                child: const Text('Verify'),
+              ),
+            ],
+          ),
+        ),
+        ...tiles,
+        const SizedBox(height: 4),
+      ],
+    );
+  }
 }
 
 class _CleanupTile extends StatelessWidget {

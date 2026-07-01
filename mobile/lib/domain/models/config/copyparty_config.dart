@@ -7,6 +7,11 @@ class CopypartyConfig {
   final List<String> triggerExtensions;
   final bool allowSelfSignedCert;
 
+  /// When true, imports recreate the picked folder's structure beneath the
+  /// upload path (the picked folder's name becomes a subfolder). Moved from a
+  /// per-import checkbox to a persistent setting. (Q3)
+  final bool recreateFolderStructure;
+
   const CopypartyConfig({
     this.hostUrl = '',
     this.uploadPath = '/uploads',
@@ -15,6 +20,7 @@ class CopypartyConfig {
     this.writeReceipts = true,
     this.triggerExtensions = const ['lrv', 'insv', 'insp'],
     this.allowSelfSignedCert = false,
+    this.recreateFolderStructure = false,
   });
 
   CopypartyConfig copyWith({
@@ -25,6 +31,7 @@ class CopypartyConfig {
     bool? writeReceipts,
     List<String>? triggerExtensions,
     bool? allowSelfSignedCert,
+    bool? recreateFolderStructure,
   }) => CopypartyConfig(
     hostUrl: hostUrl ?? this.hostUrl,
     uploadPath: uploadPath ?? this.uploadPath,
@@ -33,6 +40,7 @@ class CopypartyConfig {
     writeReceipts: writeReceipts ?? this.writeReceipts,
     triggerExtensions: triggerExtensions ?? this.triggerExtensions,
     allowSelfSignedCert: allowSelfSignedCert ?? this.allowSelfSignedCert,
+    recreateFolderStructure: recreateFolderStructure ?? this.recreateFolderStructure,
   );
 
   @override
@@ -45,7 +53,8 @@ class CopypartyConfig {
           other.autoDeleteAfterVerify == autoDeleteAfterVerify &&
           other.writeReceipts == writeReceipts &&
           _listEquals(other.triggerExtensions, triggerExtensions) &&
-          other.allowSelfSignedCert == allowSelfSignedCert);
+          other.allowSelfSignedCert == allowSelfSignedCert &&
+          other.recreateFolderStructure == recreateFolderStructure);
 
   @override
   int get hashCode => Object.hash(
@@ -56,6 +65,7 @@ class CopypartyConfig {
     writeReceipts,
     Object.hashAll(triggerExtensions),
     allowSelfSignedCert,
+    recreateFolderStructure,
   );
 
   @override
@@ -63,7 +73,8 @@ class CopypartyConfig {
       'CopypartyConfig(hostUrl: $hostUrl, uploadPath: $uploadPath, '
       'parallelConnections: $parallelConnections, autoDeleteAfterVerify: $autoDeleteAfterVerify, '
       'writeReceipts: $writeReceipts, triggerExtensions: $triggerExtensions, '
-      'allowSelfSignedCert: $allowSelfSignedCert)';
+      'allowSelfSignedCert: $allowSelfSignedCert, '
+      'recreateFolderStructure: $recreateFolderStructure)';
 
   static bool _listEquals(List<String> a, List<String> b) {
     if (a.length != b.length) {

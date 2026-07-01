@@ -243,9 +243,10 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
 
   Future<void> startUpload({
     Set<String>? selectedFilePaths,
-    bool createFolders = false,
   }) async {
     final config = _ref.read(appConfigProvider).copyparty;
+    // Q3: folder recreation is now a persistent setting, not a per-import flag.
+    final createFolders = config.recreateFolderStructure;
     final password = await _ref.read(copypartyPasswordProvider.future);
     final packageInfo = await PackageInfo.fromPlatform();
 
@@ -289,7 +290,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         // FB9: when "create folders" is on, mirror the file's subfolder
         // (relative to the selected root) beneath the configured upload path.
         final uploadPath = createFolders
-            ? _mirroredUploadPath(config.uploadPath, state.directoryPath, file.localPath)
+            ? mirroredUploadPath(config.uploadPath, state.directoryPath, file.localPath)
             : config.uploadPath;
         int? receiptId;
         try {
@@ -651,7 +652,7 @@ String _stripSlashes(String s) => s.replaceAll(RegExp(r'^/+|/+$'), '');
 ///   file="/sd/Camera 01/clip.mp4"          → "/uploads/Camera 01"
 ///   file="/sd/Camera 01/DCIM/100/clip.mp4" → "/uploads/Camera 01/DCIM/100"
 /// A file that somehow sits outside the picked root falls back to [base].
-String _mirroredUploadPath(String base, String? rootDir, String fileLocalPath) {
+String mirroredUploadPath(String base, String? rootDir, String fileLocalPath) {
   final cleanBase = base.replaceAll(RegExp(r'/+$'), '');
   if (rootDir == null) return base;
   final root = rootDir.replaceAll(RegExp(r'/+$'), '');

@@ -46,16 +46,20 @@ class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
           title: const Text('Import from Memory Card'),
           centerTitle: false,
         ),
-        body: switch (session.step) {
-          ImportSessionStep.idle => const _DirectoryPickerStep(),
-          ImportSessionStep.scanning => _ScanningStep(session),
-          ImportSessionStep.options => _OptionsStep(session),
-          ImportSessionStep.uploading => _UploadProgressStep(
-              session,
-              onCancel: () => ref.read(importSessionProvider.notifier).cancelUpload(),
-            ),
-          ImportSessionStep.complete => _CompletionStep(session),
-        },
+        // Q4: SelectionArea makes all the text on these pages long-press
+        // selectable + copyable (helpful for support / sharing values).
+        body: SelectionArea(
+          child: switch (session.step) {
+            ImportSessionStep.idle => const _DirectoryPickerStep(),
+            ImportSessionStep.scanning => _ScanningStep(session),
+            ImportSessionStep.options => _OptionsStep(session),
+            ImportSessionStep.uploading => _UploadProgressStep(
+                session,
+                onCancel: () => ref.read(importSessionProvider.notifier).cancelUpload(),
+              ),
+            ImportSessionStep.complete => _CompletionStep(session),
+          },
+        ),
       ),
     );
   }
@@ -267,7 +271,6 @@ class _OptionsStep extends ConsumerStatefulWidget {
 class _OptionsStepState extends ConsumerState<_OptionsStep> {
   late Set<String> _selectedPaths;
   final Map<String, UploadDestination> _destinationOverrides = {};
-  bool _createFolders = false;
 
   bool _verifying = false;
   bool _verifyFailed = false;
@@ -322,20 +325,29 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     final config = ref.read(appConfigProvider).copyparty;
     final uploader = ref.read(copypartyUploaderProvider);
     final files = widget.session.uploadSets.expand((s) => s.files).toList();
+    final rootDir = widget.session.directoryPath;
+    // Each file's expected server folder — the mirrored sub-path when "recreate
+    // folder structure" is on, else the flat base. Verifying against the base
+    // when a file was uploaded into a subfolder wrongly reports it "missing".
+    String targetFolder(UploadFile f) => config.recreateFolderStructure
+        ? mirroredUploadPath(config.uploadPath, rootDir, f.localPath)
+        : config.uploadPath;
     String password = '';
     try {
       password = await ref.read(copypartyPasswordProvider.future);
     } catch (_) {}
 
     try {
-      final sizes = await uploader.listUploadFolder(
-        config.hostUrl,
-        config.uploadPath,
-        password,
-      );
+      // List each distinct target folder once, then match files to their folder.
+      final folders = files.map(targetFolder).toSet();
+      final listings = <String, Map<String, int>>{};
+      for (final folder in folders) {
+        listings[folder] =
+            await uploader.listUploadFolder(config.hostUrl, folder, password);
+      }
       for (final f in files) {
         f.verification = CopypartyUploaderService.verificationFromListing(
-          sizes,
+          listings[targetFolder(f)] ?? const {},
           f.filename,
           f.sizeBytes,
           immichApplicable: CopypartyFilePairer.isNativeImmichFilename(f.filename),
@@ -743,18 +755,8 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // FB9: recreate the USB subfolder structure under the upload path.
-                CheckboxListTile(
-                  value: _createFolders,
-                  onChanged: (v) => setState(() => _createFolders = v ?? false),
-                  controlAffinity: ListTileControlAffinity.leading,
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  title: const Text('Recreate folder structure on server'),
-                  subtitle: const Text(
-                    'Mirror each file\'s subfolders under the upload path',
-                  ),
-                ),
+                // Q1: show where these files will be uploaded before starting.
+                const _DestinationBanner(),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
@@ -765,7 +767,6 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                                 .read(importSessionProvider.notifier)
                                 .startUpload(
                                   selectedFilePaths: Set.of(_selectedPaths),
-                                  createFolders: _createFolders,
                                 );
                           }
                         : null,
@@ -1008,6 +1009,63 @@ class _LiveChips extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // Step 4: Upload progress — Immich-style cards with speed + ETA
 // ---------------------------------------------------------------------------
+
+/// The decoded server folder from an upload folder URL (Q1), or null if absent.
+String? _folderDisplay(String? folderUrl) {
+  if (folderUrl == null) return null;
+  try {
+    final segs = Uri.parse(folderUrl).pathSegments.where((s) => s.isNotEmpty);
+    return '/${segs.join('/')}';
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Q1: shows where the selected files will be uploaded, before starting.
+class _DestinationBanner extends ConsumerWidget {
+  const _DestinationBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final cp = ref.watch(appConfigProvider.select((c) => c.copyparty));
+    final host = cp.hostUrl.replaceAll(RegExp(r'/+$'), '');
+    final path = '/${cp.uploadPath.replaceAll(RegExp(r'^/+|/+$'), '')}';
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: context.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.folder_outlined, size: 18, color: context.colorScheme.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Uploading to', style: context.textTheme.labelSmall),
+                Text(
+                  '$host$path',
+                  style: context.textTheme.bodySmall
+                      ?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                if (cp.recreateFolderStructure)
+                  Text(
+                    '+ recreating folder structure',
+                    style: context.textTheme.labelSmall
+                        ?.copyWith(color: context.colorScheme.primary),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _UploadProgressStep extends StatelessWidget {
   final ImportSessionState session;
@@ -1912,13 +1970,38 @@ class _CompletionFileTile extends StatelessWidget {
                                       : 'copyparty ✓ · Immich missing')
                                   : 'copyparty ✓ (hash verified)')
                               : 'not confirmed';
-                  return Text(
-                    text,
-                    style: context.textTheme.bodySmall?.copyWith(
-                      color: good
-                          ? Colors.green
-                          : context.colorScheme.error,
-                    ),
+                  final folder = _folderDisplay(file.uploadFolderUrl);
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        text,
+                        style: context.textTheme.bodySmall?.copyWith(
+                          color: good ? Colors.green : context.colorScheme.error,
+                        ),
+                      ),
+                      if (folder != null)
+                        Row(
+                          children: [
+                            Icon(Icons.folder_outlined,
+                                size: 12,
+                                color: context.colorScheme.onSurface
+                                    .withValues(alpha: 0.5)),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                folder,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: context.textTheme.labelSmall?.copyWith(
+                                  color: context.colorScheme.onSurface
+                                      .withValues(alpha: 0.6),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                    ],
                   );
                 }),
           trailing: Row(

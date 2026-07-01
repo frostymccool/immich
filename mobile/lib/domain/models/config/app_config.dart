@@ -158,6 +158,7 @@ class AppConfig {
             .copypartyWriteReceipts => copyparty.writeReceipts,
             .copypartyTriggerExtensions => copyparty.triggerExtensions,
             .copypartySelfSignedCert => copyparty.allowSelfSignedCert,
+            .copypartyRecreateFolderStructure => copyparty.recreateFolderStructure,
             .slideshowTransition => slideshow.transition,
             .slideshowRepeat => slideshow.repeat,
             .slideshowDuration => slideshow.duration,
@@ -222,6 +223,8 @@ class AppConfig {
       .copypartyWriteReceipts => copyWith(copyparty: copyparty.copyWith(writeReceipts: value as bool)),
       .copypartyTriggerExtensions => copyWith(copyparty: copyparty.copyWith(triggerExtensions: value as List<String>)),
       .copypartySelfSignedCert => copyWith(copyparty: copyparty.copyWith(allowSelfSignedCert: value as bool)),
+      .copypartyRecreateFolderStructure =>
+        copyWith(copyparty: copyparty.copyWith(recreateFolderStructure: value as bool)),
       .slideshowTransition => copyWith(slideshow: slideshow.copyWith(transition: value as bool)),
       .slideshowRepeat => copyWith(slideshow: slideshow.copyWith(repeat: value as bool)),
       .slideshowDuration => copyWith(slideshow: slideshow.copyWith(duration: value as int)),

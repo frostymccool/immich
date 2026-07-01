@@ -80,6 +80,7 @@ enum SettingsKey<T> {
   copypartyWriteReceipts<bool>(),
   copypartyTriggerExtensions<List<String>>(codec: _ListCodec(_PrimitiveCodec.string)),
   copypartySelfSignedCert<bool>(),
+  copypartyRecreateFolderStructure<bool>(),
 
   // Slideshow
   slideshowTransition<bool>(),
