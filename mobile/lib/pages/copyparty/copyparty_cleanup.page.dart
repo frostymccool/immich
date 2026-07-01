@@ -516,6 +516,11 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                                 group: g,
                                 groupValue: _groupValue(g),
                                 busy: busy,
+                                now: now,
+                                verifications: [
+                                  for (final r in g.receipts)
+                                    _verify[r.id] ?? const ServerFileVerification(),
+                                ],
                                 onGroupToggle: (v) => _toggleGroup(g, v ?? false),
                                 onGroupVerify: () => _verifyGroup(g),
                                 tiles: [
@@ -609,11 +614,15 @@ class _AllClearLine extends StatelessWidget {
 }
 
 /// A grouped set of cleanup tiles under one header (Q2): folder + representative
-/// name, a group select box (tri-state), and a per-group Verify action.
+/// name, a group select box (tri-state), a rolled-up status summary, and a
+/// per-group Verify action. A single-file "group" renders the file directly
+/// (no redundant header) with just a slim folder line.
 class _CleanupGroupSection extends StatelessWidget {
   final _CleanupGroup group;
   final bool? groupValue;
   final bool busy;
+  final DateTime now;
+  final List<ServerFileVerification> verifications;
   final ValueChanged<bool?> onGroupToggle;
   final VoidCallback onGroupVerify;
   final List<Widget> tiles;
@@ -622,13 +631,49 @@ class _CleanupGroupSection extends StatelessWidget {
     required this.group,
     required this.groupValue,
     required this.busy,
+    required this.now,
+    required this.verifications,
     required this.onGroupToggle,
     required this.onGroupVerify,
     required this.tiles,
   });
 
+  Widget _folderLine(BuildContext context) => Row(
+        children: [
+          Icon(Icons.folder_outlined,
+              size: 13, color: context.colorScheme.onSurface.withValues(alpha: 0.5)),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              group.folder,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: context.textTheme.labelSmall?.copyWith(
+                color: context.colorScheme.onSurface.withValues(alpha: 0.6),
+              ),
+            ),
+          ),
+        ],
+      );
+
   @override
   Widget build(BuildContext context) {
+    // Item 1: a single-file group is just the file — no separate header (which
+    // duplicated the checkbox/Verify). Show a slim folder line + the tile.
+    if (group.receipts.length == 1) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: _folderLine(context),
+          ),
+          ...tiles,
+          const SizedBox(height: 4),
+        ],
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -655,20 +700,7 @@ class _CleanupGroupSection extends StatelessWidget {
                     ),
                     Row(
                       children: [
-                        Icon(Icons.folder_outlined,
-                            size: 13,
-                            color: context.colorScheme.onSurface.withValues(alpha: 0.5)),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            group.folder,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: context.textTheme.labelSmall?.copyWith(
-                              color: context.colorScheme.onSurface.withValues(alpha: 0.6),
-                            ),
-                          ),
-                        ),
+                        Expanded(child: _folderLine(context)),
                         Text(
                           '  ${group.receipts.length} · ${formatHumanReadableBytes(group.totalBytes, 1)}',
                           style: context.textTheme.labelSmall?.copyWith(
@@ -677,6 +709,9 @@ class _CleanupGroupSection extends StatelessWidget {
                         ),
                       ],
                     ),
+                    // Item 2: rolled-up status so the group's state is visible
+                    // at the top without scanning each file.
+                    _summary(context),
                   ],
                 ),
               ),
@@ -692,6 +727,69 @@ class _CleanupGroupSection extends StatelessWidget {
       ],
     );
   }
+
+  /// Rolls up the group's per-file verification into compact chips. Denominators
+  /// are per-axis KNOWN counts so an unchecked axis never reads as "absent".
+  Widget _summary(BuildContext context) {
+    final partial =
+        verifications.where((v) => v.partialExists == VerifyState.yes).length;
+    final hashFresh = verifications.where((v) => v.hashFreshAt(now)).length;
+    final immichPool = verifications.where((v) => v.immichApplicable).toList();
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Wrap(
+        spacing: 10,
+        runSpacing: 2,
+        children: [
+          _axisChip(context, 'name', verifications, (v) => v.filenamePresent),
+          _axisChip(context, 'size', verifications, (v) => v.sizeMatches),
+          if (partial > 0)
+            _rawChip(context, 'partial $partial/${verifications.length}',
+                context.colorScheme.error, Icons.error_outline),
+          _rawChip(
+            context,
+            'hash $hashFresh/${verifications.length}',
+            hashFresh == verifications.length
+                ? Colors.green.shade600
+                : (hashFresh == 0
+                    ? context.colorScheme.onSurfaceVariant
+                    : Colors.orange.shade700),
+            hashFresh == verifications.length ? Icons.check_circle : Icons.fingerprint,
+          ),
+          if (immichPool.isNotEmpty)
+            _axisChip(context, 'Immich', immichPool, (v) => v.immich),
+        ].whereType<Widget>().toList(),
+      ),
+    );
+  }
+
+  Widget? _axisChip(
+    BuildContext context,
+    String label,
+    List<ServerFileVerification> pool,
+    VerifyState Function(ServerFileVerification v) get,
+  ) {
+    final known = pool.where((v) => get(v) != VerifyState.unknown).toList();
+    if (known.isEmpty) return null;
+    final yes = known.where((v) => get(v) == VerifyState.yes).length;
+    final total = known.length;
+    final full = yes == total;
+    final none = yes == 0;
+    final color = full
+        ? Colors.green.shade600
+        : (none ? context.colorScheme.error : Colors.orange.shade700);
+    final icon = full ? Icons.check_circle : (none ? Icons.cancel : Icons.adjust);
+    return _rawChip(context, '$label $yes/$total', color, icon);
+  }
+
+  Widget _rawChip(BuildContext context, String label, Color color, IconData icon) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 3),
+          Text(label, style: context.textTheme.labelSmall?.copyWith(color: color)),
+        ],
+      );
 }
 
 class _CleanupTile extends StatelessWidget {
