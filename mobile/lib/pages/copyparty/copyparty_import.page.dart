@@ -1281,6 +1281,40 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
     _eta = _speedCalc.timeRemainingAsString;
   }
 
+  /// A small pill showing which backend the bytes are currently going to
+  /// (Copyparty vs Immich), so a "both" file makes its two phases obvious.
+  Widget _phaseChip(BuildContext context, UploadFile file) {
+    final (String label, IconData icon, Color color) = switch (file.status) {
+      UploadFileStatus.hashing =>
+        ('Hashing', Icons.tag_rounded, context.colorScheme.onSurfaceSecondary),
+      UploadFileStatus.handshaking || UploadFileStatus.uploading || UploadFileStatus.confirmed =>
+        ('Copyparty', Icons.sd_card_rounded, context.colorScheme.primary),
+      UploadFileStatus.immichUploading =>
+        ('Immich', Icons.cloud_upload_rounded, context.colorScheme.tertiary),
+      _ => ('', Icons.circle, context.colorScheme.primary),
+    };
+    if (label.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: const BorderRadius.all(Radius.circular(10)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: context.textTheme.labelSmall
+                ?.copyWith(color: color, fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final file = widget.file;
@@ -1319,12 +1353,22 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    file.filename,
-                    style: context.textTheme.bodyMedium
-                        ?.copyWith(fontWeight: FontWeight.w600),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          file.filename,
+                          style: context.textTheme.bodyMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (isActive) ...[
+                        const SizedBox(width: 8),
+                        _phaseChip(context, file),
+                      ],
+                    ],
                   ),
                   const SizedBox(height: 2),
                   Text(
