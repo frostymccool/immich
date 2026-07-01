@@ -822,14 +822,47 @@ class _SelectableUploadSetTile extends StatelessWidget {
     required this.onDestinationChange,
   });
 
+  Widget _relPathLine(BuildContext context, String relPath) => Text(
+        relPath,
+        style: context.textTheme.bodySmall?.copyWith(
+          color: context.colorScheme.onSurface.withValues(alpha: 0.5),
+          fontFamily: 'monospace',
+        ),
+        overflow: TextOverflow.ellipsis,
+      );
+
   @override
   Widget build(BuildContext context) {
+    final relPath = _relPathUtil(rootPath, set.directoryPath);
+    final total = set.files.length;
+
+    // Item 2: a single-file "group" is just that file — render it directly with
+    // its status chips visible, so there's nothing to expand.
+    if (total == 1) {
+      final f = set.files.first;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (relPath.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(left: 16, top: 6),
+              child: _relPathLine(context, relPath),
+            ),
+          _SelectableFileTile(
+            file: f,
+            selected: selectedPaths.contains(f.localPath),
+            destination: getDestination(f),
+            onToggle: (v) => onToggleFile(f.localPath, v),
+            onDestinationChange: (d) => onDestinationChange(f.localPath, d),
+          ),
+        ],
+      );
+    }
+
     final filesSelected =
         set.files.where((f) => selectedPaths.contains(f.localPath)).length;
-    final total = set.files.length;
     final bool? groupChecked =
         filesSelected == 0 ? false : (filesSelected == total ? true : null);
-    final relPath = _relPathUtil(rootPath, set.directoryPath);
 
     return ExpansionTile(
       leading: Checkbox(
@@ -837,23 +870,15 @@ class _SelectableUploadSetTile extends StatelessWidget {
         value: groupChecked,
         onChanged: (v) => onToggleGroup(v == true),
       ),
-      title: Text(set.displayName),
+      // Item 3: show the file count right in the group entry.
+      title: Text('${set.displayName}  ·  $total files'),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (relPath.isNotEmpty)
-            Text(
-              relPath,
-              style: context.textTheme.bodySmall?.copyWith(
-                color: context.colorScheme.onSurface.withValues(alpha: 0.5),
-                fontFamily: 'monospace',
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          Text(
-            '$total file${total == 1 ? '' : 's'} · '
-            '${formatHumanReadableBytes(set.totalBytes, 1)}',
-          ),
+          if (relPath.isNotEmpty) _relPathLine(context, relPath),
+          Text(formatHumanReadableBytes(set.totalBytes, 1)),
+          // Item 1: rolled-up status so it's visible without expanding.
+          _GroupSummary(set: set),
         ],
       ),
       children: set.files
@@ -869,7 +894,88 @@ class _SelectableUploadSetTile extends StatelessWidget {
           .toList(),
     );
   }
+}
 
+/// Item 1: a compact roll-up of the group's per-file verification — e.g.
+/// "name 1/2 · size 2/2 · Immich 2/2" — shown on the collapsed group header so
+/// mixed states are visible without expanding.
+class _GroupSummary extends StatelessWidget {
+  final UploadSet set;
+  const _GroupSummary({required this.set});
+
+  @override
+  Widget build(BuildContext context) {
+    final files = set.files;
+    if (files.every((f) => f.verification == null)) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Text('checking server…',
+            style: context.textTheme.labelSmall?.copyWith(
+              color: context.colorScheme.onSurfaceVariant,
+            )),
+      );
+    }
+    final n = files.length;
+    final partial =
+        files.where((f) => f.verification?.partialExists == VerifyState.yes).length;
+    final immichApplicable =
+        files.where((f) => f.verification?.immichApplicable ?? false).toList();
+
+    // Denominators are per-axis KNOWN counts, never the full file count — an
+    // unchecked/unknown axis (e.g. Immich still resolving in the background)
+    // must not read as "absent". A chip is hidden until something is known.
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Wrap(
+        spacing: 10,
+        runSpacing: 2,
+        children: [
+          _axisChip(context, 'name', files, (v) => v.filenamePresent),
+          _axisChip(context, 'size', files, (v) => v.sizeMatches),
+          if (partial > 0)
+            _rawChip(context, 'partial $partial/$n', context.colorScheme.error,
+                Icons.error_outline),
+          _axisChip(context, 'Immich', immichApplicable, (v) => v.immich),
+        ].whereType<Widget>().toList(),
+      ),
+    );
+  }
+
+  /// Rolls up one axis over [pool], counting only files whose state is KNOWN
+  /// (verification present and not `unknown`). Returns null when nothing is
+  /// known yet, so the chip is omitted rather than showing a misleading 0/N.
+  Widget? _axisChip(
+    BuildContext context,
+    String label,
+    List<UploadFile> pool,
+    VerifyState Function(ServerFileVerification v) get,
+  ) {
+    final known = pool
+        .where((f) => f.verification != null && get(f.verification!) != VerifyState.unknown)
+        .toList();
+    if (known.isEmpty) return null;
+    final yes = known.where((f) => get(f.verification!) == VerifyState.yes).length;
+    final total = known.length;
+    final full = yes == total;
+    final none = yes == 0;
+    // none here means every KNOWN file is genuinely "no" → error, not grey.
+    final color = full
+        ? Colors.green.shade600
+        : (none ? context.colorScheme.error : Colors.orange.shade700);
+    final icon = full
+        ? Icons.check_circle
+        : (none ? Icons.cancel : Icons.adjust);
+    return _rawChip(context, '$label $yes/$total', color, icon);
+  }
+
+  Widget _rawChip(BuildContext context, String label, Color color, IconData icon) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 3),
+          Text(label, style: context.textTheme.labelSmall?.copyWith(color: color)),
+        ],
+      );
 }
 
 class _SelectableFileTile extends StatelessWidget {

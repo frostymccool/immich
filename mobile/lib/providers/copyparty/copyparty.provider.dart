@@ -112,8 +112,23 @@ final copypartyPasswordProvider = FutureProvider<String>((ref) async {
 // Pending cleanup (uploaded files not yet deleted from device)
 // ---------------------------------------------------------------------------
 
-final pendingCleanupProvider = FutureProvider<List<CopypartyReceipt>>((ref) {
-  return ref.watch(copypartyReceiptRepositoryProvider).getUndeleted();
+final pendingCleanupProvider = FutureProvider<List<CopypartyReceipt>>((ref) async {
+  // Only files whose local source STILL EXISTS are pending cleanup, so the
+  // settings badge count matches what the cleanup page actually lists (item 4).
+  // This is a DISPLAY-ONLY filter — we must NOT mark a receipt sourceDeleted
+  // here: on removable SD/USB media an unmounted card makes exists() return
+  // false transiently, and persisting that would permanently drop a file that
+  // is still physically present from cleanup (review: BLOCKER). "Not mounted"
+  // is not "deleted".
+  final repo = ref.watch(copypartyReceiptRepositoryProvider);
+  final all = await repo.getUndeleted();
+  final existing = <CopypartyReceipt>[];
+  for (final r in all) {
+    if (await File(r.localPath).exists()) {
+      existing.add(r);
+    }
+  }
+  return existing;
 });
 
 // ---------------------------------------------------------------------------
@@ -353,13 +368,6 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             // FB11: the .cpreceipt sidecar file is redundant now that presence
             // is verified live against the server; we no longer write it. The
             // DB receipt (above) remains — Pending Cleanup needs it.
-
-            if (config.autoDeleteAfterVerify && file.safeToDelete && !file.needsImmich) {
-              try {
-                await File(file.localPath).delete();
-                await _receiptRepo.markSourceDeleted(receiptId);
-              } catch (_) {}
-            }
           }
 
           // ---- Immich native upload ----
@@ -377,6 +385,17 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             } else if (!result.isCancelled) {
               throw Exception(result.errorMessage ?? 'Immich upload failed');
             }
+          }
+
+          // Auto-delete after BOTH backends are done (item 5): safeToDelete
+          // already requires the Immich asset id for Immich-native files, so a
+          // "both"/Immich file is only removed once it's confirmed in Immich —
+          // not just on copyparty. Runs for copyparty-only files too.
+          if (config.autoDeleteAfterVerify && file.safeToDelete && receiptId != null) {
+            try {
+              await File(file.localPath).delete();
+              await _receiptRepo.markSourceDeleted(receiptId);
+            } catch (_) {}
           }
 
           file.status = UploadFileStatus.receiptWritten;
