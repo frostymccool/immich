@@ -81,6 +81,7 @@ enum SettingsKey<T> {
   copypartyTriggerExtensions<List<String>>(codec: _ListCodec(_PrimitiveCodec.string)),
   copypartySelfSignedCert<bool>(),
   copypartyRecreateFolderStructure<bool>(),
+  copypartySortSmallestFirst<bool>(),
 
   // Slideshow
   slideshowTransition<bool>(),

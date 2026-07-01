@@ -37,6 +37,7 @@ class CopypartySettings extends ConsumerWidget {
           ],
           const SettingGroupTitle(title: 'Upload Behaviour', icon: Icons.tune_rounded),
           const _ParallelConnectionsSlider(),
+          const _SortSmallestFirstTile(),
           const _RecreateFolderStructureTile(),
           const _AutoDeleteTile(),
           const Divider(),
@@ -295,6 +296,31 @@ class _ParallelConnectionsSlider extends ConsumerWidget {
 // ---------------------------------------------------------------------------
 // Auto-delete toggle
 // ---------------------------------------------------------------------------
+
+class _SortSmallestFirstTile extends ConsumerWidget {
+  const _SortSmallestFirstTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final value =
+        ref.watch(appConfigProvider.select((c) => c.copyparty.sortSmallestFirst));
+    return Padding(
+      padding: const EdgeInsets.only(left: 8.0),
+      child: SettingListTile(
+        title: 'Upload smallest first',
+        subtitle: 'Upload groups in ascending total size, so quick wins land '
+            'first on slow connections',
+        trailing: Switch(
+          value: value,
+          onChanged: (v) => ref.read(settingsProvider).write(
+            SettingsKey.copypartySortSmallestFirst,
+            v,
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _RecreateFolderStructureTile extends ConsumerWidget {
   const _RecreateFolderStructureTile();

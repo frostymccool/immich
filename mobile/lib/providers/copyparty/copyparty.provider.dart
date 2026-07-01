@@ -288,8 +288,16 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       selectedPaths: selectedFilePaths,
     );
 
+    // Item 4: optionally upload groups smallest-first (by group total size) so
+    // quick wins complete first on slow links. Iterate a sorted COPY so the
+    // session's display order is untouched.
+    final orderedSets = config.sortSmallestFirst
+        ? (List<UploadSet>.of(state.uploadSets)
+          ..sort((a, b) => a.totalBytes.compareTo(b.totalBytes)))
+        : state.uploadSets;
+
     bool cancelled = false;
-    for (final set in state.uploadSets) {
+    for (final set in orderedSets) {
       if (cancelled) break;
       for (final file in set.files) {
         if (cancelToken.isCompleted) {
@@ -322,12 +330,18 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
               password,
               parallelism: config.parallelConnections,
               onHashProgress: (done, total) {
+                // Local hashing — NOT a network transfer. Keep the status on
+                // `hashing` so the card shows "Hashing" and hides "transferred".
+                file.status = UploadFileStatus.hashing;
                 if (total > 0) {
                   file.uploadedBytes = (done * 0.2).round();
                 }
                 _notify();
               },
               onUploadProgress: (done, total) {
+                // Now actually POSTing chunks to copyparty — flip to `uploading`
+                // so the phase chip changes from "Hashing" to "Copyparty".
+                file.status = UploadFileStatus.uploading;
                 final chunkProgress = total > 0 ? done / total : 0.0;
                 file.uploadedBytes = (fileSizeBytes * (0.2 + 0.8 * chunkProgress)).round();
                 _notify();
@@ -426,6 +440,24 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     if (state.step == ImportSessionStep.uploading) {
       state = state.copyWith(step: ImportSessionStep.complete);
     }
+  }
+
+  /// Retry just the files that failed in the last run (item 3): reset them to
+  /// pending and re-run the normal upload loop for only those files.
+  Future<void> retryFailed() async {
+    final failedPaths = <String>{};
+    for (final set in state.uploadSets) {
+      for (final file in set.files) {
+        if (file.status == UploadFileStatus.failed) {
+          file.status = UploadFileStatus.pending;
+          file.errorMessage = null;
+          file.uploadedBytes = 0;
+          failedPaths.add(file.localPath);
+        }
+      }
+    }
+    if (failedPaths.isEmpty) return;
+    await startUpload(selectedFilePaths: failedPaths);
   }
 
   /// Diagnostic self-test: uploads each selected file under several controlled

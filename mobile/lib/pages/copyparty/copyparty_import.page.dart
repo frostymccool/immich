@@ -1428,6 +1428,9 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
         (file.status == UploadFileStatus.confirmed && !file.needsImmich);
     final isFailed = file.status == UploadFileStatus.failed;
     final isActive = !isDone && !isFailed;
+    // Hashing is a LOCAL checksum pass, not a network transfer — don't show
+    // "transferred / MiB/s" for it (item 1).
+    final isHashing = file.status == UploadFileStatus.hashing;
 
     final cardColor = isFailed
         ? context.colorScheme.errorContainer
@@ -1484,9 +1487,11 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                             ? (file.alreadyOnServer
                                 ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · already on server (hash verified)'
                                 : '${formatHumanReadableBytes(file.sizeBytes, 1)} · Done')
-                            : '${formatHumanReadableBytes(file.sizeBytes, 1)} · '
-                              '${formatHumanReadableBytes(file.uploadedBytes, 1)} transferred · '
-                              '$_speed',
+                            : isHashing
+                                ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · computing checksum…'
+                                : '${formatHumanReadableBytes(file.sizeBytes, 1)} · '
+                                  '${formatHumanReadableBytes(file.uploadedBytes, 1)} transferred · '
+                                  '$_speed',
                     style: context.textTheme.labelLarge?.copyWith(
                       color: isFailed
                           ? context.colorScheme.error
@@ -1698,26 +1703,35 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
           ),
         ),
         const Divider(height: 1),
-        // Per-group file list
+        // Per-group file list — only the files the user actually selected for
+        // THIS run, not every scanned file. (item 2)
         Expanded(
-          child: ListView.builder(
-            itemCount: session.uploadSets.length,
-            itemBuilder: (ctx, i) {
-              final set = session.uploadSets[i];
-              return _CompletionSetSection(
-                set: set,
-                rootPath: session.directoryPath,
-                checkedForDeletion: _checkedForDeletion,
-                onToggle: (path, v) => setState(() {
-                  if (v) {
-                    _checkedForDeletion.add(path);
-                  } else {
-                    _checkedForDeletion.remove(path);
-                  }
-                }),
-              );
-            },
-          ),
+          child: Builder(builder: (ctx) {
+            final selected = session.selectedPaths;
+            bool keep(UploadFile f) =>
+                selected == null || selected.contains(f.localPath);
+            final visibleSets =
+                session.uploadSets.where((s) => s.files.any(keep)).toList();
+            return ListView.builder(
+              itemCount: visibleSets.length,
+              itemBuilder: (ctx, i) {
+                final set = visibleSets[i];
+                return _CompletionSetSection(
+                  set: set,
+                  rootPath: session.directoryPath,
+                  selectedPaths: selected,
+                  checkedForDeletion: _checkedForDeletion,
+                  onToggle: (path, v) => setState(() {
+                    if (v) {
+                      _checkedForDeletion.add(path);
+                    } else {
+                      _checkedForDeletion.remove(path);
+                    }
+                  }),
+                );
+              },
+            );
+          }),
         ),
         // Footer
         const Divider(height: 1),
@@ -1727,6 +1741,20 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (failed > 0) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.tonalIcon(
+                      onPressed: () =>
+                          ref.read(importSessionProvider.notifier).retryFailed(),
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: Text(
+                        'Retry $failed failed file${failed == 1 ? '' : 's'}',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
                 if (checkedFiles.isNotEmpty) ...[
                   SizedBox(
                     width: double.infinity,
@@ -1980,12 +2008,14 @@ class _StatChip extends StatelessWidget {
 class _CompletionSetSection extends StatelessWidget {
   final UploadSet set;
   final String? rootPath;
+  final Set<String>? selectedPaths;
   final Set<String> checkedForDeletion;
   final void Function(String, bool) onToggle;
 
   const _CompletionSetSection({
     required this.set,
     required this.rootPath,
+    required this.selectedPaths,
     required this.checkedForDeletion,
     required this.onToggle,
   });
@@ -1993,6 +2023,9 @@ class _CompletionSetSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final relPath = _relPathUtil(rootPath, set.directoryPath);
+    final files = selectedPaths == null
+        ? set.files
+        : set.files.where((f) => selectedPaths!.contains(f.localPath)).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2019,7 +2052,7 @@ class _CompletionSetSection extends StatelessWidget {
             ],
           ),
         ),
-        ...set.files.map(
+        ...files.map(
           (f) => _CompletionFileTile(
             file: f,
             checked: checkedForDeletion.contains(f.localPath),

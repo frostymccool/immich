@@ -159,6 +159,7 @@ class AppConfig {
             .copypartyTriggerExtensions => copyparty.triggerExtensions,
             .copypartySelfSignedCert => copyparty.allowSelfSignedCert,
             .copypartyRecreateFolderStructure => copyparty.recreateFolderStructure,
+            .copypartySortSmallestFirst => copyparty.sortSmallestFirst,
             .slideshowTransition => slideshow.transition,
             .slideshowRepeat => slideshow.repeat,
             .slideshowDuration => slideshow.duration,
@@ -225,6 +226,8 @@ class AppConfig {
       .copypartySelfSignedCert => copyWith(copyparty: copyparty.copyWith(allowSelfSignedCert: value as bool)),
       .copypartyRecreateFolderStructure =>
         copyWith(copyparty: copyparty.copyWith(recreateFolderStructure: value as bool)),
+      .copypartySortSmallestFirst =>
+        copyWith(copyparty: copyparty.copyWith(sortSmallestFirst: value as bool)),
       .slideshowTransition => copyWith(slideshow: slideshow.copyWith(transition: value as bool)),
       .slideshowRepeat => copyWith(slideshow: slideshow.copyWith(repeat: value as bool)),
       .slideshowDuration => copyWith(slideshow: slideshow.copyWith(duration: value as int)),

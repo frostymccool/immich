@@ -12,6 +12,10 @@ class CopypartyConfig {
   /// per-import checkbox to a persistent setting. (Q3)
   final bool recreateFolderStructure;
 
+  /// When true, upload groups smallest-first (by the group's total byte size)
+  /// so quick wins land first on slow links. (item 4)
+  final bool sortSmallestFirst;
+
   const CopypartyConfig({
     this.hostUrl = '',
     this.uploadPath = '/uploads',
@@ -21,6 +25,7 @@ class CopypartyConfig {
     this.triggerExtensions = const ['lrv', 'insv', 'insp'],
     this.allowSelfSignedCert = false,
     this.recreateFolderStructure = false,
+    this.sortSmallestFirst = false,
   });
 
   CopypartyConfig copyWith({
@@ -32,6 +37,7 @@ class CopypartyConfig {
     List<String>? triggerExtensions,
     bool? allowSelfSignedCert,
     bool? recreateFolderStructure,
+    bool? sortSmallestFirst,
   }) => CopypartyConfig(
     hostUrl: hostUrl ?? this.hostUrl,
     uploadPath: uploadPath ?? this.uploadPath,
@@ -41,6 +47,7 @@ class CopypartyConfig {
     triggerExtensions: triggerExtensions ?? this.triggerExtensions,
     allowSelfSignedCert: allowSelfSignedCert ?? this.allowSelfSignedCert,
     recreateFolderStructure: recreateFolderStructure ?? this.recreateFolderStructure,
+    sortSmallestFirst: sortSmallestFirst ?? this.sortSmallestFirst,
   );
 
   @override
@@ -54,7 +61,8 @@ class CopypartyConfig {
           other.writeReceipts == writeReceipts &&
           _listEquals(other.triggerExtensions, triggerExtensions) &&
           other.allowSelfSignedCert == allowSelfSignedCert &&
-          other.recreateFolderStructure == recreateFolderStructure);
+          other.recreateFolderStructure == recreateFolderStructure &&
+          other.sortSmallestFirst == sortSmallestFirst);
 
   @override
   int get hashCode => Object.hash(
@@ -66,6 +74,7 @@ class CopypartyConfig {
     Object.hashAll(triggerExtensions),
     allowSelfSignedCert,
     recreateFolderStructure,
+    sortSmallestFirst,
   );
 
   @override
@@ -74,7 +83,8 @@ class CopypartyConfig {
       'parallelConnections: $parallelConnections, autoDeleteAfterVerify: $autoDeleteAfterVerify, '
       'writeReceipts: $writeReceipts, triggerExtensions: $triggerExtensions, '
       'allowSelfSignedCert: $allowSelfSignedCert, '
-      'recreateFolderStructure: $recreateFolderStructure)';
+      'recreateFolderStructure: $recreateFolderStructure, '
+      'sortSmallestFirst: $sortSmallestFirst)';
 
   static bool _listEquals(List<String> a, List<String> b) {
     if (a.length != b.length) {
