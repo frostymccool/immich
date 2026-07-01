@@ -604,7 +604,14 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
 
   @override
   Widget build(BuildContext context) {
-    final sets = widget.session.uploadSets;
+    // Mirror the upload order in the picker: when "upload smallest first" is on,
+    // show groups sorted by total size (a sorted copy — session order untouched).
+    final sortSmallest =
+        ref.watch(appConfigProvider.select((c) => c.copyparty.sortSmallestFirst));
+    final sets = sortSmallest
+        ? (List<UploadSet>.of(widget.session.uploadSets)
+          ..sort((a, b) => a.totalBytes.compareTo(b.totalBytes)))
+        : widget.session.uploadSets;
 
     if (sets.isEmpty) {
       return Center(
