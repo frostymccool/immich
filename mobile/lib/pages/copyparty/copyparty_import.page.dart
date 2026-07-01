@@ -1286,7 +1286,7 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
   Widget _phaseChip(BuildContext context, UploadFile file) {
     final (String label, IconData icon, Color color) = switch (file.status) {
       UploadFileStatus.hashing =>
-        ('Hashing', Icons.tag_rounded, context.colorScheme.onSurfaceSecondary),
+        ('Hashing', Icons.tag_rounded, context.colorScheme.onSurfaceVariant),
       UploadFileStatus.handshaking || UploadFileStatus.uploading || UploadFileStatus.confirmed =>
         ('Copyparty', Icons.sd_card_rounded, context.colorScheme.primary),
       UploadFileStatus.immichUploading =>
