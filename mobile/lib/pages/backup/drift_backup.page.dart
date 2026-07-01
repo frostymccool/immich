@@ -729,41 +729,46 @@ class _CopypartyUploadsSection extends ConsumerWidget {
       return const SizedBox.shrink();
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Divider(),
-        Padding(
-          padding: const EdgeInsets.only(top: 4, bottom: 8),
-          child: Row(
-            children: [
-              Icon(Icons.cloud_upload_rounded,
-                  size: 20, color: context.colorScheme.primary),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Copyparty — ${active.length} uploading',
-                  style: context.textTheme.titleMedium
-                      ?.copyWith(fontWeight: FontWeight.w600),
-                ),
+    // Q5: match the standard Immich backup cards (rounded-20 outlined Card,
+    // ListTile header + divider) instead of a bare divider + text block.
+    return Card(
+      shape: RoundedRectangleBorder(
+        borderRadius: const BorderRadius.all(Radius.circular(20)),
+        side: BorderSide(color: context.colorScheme.outlineVariant, width: 1),
+      ),
+      elevation: 0,
+      borderOnForeground: false,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ListTile(
+            minVerticalPadding: 18,
+            leading: Icon(Icons.cloud_upload_rounded, color: context.colorScheme.primary),
+            title: Text('Copyparty', style: context.textTheme.titleMedium),
+            subtitle: Padding(
+              padding: const EdgeInsets.only(top: 4.0),
+              child: Text(
+                '${active.length} file${active.length == 1 ? '' : 's'} uploading',
+                style: context.textTheme.bodyMedium
+                    ?.copyWith(color: context.colorScheme.onSurfaceSecondary),
               ),
-              TextButton.icon(
-                onPressed: () => _confirmCancel(context, ref),
-                icon: const Icon(Icons.stop_circle_outlined, size: 18),
-                label: const Text('Stop'),
-                style: TextButton.styleFrom(
-                  foregroundColor: context.colorScheme.error,
-                  visualDensity: VisualDensity.compact,
-                ),
+            ),
+            trailing: TextButton.icon(
+              onPressed: () => _confirmCancel(context, ref),
+              icon: const Icon(Icons.stop_circle_outlined, size: 18),
+              label: const Text('Stop'),
+              style: TextButton.styleFrom(
+                foregroundColor: context.colorScheme.error,
+                visualDensity: VisualDensity.compact,
               ),
-            ],
+            ),
           ),
-        ),
-        ...active.map((f) => Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+          const Divider(height: 0),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            child: Column(
+              children: [
+                for (final f in active) ...[
                   Row(
                     children: [
                       Expanded(
@@ -777,25 +782,25 @@ class _CopypartyUploadsSection extends ConsumerWidget {
                       const SizedBox(width: 8),
                       Text(
                         '${(f.progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
-                        style: context.textTheme.labelMedium?.copyWith(
+                        style: context.textTheme.labelLarge?.copyWith(
                           color: context.colorScheme.primary,
-                          fontWeight: FontWeight.bold,
+                          fontFeatures: [const FontFeature.tabularFigures()],
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 6),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: f.progress,
-                      minHeight: 4,
-                    ),
+                    child: LinearProgressIndicator(value: f.progress, minHeight: 4),
                   ),
+                  if (f != active.last) const SizedBox(height: 14),
                 ],
-              ),
-            )),
-      ],
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
