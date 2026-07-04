@@ -1472,19 +1472,72 @@ class _ProgressFileCard extends StatefulWidget {
 
 class _ProgressFileCardState extends State<_ProgressFileCard> {
   final _speedCalc = UploadSpeedCalculator();
-  String _speed = '-- MB/s';
+  String _speed = '-- MiB/s';
   String _eta = '--:--';
+  UploadFileStatus? _prevStatus;
+  DateTime? _transferStart; // first network-transfer tick (excludes hashing)
+  Duration? _finalElapsed; // frozen on completion
+  String? _finalAvg; // frozen average speed on completion
+
+  // Copyparty chunk upload OR Immich upload — the network-transfer phases.
+  static bool _isTransfer(UploadFileStatus? s) =>
+      s == UploadFileStatus.uploading || s == UploadFileStatus.immichUploading;
 
   @override
   void didUpdateWidget(_ProgressFileCard old) {
     super.didUpdateWidget(old);
-    // The provider mutates the SAME UploadFile instance in place, so
-    // widget.file and old.file are the same object — comparing uploadedBytes
-    // would never differ. Feed the calculator unconditionally; it throttles
-    // internally (100 ms) and tracks its own last-bytes/timestamp.
-    _speedCalc.update(widget.file.uploadedBytes, widget.file.sizeBytes);
-    _speed = _speedCalc.speedAsString;
-    _eta = _speedCalc.timeRemainingAsString;
+    final f = widget.file;
+    final s = f.status;
+    final transferring = _isTransfer(s);
+
+    // Reset the live speed meter at every phase boundary (hashing→copyparty,
+    // copyparty→immich) because uploadedBytes restarts — otherwise the byte
+    // counter going backwards produces a bogus reading. Hashing is never fed,
+    // so the speed reflects network transfer only (item 2).
+    if (transferring && s != _prevStatus) {
+      _speedCalc.reset();
+    }
+    if (transferring) {
+      _transferStart ??= DateTime.now();
+      _speedCalc.update(f.uploadedBytes, f.sizeBytes);
+      _speed = _speedCalc.speedAsString;
+      _eta = _speedCalc.timeRemainingAsString;
+    }
+
+    // Freeze the elapsed transfer time + average once the file is fully done
+    // (item 3). Files already on the server never transferred, so skip them.
+    final done = s == UploadFileStatus.receiptWritten ||
+        (s == UploadFileStatus.confirmed && !f.needsImmich);
+    if (done && _finalElapsed == null && _transferStart != null && !f.alreadyOnServer) {
+      _finalElapsed = DateTime.now().difference(_transferStart!);
+      final secs = _finalElapsed!.inMilliseconds / 1000.0;
+      _finalAvg = _formatSpeed(secs > 0 ? f.sizeBytes / secs : 0);
+    }
+    _prevStatus = s;
+  }
+
+  /// "45s" under a minute, "m:ss" from a minute up.
+  static String _formatDuration(Duration d) {
+    final total = d.inSeconds;
+    if (total < 60) return '${total}s';
+    return '${total ~/ 60}:${(total % 60).toString().padLeft(2, '0')}';
+  }
+
+  static String _formatSpeed(double bytesPerSec) {
+    final mib = bytesPerSec / (1024 * 1024);
+    return mib >= 1 ? '${mib.toStringAsFixed(1)} MiB/s' : '${(mib * 1024).round()} KiB/s';
+  }
+
+  /// "22.3 / 27.9 MiB" (unit shown once when both share it), else "980 KiB / 27.9 MiB".
+  static String _pairBytes(int done, int total) {
+    final totalStr = formatHumanReadableBytes(total, 1);
+    final doneStr = formatHumanReadableBytes(done, 1);
+    final totalUnit = totalStr.split(' ').last;
+    final doneParts = doneStr.split(' ');
+    if (doneParts.length == 2 && doneParts.last == totalUnit) {
+      return '${doneParts.first} / $totalStr';
+    }
+    return '$doneStr / $totalStr';
   }
 
   /// A small pill showing which backend the bytes are currently going to
@@ -1586,12 +1639,15 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                         : isDone
                             ? (file.alreadyOnServer
                                 ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · already on server (hash verified)'
-                                : '${formatHumanReadableBytes(file.sizeBytes, 1)} · Done')
+                                : _finalElapsed != null
+                                    // total · elapsed · avg speed (item 3)
+                                    ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · '
+                                      '${_formatDuration(_finalElapsed!)} · avg $_finalAvg'
+                                    : '${formatHumanReadableBytes(file.sizeBytes, 1)} · Done')
                             : isHashing
                                 ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · computing checksum…'
-                                : '${formatHumanReadableBytes(file.sizeBytes, 1)} · '
-                                  '${formatHumanReadableBytes(file.uploadedBytes, 1)} transferred · '
-                                  '$_speed',
+                                // transferred / total · speed (item 1)
+                                : '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · $_speed',
                     style: context.textTheme.labelLarge?.copyWith(
                       color: isFailed
                           ? context.colorScheme.error
