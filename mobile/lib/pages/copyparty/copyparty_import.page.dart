@@ -26,6 +26,24 @@ class CopypartyImportPage extends ConsumerStatefulWidget {
 }
 
 class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
+  static const _safChannel = MethodChannel('immich/saf_picker');
+
+  /// Item 2: pick another folder and append it to the active upload queue.
+  Future<void> _pickAndAddFolder() async {
+    try {
+      final path = await _safChannel.invokeMethod<String?>('pickDirectory');
+      if (path != null) {
+        await ref.read(importSessionProvider.notifier).addFolders([path]);
+      }
+    } on PlatformException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Picker error: ${e.message}')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(importSessionProvider);
@@ -56,6 +74,7 @@ class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
             ImportSessionStep.uploading => _UploadProgressStep(
                 session,
                 onCancel: () => ref.read(importSessionProvider.notifier).cancelUpload(),
+                onAddFolders: _pickAndAddFolder,
               ),
             ImportSessionStep.complete => _CompletionStep(session),
           },
@@ -1231,7 +1250,9 @@ class _DestinationBanner extends ConsumerWidget {
 class _UploadProgressStep extends StatelessWidget {
   final ImportSessionState session;
   final VoidCallback onCancel;
-  const _UploadProgressStep(this.session, {required this.onCancel});
+  final VoidCallback onAddFolders;
+  const _UploadProgressStep(this.session,
+      {required this.onCancel, required this.onAddFolders});
 
   Future<void> _confirmCancel(BuildContext context) async {
     final stop = await showDialog<bool>(
@@ -1316,20 +1337,35 @@ class _UploadProgressStep extends StatelessWidget {
           top: false,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-            child: SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => _confirmCancel(context),
-                icon: const Icon(Icons.stop_circle_outlined),
-                label: const Text('Stop uploading'),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(48),
-                  foregroundColor: context.colorScheme.error,
-                  side: BorderSide(
-                    color: context.colorScheme.error.withValues(alpha: 0.5),
+            child: Row(
+              children: [
+                // Item 2: add more folders to the live queue while uploading.
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onAddFolders,
+                    icon: const Icon(Icons.create_new_folder_outlined),
+                    label: const Text('Add folders'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(48),
+                    ),
                   ),
                 ),
-              ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _confirmCancel(context),
+                    icon: const Icon(Icons.stop_circle_outlined),
+                    label: const Text('Stop'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(48),
+                      foregroundColor: context.colorScheme.error,
+                      side: BorderSide(
+                        color: context.colorScheme.error.withValues(alpha: 0.5),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),

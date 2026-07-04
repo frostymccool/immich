@@ -81,12 +81,16 @@ class UploadSet {
   final String id;
   final List<UploadFile> files;
   final String? directoryPath;
+  // The picked root folder this set was scanned from — used as the FB9 mirror
+  // root so folders added mid-run (from a different pick) mirror correctly.
+  String? rootPath;
   UploadSetStatus status;
 
   UploadSet({
     String? id,
     required this.files,
     this.directoryPath,
+    this.rootPath,
     this.status = UploadSetStatus.pending,
   }) : id = id ?? const Uuid().v4();
 

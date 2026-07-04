@@ -9,7 +9,9 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/models/server_info/server_info.model.dart';
 import 'package:immich_mobile/providers/backup/drift_backup.provider.dart';
+import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/cast.provider.dart';
+import 'package:immich_mobile/widgets/settings/copyparty_settings/copyparty_settings.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/readonly_mode.provider.dart';
 import 'package:immich_mobile/providers/server_info.provider.dart';
@@ -73,6 +75,7 @@ class ImmichSliverAppBar extends ConsumerWidget {
                 icon: Icon(isCasting ? Icons.cast_connected_rounded : Icons.cast_rounded),
               ),
             if (actions != null) ...actions!,
+            if (showUploadButton && !isReadonlyModeEnabled) const _CopypartyIndicator(),
             if (showUploadButton && !isReadonlyModeEnabled) const _BackupIndicator(),
             const _ProfileIndicator(),
             const SizedBox(width: 8),
@@ -170,6 +173,72 @@ class _ProfileIndicator extends ConsumerWidget {
 }
 
 const double _kBadgeWidgetSize = 30.0;
+
+/// Copyparty (memory-card import) entry point in the main app bar, to the left
+/// of the backup indicator. Its icon spins while an import upload is active.
+class _CopypartyIndicator extends ConsumerStatefulWidget {
+  const _CopypartyIndicator();
+
+  @override
+  ConsumerState<_CopypartyIndicator> createState() => _CopypartyIndicatorState();
+}
+
+class _CopypartyIndicatorState extends ConsumerState<_CopypartyIndicator>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _spin =
+      AnimationController(vsync: this, duration: const Duration(seconds: 2))
+        ..repeat();
+
+  @override
+  void dispose() {
+    _spin.dispose();
+    super.dispose();
+  }
+
+  void _open(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => Consumer(
+          builder: (ctx, ref2, _) {
+            final cp = ref2.watch(appConfigProvider.select((c) => c.copyparty));
+            final host = cp.hostUrl.replaceAll(RegExp(r'/+$'), '');
+            final path = '/${cp.uploadPath.replaceAll(RegExp(r'^/+|/+$'), '')}';
+            return Scaffold(
+              appBar: AppBar(title: Text('Copyparty ($host$path)'), centerTitle: false),
+              body: const CopypartySettings(showServerConfig: false),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final uploading = ref.watch(
+        importSessionProvider.select((s) => s.step == ImportSessionStep.uploading));
+    final icon = Icon(Icons.sd_card_rounded, size: _kBadgeWidgetSize, color: context.primaryColor);
+    return IconButton(
+      tooltip: 'Copyparty import',
+      onPressed: () => _open(context),
+      icon: uploading
+          ? Stack(
+              alignment: Alignment.center,
+              children: [
+                icon,
+                // A rotating ring of arrows overlaid on the card to signal
+                // active uploads.
+                RotationTransition(
+                  turns: _spin,
+                  child: Icon(Icons.autorenew_rounded,
+                      size: _kBadgeWidgetSize + 8, color: context.primaryColor),
+                ),
+              ],
+            )
+          : icon,
+    );
+  }
+}
 
 class _BackupIndicator extends ConsumerWidget {
   const _BackupIndicator();

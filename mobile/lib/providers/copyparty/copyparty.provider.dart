@@ -236,6 +236,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         onFileFound: (count) => state = state.copyWith(scannedFiles: count),
       );
       for (final set in sets) {
+        set.rootPath = directoryPath;
         for (final file in set.files) {
           file.existingReceipt = await _receiptRepo.findByLocalPath(file.localPath);
         }
@@ -288,32 +289,38 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       selectedPaths: selectedFilePaths,
     );
 
-    // Item 4: optionally upload groups smallest-first (by group total size) so
-    // quick wins complete first on slow links. Iterate a sorted COPY so the
-    // session's display order is untouched.
-    final orderedSets = config.sortSmallestFirst
-        ? (List<UploadSet>.of(state.uploadSets)
-          ..sort((a, b) => a.totalBytes.compareTo(b.totalBytes)))
-        : state.uploadSets;
-
+    // Dynamic queue loop: on each iteration pick the next SELECTED + PENDING
+    // file from the LIVE state, so folders added mid-run via addFolders() are
+    // picked up. When "upload smallest first" is on we take the pending file
+    // from the smallest group. (item 2 + item 4)
     bool cancelled = false;
-    for (final set in orderedSets) {
-      if (cancelled) break;
-      for (final file in set.files) {
-        if (cancelToken.isCompleted) {
-          cancelled = true;
-          break;
+    while (true) {
+      if (cancelToken.isCompleted) {
+        cancelled = true;
+        break;
+      }
+      final sel = state.selectedPaths;
+      final candidates = <({UploadSet set, UploadFile file})>[];
+      for (final s in state.uploadSets) {
+        for (final f in s.files) {
+          if (sel != null && !sel.contains(f.localPath)) continue;
+          if (f.status != UploadFileStatus.pending) continue;
+          candidates.add((set: s, file: f));
         }
-        if (selectedFilePaths != null && !selectedFilePaths.contains(file.localPath)) {
-          continue;
-        }
-        if (file.status == UploadFileStatus.failed) {
-          continue;
-        }
-        // FB9: when "create folders" is on, mirror the file's subfolder
-        // (relative to the selected root) beneath the configured upload path.
+      }
+      if (candidates.isEmpty) break;
+      if (config.sortSmallestFirst) {
+        candidates.sort((a, b) => a.set.totalBytes.compareTo(b.set.totalBytes));
+      }
+      final set = candidates.first.set;
+      final file = candidates.first.file;
+      {
+        // FB9: when "create folders" is on, mirror the file's subfolder beneath
+        // the upload path, rooted at the set's OWN picked folder (so added
+        // folders mirror correctly, not against the first pick's root).
         final uploadPath = createFolders
-            ? mirroredUploadPath(config.uploadPath, state.directoryPath, file.localPath)
+            ? mirroredUploadPath(
+                config.uploadPath, set.rootPath ?? state.directoryPath, file.localPath)
             : config.uploadPath;
         int? receiptId;
         try {
@@ -439,6 +446,43 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     // concurrent reset() (e.g. the user left the page) must not be clobbered.
     if (state.step == ImportSessionStep.uploading) {
       state = state.copyWith(step: ImportSessionStep.complete);
+    }
+  }
+
+  /// Add more folders to an in-progress (or just-finished) import (item 2):
+  /// scans each folder, appends its sets to the live queue and selection so the
+  /// running upload loop picks them up. If no upload is currently running, kicks
+  /// one off for the merged selection.
+  Future<void> addFolders(List<String> directoryPaths) async {
+    final config = _ref.read(appConfigProvider).copyparty;
+    final pairer = CopypartyFilePairer(triggerExtensions: config.triggerExtensions);
+    final newSets = <UploadSet>[];
+    final newPaths = <String>{};
+    for (final dir in directoryPaths) {
+      final sets = await pairer.scanDirectory(dir);
+      for (final set in sets) {
+        set.rootPath = dir;
+        for (final file in set.files) {
+          file.existingReceipt = await _receiptRepo.findByLocalPath(file.localPath);
+          newPaths.add(file.localPath);
+        }
+      }
+      newSets.addAll(sets);
+    }
+    if (newPaths.isEmpty) return;
+
+    _log.log('ADD FOLDERS: +${newSets.length} set(s), +${newPaths.length} file(s)');
+    state = state.copyWith(
+      uploadSets: [...state.uploadSets, ...newSets],
+      selectedPaths: {...?state.selectedPaths, ...newPaths},
+      totalFiles: state.totalFiles + newPaths.length,
+    );
+    _notify();
+
+    // If the loop isn't running, start it for the (merged) selection.
+    final running = _uploadCancelToken != null && !_uploadCancelToken!.isCompleted;
+    if (!running) {
+      await startUpload(selectedFilePaths: state.selectedPaths);
     }
   }
 
