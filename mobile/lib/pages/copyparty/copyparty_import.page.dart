@@ -1247,7 +1247,7 @@ class _DestinationBanner extends ConsumerWidget {
   }
 }
 
-class _UploadProgressStep extends StatelessWidget {
+class _UploadProgressStep extends ConsumerWidget {
   final ImportSessionState session;
   final VoidCallback onCancel;
   final VoidCallback onAddFolders;
@@ -1277,14 +1277,23 @@ class _UploadProgressStep extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     // Only show the files the user actually chose to upload this run — not the
     // whole card. (selectedPaths is null only for legacy "upload everything".)
     final selected = session.selectedPaths;
     bool keep(UploadFile f) => selected == null || selected.contains(f.localPath);
 
+    // Show groups in the ORDER they upload, so the first group is at the top
+    // (not scan order, which looks random once "upload smallest first" reorders
+    // the actual queue). Smallest-first → sort by group size; otherwise keep
+    // scan order (= upload order for the unsorted case).
+    final sortSmallest =
+        ref.watch(appConfigProvider.select((c) => c.copyparty.sortSmallestFirst));
     final visibleSets =
         session.uploadSets.where((s) => s.files.any(keep)).toList();
+    if (sortSmallest) {
+      visibleSets.sort((a, b) => a.totalBytes.compareTo(b.totalBytes));
+    }
     final allFiles = session.uploadSets.expand((s) => s.files).where(keep).toList();
     final totalBytes = allFiles.fold<int>(0, (s, f) => s + f.sizeBytes);
     final doneBytes = allFiles.fold<int>(0, (s, f) => s + f.uploadedBytes);
