@@ -30,7 +30,9 @@ class CopypartyLogger {
 
   Future<File> _resolveFile() async {
     final existing = _file;
-    if (existing != null) return existing;
+    if (existing != null) {
+      return existing;
+    }
     final dir = await getApplicationDocumentsDirectory();
     final f = File('${dir.path}/$fileName');
     _file = f;
@@ -127,7 +129,9 @@ class CopypartyLogger {
   // -- redaction helpers ------------------------------------------------------
 
   static String _redactUri(Uri uri) {
-    if (!uri.queryParameters.containsKey('pw')) return uri.toString();
+    if (!uri.queryParameters.containsKey('pw')) {
+      return uri.toString();
+    }
     final params = Map<String, String>.from(uri.queryParameters);
     params['pw'] = '***';
     return uri.replace(queryParameters: params).toString();
@@ -145,7 +149,9 @@ class CopypartyLogger {
   }
 
   static String _truncate(String s, int max) {
-    if (s.length <= max) return s;
+    if (s.length <= max) {
+      return s;
+    }
     return '${s.substring(0, max)}… (${s.length} bytes total)';
   }
 }

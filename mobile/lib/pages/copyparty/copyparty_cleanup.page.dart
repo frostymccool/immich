@@ -37,7 +37,9 @@ String _folderOf(CopypartyReceipt r) {
   try {
     final uri = Uri.parse(r.copypartyUrl);
     final segs = List<String>.from(uri.pathSegments)..removeWhere((s) => s.isEmpty);
-    if (segs.isNotEmpty) segs.removeLast(); // drop the filename
+    if (segs.isNotEmpty) {
+      segs.removeLast(); // drop the filename
+    }
     return '/${segs.join('/')}';
   } catch (_) {
     return '';
@@ -109,7 +111,9 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   /// Merge a partial update into the per-file verification (preserves the
   /// fields the update doesn't touch).
   void _mergeVerify(int id, ServerFileVerification Function(ServerFileVerification) f) {
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     setState(() {
       _verify[id] = f(_verify[id] ?? const ServerFileVerification());
     });
@@ -160,7 +164,9 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   /// Immich by checksum. Selection is user-driven (FB10) — this never changes
   /// the ticked set; it only updates the verification evidence.
   Future<void> _verifyFile(CopypartyReceipt r) async {
-    if (_verifying.contains(r.id)) return;
+    if (_verifying.contains(r.id)) {
+      return;
+    }
     setState(() {
       _verifying.add(r.id!);
       _progress[r.id!] = 0;
@@ -190,14 +196,18 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
           immich = VerifyState.unknown;
         }
       }
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       setState(() {
         _verify[r.id!] = cp.copyWith(immich: immich, immichApplicable: applicable);
         _verifying.remove(r.id);
         _progress.remove(r.id);
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       setState(() {
         _verifying.remove(r.id);
         _progress.remove(r.id);
@@ -208,8 +218,12 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   /// Verify the currently-ticked files (FB10). Selection is user-driven.
   Future<void> _verifySelected() async {
     for (final r in _existing) {
-      if (!_selected.contains(r.id) || _deleted.contains(r.id)) continue;
-      if (!mounted) return;
+      if (!_selected.contains(r.id) || _deleted.contains(r.id)) {
+        continue;
+      }
+      if (!mounted) {
+        return;
+      }
       await _verifyFile(r);
     }
   }
@@ -266,9 +280,13 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   /// Remove a stale/unwanted receipt from the cleanup list WITHOUT touching the
   /// local file — marks it sourceDeleted so it stops showing. (item 6)
   Future<void> _removeFromList(CopypartyReceipt r) async {
-    if (r.id == null) return;
+    if (r.id == null) {
+      return;
+    }
     await ref.read(copypartyReceiptRepositoryProvider).markSourceDeleted(r.id!);
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     setState(() {
       _existing = _existing.where((e) => e.id != r.id).toList();
       _selected.remove(r.id);
@@ -282,7 +300,9 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       _collapsed.clear();
       if (collapsed) {
         for (final g in _buildGroups()) {
-          if (g.receipts.length > 1) _collapsed.add(g.key);
+          if (g.receipts.length > 1) {
+            _collapsed.add(g.key);
+          }
         }
       }
     });
@@ -292,17 +312,25 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   bool? _groupValue(_CleanupGroup g) {
     final ids =
         g.receipts.where((r) => !_deleted.contains(r.id)).map((r) => r.id!).toList();
-    if (ids.isEmpty) return false;
+    if (ids.isEmpty) {
+      return false;
+    }
     final selected = ids.where(_selected.contains).length;
-    if (selected == 0) return false;
-    if (selected == ids.length) return true;
+    if (selected == 0) {
+      return false;
+    }
+    if (selected == ids.length) {
+      return true;
+    }
     return null;
   }
 
   void _toggleGroup(_CleanupGroup g, bool select) {
     setState(() {
       for (final r in g.receipts) {
-        if (_deleted.contains(r.id)) continue;
+        if (_deleted.contains(r.id)) {
+          continue;
+        }
         if (select) {
           _selected.add(r.id!);
         } else {
@@ -315,15 +343,21 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   /// Verify just the (non-deleted) files in one group. (Q2 per-group verify)
   Future<void> _verifyGroup(_CleanupGroup g) async {
     for (final r in g.receipts) {
-      if (_deleted.contains(r.id)) continue;
-      if (!mounted) return;
+      if (_deleted.contains(r.id)) {
+        continue;
+      }
+      if (!mounted) {
+        return;
+      }
       await _verifyFile(r);
     }
   }
 
   /// Recovery (Issue 8): re-upload a file whose verification failed, then verify.
   Future<void> _uploadNow(CopypartyReceipt r) async {
-    if (_uploading.contains(r.id)) return;
+    if (_uploading.contains(r.id)) {
+      return;
+    }
     setState(() {
       _uploading.add(r.id!);
       _progress[r.id!] = 0;
@@ -369,7 +403,9 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     } catch (e) {
       error = e.toString();
     }
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     setState(() {
       _uploading.remove(r.id);
       _progress.remove(r.id);
@@ -390,7 +426,9 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     final toDelete = _existing
         .where((r) => _selected.contains(r.id) && !_deleted.contains(r.id))
         .toList();
-    if (toDelete.isEmpty) return;
+    if (toDelete.isEmpty) {
+      return;
+    }
 
     final unsafe = toDelete
         .where((r) => !(_verify[r.id]?.safeToDeleteAt(now) ?? false))
@@ -454,7 +492,9 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
           )) ??
           false;
     }
-    if (proceed != true) return;
+    if (proceed != true) {
+      return;
+    }
 
     final repo = ref.read(copypartyReceiptRepositoryProvider);
     final deletedIds = <int>[];
@@ -581,7 +621,9 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                                 now: now,
                                 collapsed: _collapsed.contains(g.key),
                                 onToggleCollapse: () => setState(() {
-                                  if (!_collapsed.remove(g.key)) _collapsed.add(g.key);
+                                  if (!_collapsed.remove(g.key)) {
+                                    _collapsed.add(g.key);
+                                  }
                                 }),
                                 verifications: [
                                   for (final r in g.receipts)
@@ -1073,7 +1115,9 @@ class _CleanupTile extends StatelessWidget {
                             ],
                           ),
                         );
-                        if (ok == true) onRemove();
+                        if (ok == true) {
+                          onRemove();
+                        }
                       },
                     ),
                   ],
@@ -1177,7 +1221,7 @@ class _ImmichChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!verification.immichApplicable) {
-      return _RawChip(label: 'Immich n/a', state: VerifyState.unknown);
+      return const _RawChip(label: 'Immich n/a', state: VerifyState.unknown);
     }
     final (icon, color, text) = switch (verification.immich) {
       VerifyState.yes => (Icons.photo_library_rounded, Colors.green, 'Immich ✓'),

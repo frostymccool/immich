@@ -44,7 +44,9 @@ Future<String?> immichAssetIdByChecksum(AssetsApi api, String localPath) async {
       assets: [AssetBulkUploadCheckItem(checksum: sha1b64, id: localPath)],
     ),
   );
-  if (resp == null || resp.results.isEmpty) return null;
+  if (resp == null || resp.results.isEmpty) {
+    return null;
+  }
   final r = resp.results.first;
   // 'reject' means the content is already in Immich (duplicate). Treat ANY
   // reject as present even if the server omits/nulls the asset id.
@@ -303,12 +305,18 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       final candidates = <({UploadSet set, UploadFile file})>[];
       for (final s in state.uploadSets) {
         for (final f in s.files) {
-          if (sel != null && !sel.contains(f.localPath)) continue;
-          if (f.status != UploadFileStatus.pending) continue;
+          if (sel != null && !sel.contains(f.localPath)) {
+            continue;
+          }
+          if (f.status != UploadFileStatus.pending) {
+            continue;
+          }
           candidates.add((set: s, file: f));
         }
       }
-      if (candidates.isEmpty) break;
+      if (candidates.isEmpty) {
+        break;
+      }
       if (config.sortSmallestFirst) {
         candidates.sort((a, b) => a.set.totalBytes.compareTo(b.set.totalBytes));
       }
@@ -469,7 +477,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       }
       newSets.addAll(sets);
     }
-    if (newPaths.isEmpty) return;
+    if (newPaths.isEmpty) {
+      return;
+    }
 
     _log.log('ADD FOLDERS: +${newSets.length} set(s), +${newPaths.length} file(s)');
     state = state.copyWith(
@@ -500,7 +510,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         }
       }
     }
-    if (failedPaths.isEmpty) return;
+    if (failedPaths.isEmpty) {
+      return;
+    }
     await startUpload(selectedFilePaths: failedPaths);
   }
 
@@ -749,12 +761,16 @@ String _stripSlashes(String s) => s.replaceAll(RegExp(r'^/+|/+$'), '');
 /// A file that somehow sits outside the picked root falls back to [base].
 String mirroredUploadPath(String base, String? rootDir, String fileLocalPath) {
   final cleanBase = base.replaceAll(RegExp(r'/+$'), '');
-  if (rootDir == null) return base;
+  if (rootDir == null) {
+    return base;
+  }
   final root = rootDir.replaceAll(RegExp(r'/+$'), '');
   final rootName = root.split('/').where((s) => s.isNotEmpty).isEmpty
       ? ''
       : root.split('/').where((s) => s.isNotEmpty).last;
-  if (rootName.isEmpty) return base;
+  if (rootName.isEmpty) {
+    return base;
+  }
 
   final slash = fileLocalPath.lastIndexOf('/');
   final fileDir = slash < 0 ? '' : fileLocalPath.substring(0, slash);

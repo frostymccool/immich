@@ -195,7 +195,9 @@ class CopypartyFilePairer {
   /// otherwise known (e.g. a stored receipt). Errs toward applicable for safety.
   static bool isNativeImmichFilename(String filename) {
     final dot = filename.lastIndexOf('.');
-    if (dot < 0 || dot == filename.length - 1) return false;
+    if (dot < 0 || dot == filename.length - 1) {
+      return false;
+    }
     return _isNativeImmichFile(filename.substring(dot + 1).toLowerCase());
   }
 }

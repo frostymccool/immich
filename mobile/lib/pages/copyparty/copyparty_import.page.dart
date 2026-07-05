@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -126,7 +127,9 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
     if (Platform.isAndroid) {
       final granted = await Permission.manageExternalStorage.isGranted;
       if (!granted) {
-        if (!mounted) return;
+        if (!mounted) {
+          return;
+        }
         final goToSettings = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
@@ -156,7 +159,7 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
         return;
       }
     }
-    ref.read(importSessionProvider.notifier).scan(path);
+    unawaited(ref.read(importSessionProvider.notifier).scan(path));
   }
 
   @override
@@ -334,7 +337,9 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
   /// for name/size/partial, then a background per-file Immich-by-checksum pass.
   /// On a network failure, surfaces an offline state + Refresh.
   Future<void> _verify() async {
-    if (_verifying) return;
+    if (_verifying) {
+      return;
+    }
     // Invalidate any background Immich pass still running from a prior _verify.
     final generation = ++_verifyGeneration;
     setState(() {
@@ -381,7 +386,9 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
           immichApplicable: CopypartyFilePairer.isNativeImmichFilename(f.filename),
         );
       }
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       setState(() {
         _verifying = false;
         if (!_userTouched) {
@@ -390,7 +397,9 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
         }
       });
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       setState(() {
         _verifying = false;
         _verifyFailed = true;
@@ -404,13 +413,19 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     for (final f in files) {
       // Bail immediately if disposed or a newer _verify run superseded us — do
       // NOT start hashing the next (possibly multi-GB) file.
-      if (_disposed || generation != _verifyGeneration) return;
-      if (!CopypartyFilePairer.isNativeImmichFilename(f.filename)) continue;
+      if (_disposed || generation != _verifyGeneration) {
+        return;
+      }
+      if (!CopypartyFilePairer.isNativeImmichFilename(f.filename)) {
+        continue;
+      }
       try {
         final id = await immichAssetIdByChecksum(api, f.localPath);
         // Re-check after the await: the user may have left or refreshed while
         // this file was hashing. Don't mutate shared state for a stale run.
-        if (_disposed || generation != _verifyGeneration) return;
+        if (_disposed || generation != _verifyGeneration) {
+          return;
+        }
         f.verification = (f.verification ?? const ServerFileVerification()).copyWith(
           immich: id != null ? VerifyState.yes : VerifyState.no,
           immichApplicable: true,
@@ -421,7 +436,9 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
         if (id != null && !_destinationOverrides.containsKey(f.localPath)) {
           _destinationOverrides[f.localPath] = UploadDestination.copypartyOnly;
         }
-        if (mounted) setState(() {});
+        if (mounted) {
+          setState(() {});
+        }
       } catch (_) {}
     }
   }
@@ -471,15 +488,19 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     for (final set in widget.session.uploadSets) {
       for (final file in set.files) {
         final override = _destinationOverrides[file.localPath];
-        if (override != null) file.destination = override;
+        if (override != null) {
+          file.destination = override;
+        }
       }
     }
   }
 
   Future<void> _runVerificationSelfTest() async {
     final paths = _selectedPaths.toList();
-    if (paths.isEmpty) return;
-    showDialog<void>(
+    if (paths.isEmpty) {
+      return;
+    }
+    unawaited(showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (_) => const AlertDialog(
@@ -491,14 +512,16 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
           ],
         ),
       ),
-    );
+    ));
     List<String> lines;
     try {
       lines = await ref.read(importSessionProvider.notifier).runVerificationSelfTest(paths);
     } catch (e) {
       lines = ['error: $e'];
     }
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     Navigator.of(context).pop(); // close progress
     await showDialog<void>(
       context: context,
@@ -535,7 +558,9 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
 
   Future<void> _runSelfTest() async {
     final paths = _selectedPaths.toList();
-    if (paths.isEmpty) return;
+    if (paths.isEmpty) {
+      return;
+    }
 
     final go = await showDialog<bool>(
       context: context,
@@ -559,9 +584,11 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
         ],
       ),
     );
-    if (go != true || !mounted) return;
+    if (go != true || !mounted) {
+      return;
+    }
 
-    showDialog<void>(
+    unawaited(showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (_) => const AlertDialog(
@@ -573,7 +600,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
           ],
         ),
       ),
-    );
+    ));
 
     List<UploadAttemptResult> results;
     try {
@@ -588,7 +615,9 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
       }
       return;
     }
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     Navigator.of(context).pop(); // close progress
 
     await showDialog<void>(
@@ -763,7 +792,9 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                 .expand((s) => s.files)
                 .where(_OptionsStepState._looksPresent)
                 .length;
-            if (alreadyCount == 0) return const SizedBox.shrink();
+            if (alreadyCount == 0) {
+              return const SizedBox.shrink();
+            }
             return Container(
               margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1027,7 +1058,9 @@ class _GroupSummary extends StatelessWidget {
     final known = pool
         .where((f) => f.verification != null && get(f.verification!) != VerifyState.unknown)
         .toList();
-    if (known.isEmpty) return null;
+    if (known.isEmpty) {
+      return null;
+    }
     final yes = known.where((f) => get(f.verification!) == VerifyState.yes).length;
     final total = known.length;
     final full = yes == total;
@@ -1192,7 +1225,9 @@ class _LiveChips extends StatelessWidget {
 
 /// The decoded server folder from an upload folder URL (Q1), or null if absent.
 String? _folderDisplay(String? folderUrl) {
-  if (folderUrl == null) return null;
+  if (folderUrl == null) {
+    return null;
+  }
   try {
     final segs = Uri.parse(folderUrl).pathSegments.where((s) => s.isNotEmpty);
     return '/${segs.join('/')}';
@@ -1273,7 +1308,9 @@ class _UploadProgressStep extends ConsumerWidget {
         ],
       ),
     );
-    if (stop == true) onCancel();
+    if (stop == true) {
+      onCancel();
+    }
   }
 
   @override
@@ -1519,7 +1556,9 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
   /// "45s" under a minute, "m:ss" from a minute up.
   static String _formatDuration(Duration d) {
     final total = d.inSeconds;
-    if (total < 60) return '${total}s';
+    if (total < 60) {
+      return '${total}s';
+    }
     return '${total ~/ 60}:${(total % 60).toString().padLeft(2, '0')}';
   }
 
@@ -1552,7 +1591,9 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
         ('Immich', Icons.cloud_upload_rounded, context.colorScheme.tertiary),
       _ => ('', Icons.circle, context.colorScheme.primary),
     };
-    if (label.isEmpty) return const SizedBox.shrink();
+    if (label.isEmpty) {
+      return const SizedBox.shrink();
+    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
@@ -1681,7 +1722,7 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                   ? Icon(Icons.error_rounded,
                       color: context.colorScheme.error, size: 28)
                   : isDone
-                      ? Icon(Icons.check_circle_rounded,
+                      ? const Icon(Icons.check_circle_rounded,
                           color: Colors.green, size: 28)
                       : Column(
                           mainAxisSize: MainAxisSize.min,
@@ -1995,7 +2036,7 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
     // metered/slow link this is N round-trips + a re-hash each; never freeze
     // the UI silently.
     final progress = ValueNotifier<int>(0);
-    showDialog<void>(
+    unawaited(showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
@@ -2015,7 +2056,7 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
           ),
         ),
       ),
-    );
+    ));
 
     final now = DateTime.now();
     final unsafe = <UploadFile>[];
@@ -2050,16 +2091,22 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
         );
         final liveSafe =
             v.copypartyVerifiedAt(now) && (!f.needsImmich || f.immichConfirmed);
-        if (!liveSafe) unsafe.add(f);
+        if (!liveSafe) {
+          unsafe.add(f);
+        }
       } catch (_) {
         offline = true;
         unsafe.add(f);
       }
       progress.value++;
     }
-    if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
+    if (context.mounted) {
+      Navigator.of(context, rootNavigator: true).pop();
+    }
     progress.dispose();
-    if (!context.mounted) return;
+    if (!context.mounted) {
+      return;
+    }
 
     final bool? confirm;
     if (offline) {
@@ -2381,12 +2428,18 @@ class _CompletionFileTile extends StatelessWidget {
 /// FB9 (e.g. root "australia" + subfolder "sydney bridge" → "australia/sydney
 /// bridge"). (item 4)
 String _relPathUtil(String? root, String? dir) {
-  if (dir == null) return '';
-  if (root == null) return dir.split('/').last;
+  if (dir == null) {
+    return '';
+  }
+  if (root == null) {
+    return dir.split('/').last;
+  }
   final rootName = root.split('/').where((s) => s.isNotEmpty).isEmpty
       ? ''
       : root.split('/').where((s) => s.isNotEmpty).last;
-  if (dir == root) return rootName;
+  if (dir == root) {
+    return rootName;
+  }
   if (dir.startsWith('$root/')) {
     final rel = dir.substring(root.length + 1);
     return rootName.isEmpty ? rel : '$rootName/$rel';

@@ -128,13 +128,17 @@ class CopypartyUploaderService {
         while (chunkBuf.length < chunkExpected) {
           final toRead = chunkExpected - chunkBuf.length;
           final slice = await handle.read(toRead);
-          if (slice.isEmpty) break;
+          if (slice.isEmpty) {
+            break;
+          }
           chunkBuf.add(slice);
           fileHasher.add(slice);
         }
 
         final chunkBytes = chunkBuf.takeBytes();
-        if (chunkBytes.isEmpty) break;
+        if (chunkBytes.isEmpty) {
+          break;
+        }
 
         chunkHashes.add(_chunkId(chunkBytes));
         bytesRead += chunkBytes.length;
@@ -296,7 +300,9 @@ class CopypartyUploaderService {
   static String? _parsePurlFrom422(String body) {
     const marker = 'please resume uploading here instead:\n';
     final markerIdx = body.indexOf(marker);
-    if (markerIdx < 0) return null;
+    if (markerIdx < 0) {
+      return null;
+    }
     final start = markerIdx + marker.length;
     final end = body.indexOf('\n', start);
     final path = (end >= 0 ? body.substring(start, end) : body.substring(start)).trim();
@@ -312,7 +318,9 @@ class CopypartyUploaderService {
   /// [folderUri] must point at the folder (path ending in `/`).
   Future<Map<String, int>> listFolderSizes(Uri folderUri, String password) async {
     final params = <String, String>{'ls': ''};
-    if (password.isNotEmpty) params['pw'] = password;
+    if (password.isNotEmpty) {
+      params['pw'] = password;
+    }
     final uri = folderUri.replace(queryParameters: params);
 
     _log?.request('GET', uri, const {'Accept': 'application/json'});
@@ -337,7 +345,9 @@ class CopypartyUploaderService {
     for (final f in files) {
       if (f is Map<String, dynamic>) {
         final href = f['href'] as String?;
-        if (href == null) continue;
+        if (href == null) {
+          continue;
+        }
         final name = Uri.decodeComponent(href.replaceAll(RegExp(r'/+$'), ''));
         final sz = f['sz'];
         result[name] = sz is int ? sz : int.tryParse('$sz') ?? -1;
@@ -381,8 +391,8 @@ class CopypartyUploaderService {
 
   /// True if the listing contains a `.PARTIAL` that belongs to THIS file —
   /// matched precisely so one filename being a prefix of another can't cross-
-  /// attribute partials. Covers "<name>.PARTIAL", dotpart ".<name>.PARTIAL",
-  /// and copyparty's suffixed "<name>-<time>-<token>.<ext>.PARTIAL".
+  /// attribute partials. Covers `<name>.PARTIAL`, dotpart `.<name>.PARTIAL`,
+  /// and copyparty's suffixed `<name>-<time>-<token>.<ext>.PARTIAL`.
   static bool _hasPartialFor(Iterable<String> names, String filename) {
     return names.any((n) =>
         n == '$filename.PARTIAL' ||
@@ -401,7 +411,9 @@ class CopypartyUploaderService {
     try {
       final fileUri = Uri.parse(fileUrl);
       final segs = List<String>.from(fileUri.pathSegments);
-      if (segs.isNotEmpty) segs.removeLast();
+      if (segs.isNotEmpty) {
+        segs.removeLast();
+      }
       final folderUri = fileUri.replace(pathSegments: [...segs, ''], query: '');
 
       final sizes = await listFolderSizes(folderUri, password);
@@ -525,7 +537,9 @@ class CopypartyUploaderService {
     final respBody = await response.stream.bytesToString();
     _log?.response(statusCode, headers: response.headers, body: respBody);
 
-    if (statusCode < 400) return; // 200/204 = accepted.
+    if (statusCode < 400) {
+      return; // 200/204 = accepted.
+    }
 
     // A 400 is only benign when copyparty says the chunk is ALREADY present
     // (a resume/retry race). Any other 400 (e.g. "some file got your folder
@@ -878,9 +892,13 @@ class CopypartyUploaderService {
       return _buildUri(hostUrl, '', password)
           .replace(path: Uri.parse(hostUrl.trimRight()).path);
     }
-    if (password.isEmpty) return base;
+    if (password.isEmpty) {
+      return base;
+    }
     final params = Map<String, String>.from(base.queryParameters);
-    if (!params.containsKey('pw')) params['pw'] = password;
+    if (!params.containsKey('pw')) {
+      params['pw'] = password;
+    }
     return base.replace(queryParameters: params);
   }
 
@@ -892,7 +910,9 @@ class CopypartyUploaderService {
       final buf = BytesBuilder(copy: false);
       while (buf.length < length) {
         final slice = await handle.read(length - buf.length);
-        if (slice.isEmpty) break;
+        if (slice.isEmpty) {
+          break;
+        }
         buf.add(slice);
       }
       return buf.takeBytes();

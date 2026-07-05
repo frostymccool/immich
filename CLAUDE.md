@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.0.0-custom.N+<3048+N>  →  3.0.0-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.0.0-custom.80+3128** (next push → `81+3129`).
+Latest pushed: **3.0.0-custom.81+3129** (next push → `82+3130`).
 
 ### Branch targets
 - New feature branches off `feature/custom-upload-settings`, not `main`.
@@ -100,10 +100,17 @@ for fork repos — use the custom APK workflow artifact instead.
 
 | Check | Reason |
 |-------|--------|
-| `Run Dart Code Analysis` | DCM requires `DCM_CI_KEY` / `DCM_EMAIL` secrets |
 | `validate-release-label` | Requires `PUSH_O_MATIC_APP_KEY` to add `changelog:*` label |
 
-Both failed on PR #1 before any feature work. Ignore them.
+Ignore that one (needs a fork secret).
+
+**`Run Dart Code Analysis`** is NOT a secrets issue — it runs `dart analyze
+--fatal-infos` on the mobile code. `--fatal-infos` means EVEN info-level lints
+fail the build, so ANY new violation in our copyparty code turns it red. Build 81
+cleaned up 82 such issues (one-line control bodies → braces, `unawaited(...)` on
+fire-and-forget futures, `const` constructors, backticked `<…>` in doc comments).
+Keep new copyparty code lint-clean: braces on all control bodies, no unawaited
+futures, `const` where possible, no bare `<…>`/HTML in `///` comments.
 
 ---
 

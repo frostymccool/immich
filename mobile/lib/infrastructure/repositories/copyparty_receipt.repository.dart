@@ -82,7 +82,9 @@ class CopypartyReceiptRepository {
          ORDER BY upload_timestamp DESC LIMIT 1''',
       variables: [Variable.withString(localPath)],
     ).get();
-    if (rows.isEmpty) return null;
+    if (rows.isEmpty) {
+      return null;
+    }
     return _rowToReceipt(rows.first);
   }
 
