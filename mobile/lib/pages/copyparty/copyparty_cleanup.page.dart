@@ -56,8 +56,7 @@ class _CleanupGroup {
 
   /// Representative label — the shortest filename in the set reads best as the
   /// clip name (companions add suffixes/extensions).
-  String get title =>
-      receipts.map((r) => r.filename).reduce((a, b) => a.length <= b.length ? a : b);
+  String get title => receipts.map((r) => r.filename).reduce((a, b) => a.length <= b.length ? a : b);
 
   int get totalBytes => receipts.fold(0, (s, r) => s + r.sizeBytes);
 }
@@ -94,10 +93,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       setState(() {
         _existing = existing;
         _selected = {}; // nothing pre-selected — must verify first
-        _verify = {
-          for (final r in existing)
-            r.id!: ServerFileVerification(immichApplicable: _immichApplies(r)),
-        };
+        _verify = {for (final r in existing) r.id!: ServerFileVerification(immichApplicable: _immichApplies(r))};
         _password = password;
         _loading = false;
       });
@@ -189,9 +185,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       bool applicable = _immichApplies(r);
       if (applicable) {
         try {
-          immich = (await immichAssetIdByChecksum(api, r.localPath)) != null
-              ? VerifyState.yes
-              : VerifyState.no;
+          immich = (await immichAssetIdByChecksum(api, r.localPath)) != null ? VerifyState.yes : VerifyState.no;
         } catch (_) {
           immich = VerifyState.unknown;
         }
@@ -231,10 +225,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   void _toggleSelectAll(bool selectAll) {
     setState(() {
       if (selectAll) {
-        _selected = _existing
-            .where((r) => !_deleted.contains(r.id))
-            .map((r) => r.id!)
-            .toSet();
+        _selected = _existing.where((r) => !_deleted.contains(r.id)).map((r) => r.id!).toSet();
       } else {
         _selected = {};
       }
@@ -269,9 +260,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     final now = DateTime.now();
     setState(() {
       _selected = _existing
-          .where((r) =>
-              !_deleted.contains(r.id) &&
-              (_verify[r.id]?.safeToDeleteAt(now) ?? false))
+          .where((r) => !_deleted.contains(r.id) && (_verify[r.id]?.safeToDeleteAt(now) ?? false))
           .map((r) => r.id!)
           .toSet();
     });
@@ -310,8 +299,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
 
   /// Tri-state for a group's select box: true (all), false (none), null (some).
   bool? _groupValue(_CleanupGroup g) {
-    final ids =
-        g.receipts.where((r) => !_deleted.contains(r.id)).map((r) => r.id!).toList();
+    final ids = g.receipts.where((r) => !_deleted.contains(r.id)).map((r) => r.id!).toList();
     if (ids.isEmpty) {
       return false;
     }
@@ -411,9 +399,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       _progress.remove(r.id);
     });
     if (error != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Upload failed: $error')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed: $error')));
       return;
     }
     await _verifyFile(r);
@@ -423,54 +409,53 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     final now = DateTime.now();
     // Exclude already-deleted rows defensively — they can't be deleted twice
     // and must not inflate counts. (Review MEDIUM 7)
-    final toDelete = _existing
-        .where((r) => _selected.contains(r.id) && !_deleted.contains(r.id))
-        .toList();
+    final toDelete = _existing.where((r) => _selected.contains(r.id) && !_deleted.contains(r.id)).toList();
     if (toDelete.isEmpty) {
       return;
     }
 
-    final unsafe = toDelete
-        .where((r) => !(_verify[r.id]?.safeToDeleteAt(now) ?? false))
-        .toList();
+    final unsafe = toDelete.where((r) => !(_verify[r.id]?.safeToDeleteAt(now) ?? false)).toList();
 
     final bool proceed;
     if (unsafe.isEmpty) {
       // All-clear: every selected file is hash-verified on copyparty + Immich-ok.
-      final immichBound =
-          toDelete.where((r) => _verify[r.id]?.immichApplicable ?? false).length;
-      proceed = (await showDialog<bool>(
+      final immichBound = toDelete.where((r) => _verify[r.id]?.immichApplicable ?? false).length;
+      proceed =
+          (await showDialog<bool>(
             context: context,
             builder: (ctx) => AlertDialog(
-              title: Text('Delete ${toDelete.length} source '
-                  'file${toDelete.length == 1 ? '' : 's'}?'),
+              title: Text(
+                'Delete ${toDelete.length} source '
+                'file${toDelete.length == 1 ? '' : 's'}?',
+              ),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _AllClearLine('All ${toDelete.length} are hash-verified on copyparty.'),
                   if (immichBound > 0)
-                    _AllClearLine('All $immichBound Immich-bound '
-                        'file${immichBound == 1 ? '' : 's'} present in Immich.'),
+                    _AllClearLine(
+                      'All $immichBound Immich-bound '
+                      'file${immichBound == 1 ? '' : 's'} present in Immich.',
+                    ),
                   const SizedBox(height: 6),
-                  Text('This cannot be undone.',
-                      style: TextStyle(
-                          color: ctx.colorScheme.onSurface.withValues(alpha: 0.6))),
+                  Text(
+                    'This cannot be undone.',
+                    style: TextStyle(color: ctx.colorScheme.onSurface.withValues(alpha: 0.6)),
+                  ),
                 ],
               ),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-                FilledButton(
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: Text('Delete all ${toDelete.length}'),
-                ),
+                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text('Delete all ${toDelete.length}')),
               ],
             ),
           )) ??
           false;
     } else {
       // Mixed: some selected files are not safe. Warn explicitly.
-      proceed = (await showDialog<bool>(
+      proceed =
+          (await showDialog<bool>(
             context: context,
             builder: (ctx) => AlertDialog(
               title: const Text('Some files not verified'),
@@ -512,9 +497,9 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         _deleted.addAll(deletedIds);
         _selected.removeAll(deletedIds);
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Deleted ${deletedIds.length} / ${toDelete.length} files')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Deleted ${deletedIds.length} / ${toDelete.length} files')));
       ref.invalidate(pendingCleanupProvider);
     }
   }
@@ -523,14 +508,11 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   Widget build(BuildContext context) {
     final now = DateTime.now();
     final busy = _verifying.isNotEmpty || _uploading.isNotEmpty;
-    final selectable =
-        _existing.where((r) => !_deleted.contains(r.id)).map((r) => r.id!).toSet();
-    final allSelected =
-        selectable.isNotEmpty && selectable.every(_selected.contains);
-    final allSelectedSafe = _selected.isNotEmpty &&
-        _existing
-            .where((r) => _selected.contains(r.id))
-            .every((r) => _verify[r.id]?.safeToDeleteAt(now) ?? false);
+    final selectable = _existing.where((r) => !_deleted.contains(r.id)).map((r) => r.id!).toSet();
+    final allSelected = selectable.isNotEmpty && selectable.every(_selected.contains);
+    final allSelectedSafe =
+        _selected.isNotEmpty &&
+        _existing.where((r) => _selected.contains(r.id)).every((r) => _verify[r.id]?.safeToDeleteAt(now) ?? false);
 
     return Scaffold(
       appBar: AppBar(
@@ -538,10 +520,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         centerTitle: false,
         actions: [
           if (!_loading && _existing.isNotEmpty) ...[
-            TextButton(
-              onPressed: _selectAllVerified,
-              child: const Text('Select verified'),
-            ),
+            TextButton(onPressed: _selectAllVerified, child: const Text('Select verified')),
             TextButton(
               onPressed: (busy || _selected.isEmpty) ? null : _verifySelected,
               child: Text('Verify${_selected.isEmpty ? '' : ' (${_selected.length})'}'),
@@ -558,10 +537,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                 }
               },
               itemBuilder: (ctx) => [
-                PopupMenuItem(
-                  value: 'selectAll',
-                  child: Text(allSelected ? 'Deselect all' : 'Select all'),
-                ),
+                PopupMenuItem(value: 'selectAll', child: Text(allSelected ? 'Deselect all' : 'Select all')),
                 const PopupMenuItem(value: 'expandAll', child: Text('Expand all')),
                 const PopupMenuItem(value: 'collapseAll', child: Text('Collapse all')),
               ],
@@ -572,43 +548,44 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       // Q4: long-press select + copy for all text on this page (support).
       body: SelectionArea(
         child: _loading
-          ? const Center(child: CircularProgressIndicator.adaptive())
-          : _existing.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.check_circle_outline, size: 64, color: context.primaryColor),
-                      const SizedBox(height: 16),
-                      const Text('Nothing to clean up'),
-                      const SizedBox(height: 8),
-                      Text(
-                        'All uploaded source files have been deleted from this device.',
-                        textAlign: TextAlign.center,
-                        style: context.textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                )
-              : Column(
+            ? const Center(child: CircularProgressIndicator.adaptive())
+            : _existing.isEmpty
+            ? Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Container(
-                      width: double.infinity,
-                      color: context.colorScheme.surfaceContainer,
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                      child: Text(
-                        'Files are only safe to delete once verified on copyparty '
-                        '(and present in Immich, if applicable). Select files and '
-                        'tap "Verify" to re-hash and confirm each one.',
-                        style: context.textTheme.bodySmall?.copyWith(
-                          color: context.colorScheme.onSurface.withValues(alpha: 0.7),
-                        ),
+                    Icon(Icons.check_circle_outline, size: 64, color: context.primaryColor),
+                    const SizedBox(height: 16),
+                    const Text('Nothing to clean up'),
+                    const SizedBox(height: 8),
+                    Text(
+                      'All uploaded source files have been deleted from this device.',
+                      textAlign: TextAlign.center,
+                      style: context.textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              )
+            : Column(
+                children: [
+                  Container(
+                    width: double.infinity,
+                    color: context.colorScheme.surfaceContainer,
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                    child: Text(
+                      'Files are only safe to delete once verified on copyparty '
+                      '(and present in Immich, if applicable). Select files and '
+                      'tap "Verify" to re-hash and confirm each one.',
+                      style: context.textTheme.bodySmall?.copyWith(
+                        color: context.colorScheme.onSurface.withValues(alpha: 0.7),
                       ),
                     ),
-                    Expanded(
-                      child: RefreshIndicator(
-                        onRefresh: _loadExisting,
-                        child: Builder(builder: (ctx) {
+                  ),
+                  Expanded(
+                    child: RefreshIndicator(
+                      onRefresh: _loadExisting,
+                      child: Builder(
+                        builder: (ctx) {
                           final groups = _buildGroups();
                           return ListView.builder(
                             itemCount: groups.length,
@@ -626,8 +603,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                                   }
                                 }),
                                 verifications: [
-                                  for (final r in g.receipts)
-                                    _verify[r.id] ?? const ServerFileVerification(),
+                                  for (final r in g.receipts) _verify[r.id] ?? const ServerFileVerification(),
                                 ],
                                 onGroupToggle: (v) => _toggleGroup(g, v ?? false),
                                 onGroupVerify: () => _verifyGroup(g),
@@ -637,8 +613,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                                       receipt: r,
                                       isSelected: _selected.contains(r.id),
                                       deleted: _deleted.contains(r.id),
-                                      verification:
-                                          _verify[r.id] ?? const ServerFileVerification(),
+                                      verification: _verify[r.id] ?? const ServerFileVerification(),
                                       verifying: _verifying.contains(r.id),
                                       uploading: _uploading.contains(r.id),
                                       progress: _progress[r.id],
@@ -649,56 +624,53 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                                       onChanged: _deleted.contains(r.id)
                                           ? null
                                           : (sel) => setState(() {
-                                                if (sel == true) {
-                                                  _selected.add(r.id!);
-                                                } else {
-                                                  _selected.remove(r.id);
-                                                }
-                                              }),
+                                              if (sel == true) {
+                                                _selected.add(r.id!);
+                                              } else {
+                                                _selected.remove(r.id);
+                                              }
+                                            }),
                                     ),
                                 ],
                               );
                             },
                           );
-                        }),
+                        },
                       ),
                     ),
-                    SafeArea(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: FilledButton.icon(
-                            onPressed: _selected.isEmpty ? null : _deleteSelected,
-                            icon: Icon(allSelectedSafe
-                                ? Icons.delete_outline_rounded
-                                : Icons.warning_amber_rounded),
-                            label: Text(
-                              _selected.isEmpty
-                                  ? 'Select verified files to delete'
-                                  : 'Delete ${_selected.length} '
+                  ),
+                  SafeArea(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: _selected.isEmpty ? null : _deleteSelected,
+                          icon: Icon(allSelectedSafe ? Icons.delete_outline_rounded : Icons.warning_amber_rounded),
+                          label: Text(
+                            _selected.isEmpty
+                                ? 'Select verified files to delete'
+                                : 'Delete ${_selected.length} '
                                       'file${_selected.length == 1 ? '' : 's'}'
                                       '${allSelectedSafe ? '' : ' (unverified!)'}',
-                            ),
-                            style: FilledButton.styleFrom(
-                              minimumSize: const Size.fromHeight(52),
-                              // Destructive-red ONLY when the selection contains
-                              // unverified files; the all-clear delete uses the
-                              // normal primary colour so safe vs unsafe are
-                              // visually distinct before the dialog. (M2)
-                              backgroundColor: (_selected.isEmpty || allSelectedSafe)
-                                  ? null
-                                  : context.colorScheme.error,
-                              foregroundColor: (_selected.isEmpty || allSelectedSafe)
-                                  ? null
-                                  : context.colorScheme.onError,
-                            ),
+                          ),
+                          style: FilledButton.styleFrom(
+                            minimumSize: const Size.fromHeight(52),
+                            // Destructive-red ONLY when the selection contains
+                            // unverified files; the all-clear delete uses the
+                            // normal primary colour so safe vs unsafe are
+                            // visually distinct before the dialog. (M2)
+                            backgroundColor: (_selected.isEmpty || allSelectedSafe) ? null : context.colorScheme.error,
+                            foregroundColor: (_selected.isEmpty || allSelectedSafe)
+                                ? null
+                                : context.colorScheme.onError,
                           ),
                         ),
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
+              ),
       ),
     );
   }
@@ -710,16 +682,18 @@ class _AllClearLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 2),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.check_circle, size: 15, color: Colors.green),
-            const SizedBox(width: 6),
-            Expanded(child: Text(text, style: const TextStyle(color: Colors.green))),
-          ],
+    padding: const EdgeInsets.only(bottom: 2),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.check_circle, size: 15, color: Colors.green),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(text, style: const TextStyle(color: Colors.green)),
         ),
-      );
+      ],
+    ),
+  );
 }
 
 /// A grouped set of cleanup tiles under one header (Q2): folder + representative
@@ -752,22 +726,19 @@ class _CleanupGroupSection extends StatelessWidget {
   });
 
   Widget _folderLine(BuildContext context) => Row(
-        children: [
-          Icon(Icons.folder_outlined,
-              size: 13, color: context.colorScheme.onSurface.withValues(alpha: 0.5)),
-          const SizedBox(width: 4),
-          Expanded(
-            child: Text(
-              group.folder,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: context.textTheme.labelSmall?.copyWith(
-                color: context.colorScheme.onSurface.withValues(alpha: 0.6),
-              ),
-            ),
-          ),
-        ],
-      );
+    children: [
+      Icon(Icons.folder_outlined, size: 13, color: context.colorScheme.onSurface.withValues(alpha: 0.5)),
+      const SizedBox(width: 4),
+      Expanded(
+        child: Text(
+          group.folder,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: context.textTheme.labelSmall?.copyWith(color: context.colorScheme.onSurface.withValues(alpha: 0.6)),
+        ),
+      ),
+    ],
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -777,10 +748,7 @@ class _CleanupGroupSection extends StatelessWidget {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-            child: _folderLine(context),
-          ),
+          Padding(padding: const EdgeInsets.fromLTRB(16, 8, 16, 0), child: _folderLine(context)),
           ...tiles,
           const SizedBox(height: 4),
         ],
@@ -795,11 +763,7 @@ class _CleanupGroupSection extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(4, 6, 8, 6),
           child: Row(
             children: [
-              Checkbox(
-                value: groupValue,
-                tristate: true,
-                onChanged: (v) => onGroupToggle(v ?? false),
-              ),
+              Checkbox(value: groupValue, tristate: true, onChanged: (v) => onGroupToggle(v ?? false)),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -808,8 +772,7 @@ class _CleanupGroupSection extends StatelessWidget {
                       group.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: context.textTheme.titleSmall
-                          ?.copyWith(fontWeight: FontWeight.w600),
+                      style: context.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
                     ),
                     Row(
                       children: [
@@ -828,17 +791,12 @@ class _CleanupGroupSection extends StatelessWidget {
                   ],
                 ),
               ),
-              TextButton(
-                onPressed: busy ? null : onGroupVerify,
-                child: const Text('Verify'),
-              ),
+              TextButton(onPressed: busy ? null : onGroupVerify, child: const Text('Verify')),
               // Item 7: fold the group open/closed.
               IconButton(
                 visualDensity: VisualDensity.compact,
                 onPressed: onToggleCollapse,
-                icon: Icon(collapsed
-                    ? Icons.keyboard_arrow_down_rounded
-                    : Icons.keyboard_arrow_up_rounded),
+                icon: Icon(collapsed ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded),
               ),
             ],
           ),
@@ -852,8 +810,7 @@ class _CleanupGroupSection extends StatelessWidget {
   /// Rolls up the group's per-file verification into compact chips. Denominators
   /// are per-axis KNOWN counts so an unchecked axis never reads as "absent".
   Widget _summary(BuildContext context) {
-    final partial =
-        verifications.where((v) => v.partialExists == VerifyState.yes).length;
+    final partial = verifications.where((v) => v.partialExists == VerifyState.yes).length;
     final hashFresh = verifications.where((v) => v.hashFreshAt(now)).length;
     final immichPool = verifications.where((v) => v.immichApplicable).toList();
     final immichYes = immichPool.where((v) => v.immich == VerifyState.yes).length;
@@ -866,20 +823,35 @@ class _CleanupGroupSection extends StatelessWidget {
           // name & size share the SAME denominator (the whole group) — an
           // absent file has no server size, but it still counts as "not size-
           // matched" so size never reads a smaller denominator than name. (item 1)
-          _countChip(context, 'name',
-              verifications.where((v) => v.filenamePresent == VerifyState.yes).length,
-              verifications.length),
-          _countChip(context, 'size',
-              verifications.where((v) => v.sizeMatches == VerifyState.yes).length,
-              verifications.length),
+          _countChip(
+            context,
+            'name',
+            verifications.where((v) => v.filenamePresent == VerifyState.yes).length,
+            verifications.length,
+          ),
+          _countChip(
+            context,
+            'size',
+            verifications.where((v) => v.sizeMatches == VerifyState.yes).length,
+            verifications.length,
+          ),
           if (partial > 0)
-            _rawChip(context, 'partial $partial/${verifications.length}',
-                context.colorScheme.error, Icons.error_outline),
+            _rawChip(
+              context,
+              'partial $partial/${verifications.length}',
+              context.colorScheme.error,
+              Icons.error_outline,
+            ),
           // hash: 0 means "not checked" (grey, fingerprint), not "absent".
-          _countChip(context, 'hash', hashFresh, verifications.length,
-              neutralWhenZero: true, zeroIcon: Icons.fingerprint),
-          if (immichPool.isNotEmpty)
-            _countChip(context, 'Immich', immichYes, immichPool.length),
+          _countChip(
+            context,
+            'hash',
+            hashFresh,
+            verifications.length,
+            neutralWhenZero: true,
+            zeroIcon: Icons.fingerprint,
+          ),
+          if (immichPool.isNotEmpty) _countChip(context, 'Immich', immichYes, immichPool.length),
         ].whereType<Widget>().toList(),
       ),
     );
@@ -898,24 +870,20 @@ class _CleanupGroupSection extends StatelessWidget {
     final color = full
         ? Colors.green.shade600
         : (none
-            ? (neutralWhenZero
-                ? context.colorScheme.onSurfaceVariant
-                : context.colorScheme.error)
-            : Colors.orange.shade700);
-    final icon = full
-        ? Icons.check_circle
-        : (none ? (zeroIcon ?? Icons.cancel) : Icons.adjust);
+              ? (neutralWhenZero ? context.colorScheme.onSurfaceVariant : context.colorScheme.error)
+              : Colors.orange.shade700);
+    final icon = full ? Icons.check_circle : (none ? (zeroIcon ?? Icons.cancel) : Icons.adjust);
     return _rawChip(context, '$label $yes/$total', color, icon);
   }
 
   Widget _rawChip(BuildContext context, String label, Color color, IconData icon) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 12, color: color),
-          const SizedBox(width: 3),
-          Text(label, style: context.textTheme.labelSmall?.copyWith(color: color)),
-        ],
-      );
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, size: 12, color: color),
+      const SizedBox(width: 3),
+      Text(label, style: context.textTheme.labelSmall?.copyWith(color: color)),
+    ],
+  );
 }
 
 class _CleanupTile extends StatelessWidget {
@@ -953,7 +921,8 @@ class _CleanupTile extends StatelessWidget {
     final safe = v.safeToDeleteAt(now);
     // Verification has been attempted and the copyparty side is NOT good.
     final hashTried = v.hashValidatedAt != null;
-    final cpFailed = (v.filenamePresent == VerifyState.no ||
+    final cpFailed =
+        (v.filenamePresent == VerifyState.no ||
         v.sizeMatches == VerifyState.no ||
         v.partialExists == VerifyState.yes ||
         (hashTried && !v.hashFreshAt(now)));
@@ -970,160 +939,158 @@ class _CleanupTile extends StatelessWidget {
               receipt.filename,
               style: context.textTheme.bodyMedium?.copyWith(
                 decoration: deleted ? TextDecoration.lineThrough : null,
-                color: deleted
-                    ? context.colorScheme.onSurface.withValues(alpha: 0.4)
-                    : null,
+                color: deleted ? context.colorScheme.onSurface.withValues(alpha: 0.4) : null,
               ),
             ),
             subtitle: deleted
-                ? Text('Deleted from device',
+                ? Text(
+                    'Deleted from device',
                     style: context.textTheme.bodySmall?.copyWith(
                       decoration: TextDecoration.lineThrough,
                       color: context.colorScheme.onSurface.withValues(alpha: 0.4),
-                    ))
-                : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${formatHumanReadableBytes(receipt.sizeBytes, 1)} · '
-                  'uploaded ${DateFormat.yMd().format(receipt.uploadTimestamp.toLocal())}',
-                  style: context.textTheme.bodySmall,
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    _StateChip(label: 'name', state: v.filenamePresent),
-                    _StateChip(label: 'size', state: v.sizeMatches),
-                    // Affirmative wording (Issue 9): show "partial exists" in red
-                    // when one is present; "no partial" in green only when none.
-                    if (v.partialExists == VerifyState.yes)
-                      const _RawChip(label: 'partial exists', state: VerifyState.no)
-                    else if (v.partialExists == VerifyState.no)
-                      const _RawChip(label: 'no partial', state: VerifyState.yes)
-                    else
-                      const _RawChip(label: 'partial ?', state: VerifyState.unknown),
-                    _HashChip(
-                      verifying: verifying,
-                      validatedFresh: v.hashFreshAt(now),
-                      validatedStale: hashTried && !v.hashFreshAt(now),
                     ),
-                    _ImmichChip(verification: v),
-                  ],
-                ),
-                if (v.error != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(v.error!,
-                        style: context.textTheme.labelSmall
-                            ?.copyWith(color: context.colorScheme.error)),
-                  ),
-                // Progress bar + % while verifying (hashing) or uploading (FB2/FB8).
-                if ((verifying || uploading))
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(4),
-                            child: LinearProgressIndicator(
-                              value: progress,
-                              minHeight: 4,
-                            ),
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${formatHumanReadableBytes(receipt.sizeBytes, 1)} · '
+                        'uploaded ${DateFormat.yMd().format(receipt.uploadTimestamp.toLocal())}',
+                        style: context.textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          _StateChip(label: 'name', state: v.filenamePresent),
+                          _StateChip(label: 'size', state: v.sizeMatches),
+                          // Affirmative wording (Issue 9): show "partial exists" in red
+                          // when one is present; "no partial" in green only when none.
+                          if (v.partialExists == VerifyState.yes)
+                            const _RawChip(label: 'partial exists', state: VerifyState.no)
+                          else if (v.partialExists == VerifyState.no)
+                            const _RawChip(label: 'no partial', state: VerifyState.yes)
+                          else
+                            const _RawChip(label: 'partial ?', state: VerifyState.unknown),
+                          _HashChip(
+                            verifying: verifying,
+                            validatedFresh: v.hashFreshAt(now),
+                            validatedStale: hashTried && !v.hashFreshAt(now),
+                          ),
+                          _ImmichChip(verification: v),
+                        ],
+                      ),
+                      if (v.error != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            v.error!,
+                            style: context.textTheme.labelSmall?.copyWith(color: context.colorScheme.error),
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        Text(
-                          '${uploading ? 'Uploading' : 'Hashing'} '
-                          '${progress == null ? '' : '${(progress! * 100).round()}%'}',
-                          style: context.textTheme.labelSmall,
-                        ),
-                      ],
-                    ),
-                  ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    TextButton.icon(
-                      onPressed: (verifying || uploading) ? null : onVerify,
-                      icon: verifying
-                          ? const SizedBox(
-                              width: 12,
-                              height: 12,
-                              child: CircularProgressIndicator(strokeWidth: 1.5))
-                          : Icon(safe ? Icons.verified_rounded : Icons.fingerprint_rounded,
-                              size: 16),
-                      label: Text(verifying ? 'Verifying…' : (safe ? 'Verified' : 'Verify')),
-                      style: TextButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                      ),
-                    ),
-                    // Recovery (Issue 8): offer re-upload when verification failed.
-                    if (cpFailed && !verifying)
-                      TextButton.icon(
-                        onPressed: uploading ? null : onUploadNow,
-                        icon: uploading
-                            ? const SizedBox(
-                                width: 12,
-                                height: 12,
-                                child: CircularProgressIndicator(strokeWidth: 1.5))
-                            : const Icon(Icons.cloud_upload_outlined, size: 16),
-                        label: Text(uploading ? 'Uploading…' : 'Upload now'),
-                        style: TextButton.styleFrom(
-                          visualDensity: VisualDensity.compact,
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                        ),
-                      ),
-                    IconButton(
-                      icon: const Icon(Icons.open_in_browser_outlined, size: 18),
-                      tooltip: 'Open in copyparty',
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () async {
-                        final uri = Uri.tryParse(receipt.copypartyUrl);
-                        if (uri != null) {
-                          await launchUrl(uri, mode: LaunchMode.externalApplication);
-                        }
-                      },
-                    ),
-                    const Spacer(),
-                    // Item 6: drop a stale entry from the list (does NOT touch
-                    // the local file — just stops tracking it for cleanup).
-                    IconButton(
-                      icon: const Icon(Icons.playlist_remove_rounded, size: 20),
-                      tooltip: 'Remove from list',
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () async {
-                        final ok = await showDialog<bool>(
-                          context: context,
-                          builder: (ctx) => AlertDialog(
-                            title: const Text('Remove from list?'),
-                            content: const Text(
-                              'This only stops tracking this file for cleanup. '
-                              'The local file and the server copy are NOT deleted.',
-                            ),
-                            actions: [
-                              TextButton(
-                                  onPressed: () => Navigator.pop(ctx, false),
-                                  child: const Text('Cancel')),
-                              FilledButton(
-                                  onPressed: () => Navigator.pop(ctx, true),
-                                  child: const Text('Remove')),
+                      // Progress bar + % while verifying (hashing) or uploading (FB2/FB8).
+                      if ((verifying || uploading))
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(4),
+                                  child: LinearProgressIndicator(value: progress, minHeight: 4),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                '${uploading ? 'Uploading' : 'Hashing'} '
+                                '${progress == null ? '' : '${(progress! * 100).round()}%'}',
+                                style: context.textTheme.labelSmall,
+                              ),
                             ],
                           ),
-                        );
-                        if (ok == true) {
-                          onRemove();
-                        }
-                      },
-                    ),
-                  ],
-                ),
-              ],
-            ),
+                        ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          TextButton.icon(
+                            onPressed: (verifying || uploading) ? null : onVerify,
+                            icon: verifying
+                                ? const SizedBox(
+                                    width: 12,
+                                    height: 12,
+                                    child: CircularProgressIndicator(strokeWidth: 1.5),
+                                  )
+                                : Icon(safe ? Icons.verified_rounded : Icons.fingerprint_rounded, size: 16),
+                            label: Text(verifying ? 'Verifying…' : (safe ? 'Verified' : 'Verify')),
+                            style: TextButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(horizontal: 8),
+                            ),
+                          ),
+                          // Recovery (Issue 8): offer re-upload when verification failed.
+                          if (cpFailed && !verifying)
+                            TextButton.icon(
+                              onPressed: uploading ? null : onUploadNow,
+                              icon: uploading
+                                  ? const SizedBox(
+                                      width: 12,
+                                      height: 12,
+                                      child: CircularProgressIndicator(strokeWidth: 1.5),
+                                    )
+                                  : const Icon(Icons.cloud_upload_outlined, size: 16),
+                              label: Text(uploading ? 'Uploading…' : 'Upload now'),
+                              style: TextButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                                padding: const EdgeInsets.symmetric(horizontal: 8),
+                              ),
+                            ),
+                          IconButton(
+                            icon: const Icon(Icons.open_in_browser_outlined, size: 18),
+                            tooltip: 'Open in copyparty',
+                            visualDensity: VisualDensity.compact,
+                            onPressed: () async {
+                              final uri = Uri.tryParse(receipt.copypartyUrl);
+                              if (uri != null) {
+                                await launchUrl(uri, mode: LaunchMode.externalApplication);
+                              }
+                            },
+                          ),
+                          const Spacer(),
+                          // Item 6: drop a stale entry from the list (does NOT touch
+                          // the local file — just stops tracking it for cleanup).
+                          IconButton(
+                            icon: const Icon(Icons.playlist_remove_rounded, size: 20),
+                            tooltip: 'Remove from list',
+                            visualDensity: VisualDensity.compact,
+                            onPressed: () async {
+                              final ok = await showDialog<bool>(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                  title: const Text('Remove from list?'),
+                                  content: const Text(
+                                    'This only stops tracking this file for cleanup. '
+                                    'The local file and the server copy are NOT deleted.',
+                                  ),
+                                  actions: [
+                                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                                    FilledButton(
+                                      onPressed: () => Navigator.pop(ctx, true),
+                                      child: const Text('Remove'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (ok == true) {
+                                onRemove();
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
             controlAffinity: ListTileControlAffinity.leading,
             isThreeLine: true,
           ),
@@ -1173,11 +1140,7 @@ class _HashChip extends StatelessWidget {
   final bool validatedFresh;
   final bool validatedStale;
 
-  const _HashChip({
-    required this.verifying,
-    required this.validatedFresh,
-    required this.validatedStale,
-  });
+  const _HashChip({required this.verifying, required this.validatedFresh, required this.validatedStale});
 
   @override
   Widget build(BuildContext context) {
@@ -1188,21 +1151,18 @@ class _HashChip extends StatelessWidget {
           SizedBox(
             width: 11,
             height: 11,
-            child: CircularProgressIndicator(
-                strokeWidth: 1.5, color: context.colorScheme.onSurfaceVariant),
+            child: CircularProgressIndicator(strokeWidth: 1.5, color: context.colorScheme.onSurfaceVariant),
           ),
           const SizedBox(width: 3),
-          Text('hash…',
-              style: context.textTheme.labelSmall
-                  ?.copyWith(color: context.colorScheme.onSurfaceVariant)),
+          Text('hash…', style: context.textTheme.labelSmall?.copyWith(color: context.colorScheme.onSurfaceVariant)),
         ],
       );
     }
     final (icon, color, text) = validatedFresh
         ? (Icons.check_circle, Colors.green, 'hash ✓')
         : validatedStale
-            ? (Icons.history_rounded, Colors.orange, 'hash stale')
-            : (Icons.help_outline, context.colorScheme.onSurfaceVariant, 'hash ?');
+        ? (Icons.history_rounded, Colors.orange, 'hash stale')
+        : (Icons.help_outline, context.colorScheme.onSurfaceVariant, 'hash ?');
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1225,10 +1185,8 @@ class _ImmichChip extends StatelessWidget {
     }
     final (icon, color, text) = switch (verification.immich) {
       VerifyState.yes => (Icons.photo_library_rounded, Colors.green, 'Immich ✓'),
-      VerifyState.no => (Icons.image_not_supported_outlined,
-          context.colorScheme.error, 'Immich missing'),
-      VerifyState.unknown => (Icons.hourglass_empty,
-          context.colorScheme.onSurfaceVariant, 'Immich…'),
+      VerifyState.no => (Icons.image_not_supported_outlined, context.colorScheme.error, 'Immich missing'),
+      VerifyState.unknown => (Icons.hourglass_empty, context.colorScheme.onSurfaceVariant, 'Immich…'),
     };
     return Row(
       mainAxisSize: MainAxisSize.min,

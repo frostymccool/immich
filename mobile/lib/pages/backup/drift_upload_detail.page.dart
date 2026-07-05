@@ -87,13 +87,15 @@ class _DriftUploadDetailPageState extends ConsumerState<DriftUploadDetailPage> {
     final cpSession = ref.watch(importSessionProvider);
     final copypartyItems = cpSession.step == ImportSessionStep.uploading
         ? cpSession.uploadSets
-            .expand((s) => s.files)
-            .where((f) =>
-                f.needsCopyparty &&
-                f.status != UploadFileStatus.pending &&
-                f.status != UploadFileStatus.receiptWritten &&
-                f.status != UploadFileStatus.failed)
-            .toList()
+              .expand((s) => s.files)
+              .where(
+                (f) =>
+                    f.needsCopyparty &&
+                    f.status != UploadFileStatus.pending &&
+                    f.status != UploadFileStatus.receiptWritten &&
+                    f.status != UploadFileStatus.failed,
+              )
+              .toList()
         : <UploadFile>[];
 
     return Scaffold(
@@ -104,7 +106,13 @@ class _DriftUploadDetailPageState extends ConsumerState<DriftUploadDetailPage> {
         scrolledUnderElevation: 1,
       ),
       body: _buildTwoSectionLayout(
-          context, uploadingItems, failedItems, iCloudProgress, parallelUploads, copypartyItems),
+        context,
+        uploadingItems,
+        failedItems,
+        iCloudProgress,
+        parallelUploads,
+        copypartyItems,
+      ),
     );
   }
 
@@ -175,8 +183,10 @@ class _DriftUploadDetailPageState extends ConsumerState<DriftUploadDetailPage> {
                 children: [
                   Text(
                     'Copyparty',
-                    style: context.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w600, color: context.colorScheme.primary),
+                    style: context.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: context.colorScheme.primary,
+                    ),
                   ),
                   const SizedBox(width: 8),
                   Container(
@@ -187,8 +197,10 @@ class _DriftUploadDetailPageState extends ConsumerState<DriftUploadDetailPage> {
                     ),
                     child: Text(
                       copypartyItems.length.toString(),
-                      style: context.textTheme.labelSmall
-                          ?.copyWith(fontWeight: FontWeight.bold, color: context.colorScheme.primary),
+                      style: context.textTheme.labelSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: context.colorScheme.primary,
+                      ),
                     ),
                   ),
                   const Spacer(),

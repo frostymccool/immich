@@ -183,11 +183,9 @@ class _CopypartyIndicator extends ConsumerStatefulWidget {
   ConsumerState<_CopypartyIndicator> createState() => _CopypartyIndicatorState();
 }
 
-class _CopypartyIndicatorState extends ConsumerState<_CopypartyIndicator>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _spin =
-      AnimationController(vsync: this, duration: const Duration(seconds: 2))
-        ..repeat();
+class _CopypartyIndicatorState extends ConsumerState<_CopypartyIndicator> with SingleTickerProviderStateMixin {
+  late final AnimationController _spin = AnimationController(vsync: this, duration: const Duration(seconds: 2))
+    ..repeat();
 
   @override
   void dispose() {
@@ -215,8 +213,7 @@ class _CopypartyIndicatorState extends ConsumerState<_CopypartyIndicator>
 
   @override
   Widget build(BuildContext context) {
-    final uploading = ref.watch(
-        importSessionProvider.select((s) => s.step == ImportSessionStep.uploading));
+    final uploading = ref.watch(importSessionProvider.select((s) => s.step == ImportSessionStep.uploading));
     final icon = Icon(Icons.sd_card_rounded, size: _kBadgeWidgetSize, color: context.primaryColor);
     return IconButton(
       tooltip: 'Copyparty import',
@@ -230,8 +227,7 @@ class _CopypartyIndicatorState extends ConsumerState<_CopypartyIndicator>
                 // active uploads.
                 RotationTransition(
                   turns: _spin,
-                  child: Icon(Icons.autorenew_rounded,
-                      size: _kBadgeWidgetSize + 8, color: context.primaryColor),
+                  child: Icon(Icons.autorenew_rounded, size: _kBadgeWidgetSize + 8, color: context.primaryColor),
                 ),
               ],
             )

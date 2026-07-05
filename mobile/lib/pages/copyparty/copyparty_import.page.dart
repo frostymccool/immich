@@ -38,9 +38,7 @@ class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
       }
     } on PlatformException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Picker error: ${e.message}')),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Picker error: ${e.message}')));
       }
     }
   }
@@ -61,10 +59,7 @@ class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
         }
       },
       child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Import from Memory Card'),
-          centerTitle: false,
-        ),
+        appBar: AppBar(title: const Text('Import from Memory Card'), centerTitle: false),
         // Q4: SelectionArea makes all the text on these pages long-press
         // selectable + copyable (helpful for support / sharing values).
         body: SelectionArea(
@@ -73,10 +68,10 @@ class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
             ImportSessionStep.scanning => _ScanningStep(session),
             ImportSessionStep.options => _OptionsStep(session),
             ImportSessionStep.uploading => _UploadProgressStep(
-                session,
-                onCancel: () => ref.read(importSessionProvider.notifier).cancelUpload(),
-                onAddFolders: _pickAndAddFolder,
-              ),
+              session,
+              onCancel: () => ref.read(importSessionProvider.notifier).cancelUpload(),
+              onAddFolders: _pickAndAddFolder,
+            ),
             ImportSessionStep.complete => _CompletionStep(session),
           },
         ),
@@ -112,9 +107,7 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
       }
     } on PlatformException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Picker error: ${e.message}')),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Picker error: ${e.message}')));
       }
     } finally {
       if (mounted) {
@@ -142,14 +135,8 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
               'This is a one-time step.',
             ),
             actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Open Settings'),
-              ),
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+              FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Open Settings')),
             ],
           ),
         );
@@ -178,9 +165,7 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
             'If multiple USB devices are connected, the picker will show all of '
             'them — tap the device that contains your files, then navigate to '
             'the desired folder.',
-            style: context.textTheme.bodyMedium?.copyWith(
-              color: context.colorScheme.onSurface.withValues(alpha: 0.7),
-            ),
+            style: context.textTheme.bodyMedium?.copyWith(color: context.colorScheme.onSurface.withValues(alpha: 0.7)),
           ),
           if (errorMessage != null) ...[
             const SizedBox(height: 16),
@@ -197,9 +182,7 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
                   Expanded(
                     child: SelectableText(
                       errorMessage,
-                      style: context.textTheme.bodySmall?.copyWith(
-                        color: context.colorScheme.onErrorContainer,
-                      ),
+                      style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.onErrorContainer),
                     ),
                   ),
                 ],
@@ -219,10 +202,7 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
                   Icon(Icons.folder_rounded, color: context.primaryColor, size: 20),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(
-                      _selectedPath!,
-                      style: context.textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
-                    ),
+                    child: Text(_selectedPath!, style: context.textTheme.bodySmall?.copyWith(fontFamily: 'monospace')),
                   ),
                 ],
               ),
@@ -232,11 +212,7 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
           FilledButton.icon(
             onPressed: _picking ? null : _browse,
             icon: _picking
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.folder_open_rounded),
             label: const Text('Browse for Folder'),
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
@@ -267,10 +243,7 @@ class _ScanningStep extends StatelessWidget {
           const Text('Scanning directory for files…'),
           if (count > 0) ...[
             const SizedBox(height: 8),
-            Text(
-              '$count file${count == 1 ? '' : 's'} found',
-              style: context.textTheme.bodySmall,
-            ),
+            Text('$count file${count == 1 ? '' : 's'} found', style: context.textTheme.bodySmall),
           ],
         ],
       ),
@@ -367,8 +340,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
       final listings = <String, Map<String, int>>{};
       for (final folder in folders) {
         try {
-          listings[folder] =
-              await uploader.listUploadFolder(config.hostUrl, folder, password);
+          listings[folder] = await uploader.listUploadFolder(config.hostUrl, folder, password);
         } on CopypartyUploadException {
           // A folder-level HTTP error (e.g. this target folder doesn't exist on
           // the server yet) means "no files here", NOT that copyparty is
@@ -392,8 +364,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
       setState(() {
         _verifying = false;
         if (!_userTouched) {
-          _selectedPaths =
-              files.where((f) => !_looksPresent(f)).map((f) => f.localPath).toSet();
+          _selectedPaths = files.where((f) => !_looksPresent(f)).map((f) => f.localPath).toSet();
         }
       });
     } catch (_) {
@@ -443,8 +414,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     }
   }
 
-  Set<String> _allPaths(List<UploadSet> sets) =>
-      sets.expand((s) => s.files).map((f) => f.localPath).toSet();
+  Set<String> _allPaths(List<UploadSet> sets) => sets.expand((s) => s.files).map((f) => f.localPath).toSet();
 
   void _toggleAll(bool select) {
     setState(() {
@@ -481,8 +451,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     setState(() => _destinationOverrides[path] = dest);
   }
 
-  UploadDestination _destinationFor(UploadFile file) =>
-      _destinationOverrides[file.localPath] ?? file.destination;
+  UploadDestination _destinationFor(UploadFile file) => _destinationOverrides[file.localPath] ?? file.destination;
 
   void _applyDestinations() {
     for (final set in widget.session.uploadSets) {
@@ -500,19 +469,21 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     if (paths.isEmpty) {
       return;
     }
-    unawaited(showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const AlertDialog(
-        content: Row(
-          children: [
-            SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)),
-            SizedBox(width: 18),
-            Expanded(child: Text('Verifying selected files…')),
-          ],
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const AlertDialog(
+          content: Row(
+            children: [
+              SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)),
+              SizedBox(width: 18),
+              Expanded(child: Text('Verifying selected files…')),
+            ],
+          ),
         ),
       ),
-    ));
+    );
     List<String> lines;
     try {
       lines = await ref.read(importSessionProvider.notifier).runVerificationSelfTest(paths);
@@ -544,8 +515,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
               await Share.shareXFiles(
                 [XFile(path)],
                 subject: 'Copyparty verification self-test',
-                sharePositionOrigin:
-                    box != null ? box.localToGlobal(Offset.zero) & box.size : null,
+                sharePositionOrigin: box != null ? box.localToGlobal(Offset.zero) & box.size : null,
               );
             },
             child: const Text('Share log'),
@@ -588,19 +558,21 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
       return;
     }
 
-    unawaited(showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const AlertDialog(
-        content: Row(
-          children: [
-            SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)),
-            SizedBox(width: 18),
-            Expanded(child: Text('Running upload self-test…')),
-          ],
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const AlertDialog(
+          content: Row(
+            children: [
+              SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)),
+              SizedBox(width: 18),
+              Expanded(child: Text('Running upload self-test…')),
+            ],
+          ),
         ),
       ),
-    ));
+    );
 
     List<UploadAttemptResult> results;
     try {
@@ -609,9 +581,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
       results = [];
       if (mounted) {
         Navigator.of(context).pop(); // close progress
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Self-test error: $e')),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Self-test error: $e')));
       }
       return;
     }
@@ -628,9 +598,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
           width: double.maxFinite,
           child: SingleChildScrollView(
             child: SelectableText(
-              results.isEmpty
-                  ? 'No results.'
-                  : results.map((r) => r.summaryLine).join('\n\n'),
+              results.isEmpty ? 'No results.' : results.map((r) => r.summaryLine).join('\n\n'),
               style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
             ),
           ),
@@ -644,8 +612,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
               await Share.shareXFiles(
                 [XFile(path)],
                 subject: 'Copyparty self-test log',
-                sharePositionOrigin:
-                    box != null ? box.localToGlobal(Offset.zero) & box.size : null,
+                sharePositionOrigin: box != null ? box.localToGlobal(Offset.zero) & box.size : null,
               );
             },
             child: const Text('Share log'),
@@ -660,13 +627,10 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
   Widget build(BuildContext context) {
     // Mirror the upload order in the picker: when "upload smallest first" is on,
     // show groups sorted by total size (a sorted copy — session order untouched).
-    final sortSmallest =
-        ref.watch(appConfigProvider.select((c) => c.copyparty.sortSmallestFirst));
-    final debugMode =
-        ref.watch(appConfigProvider.select((c) => c.copyparty.debugMode));
+    final sortSmallest = ref.watch(appConfigProvider.select((c) => c.copyparty.sortSmallestFirst));
+    final debugMode = ref.watch(appConfigProvider.select((c) => c.copyparty.debugMode));
     final sets = sortSmallest
-        ? (List<UploadSet>.of(widget.session.uploadSets)
-          ..sort((a, b) => a.totalBytes.compareTo(b.totalBytes)))
+        ? (List<UploadSet>.of(widget.session.uploadSets)..sort((a, b) => a.totalBytes.compareTo(b.totalBytes)))
         : widget.session.uploadSets;
 
     if (sets.isEmpty) {
@@ -674,11 +638,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.folder_off_outlined,
-              size: 64,
-              color: context.colorScheme.onSurface.withValues(alpha: 0.4),
-            ),
+            Icon(Icons.folder_off_outlined, size: 64, color: context.colorScheme.onSurface.withValues(alpha: 0.4)),
             const SizedBox(height: 16),
             const Text('No matching files found'),
             const SizedBox(height: 8),
@@ -700,21 +660,16 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
 
     final allFiles = sets.expand((s) => s.files).toList();
     final totalFiles = allFiles.length;
-    final selectedFiles =
-        allFiles.where((f) => _selectedPaths.contains(f.localPath)).toList();
+    final selectedFiles = allFiles.where((f) => _selectedPaths.contains(f.localPath)).toList();
     final selectedCount = selectedFiles.length;
     final selectedBytes = selectedFiles.fold<int>(0, (s, f) => s + f.sizeBytes);
     final allSelected = selectedCount == totalFiles;
     // Item 3: destination breakdown, shown inline only when the selection isn't
     // uniformly "Both" (no point otherwise). Kept on the same header line.
-    final cpCount = selectedFiles
-        .where((f) => _destinationFor(f) != UploadDestination.immichNative)
-        .length;
-    final immichCount = selectedFiles
-        .where((f) => _destinationFor(f) != UploadDestination.copypartyOnly)
-        .length;
-    final allBoth = selectedFiles.isNotEmpty &&
-        selectedFiles.every((f) => _destinationFor(f) == UploadDestination.both);
+    final cpCount = selectedFiles.where((f) => _destinationFor(f) != UploadDestination.immichNative).length;
+    final immichCount = selectedFiles.where((f) => _destinationFor(f) != UploadDestination.copypartyOnly).length;
+    final allBoth =
+        selectedFiles.isNotEmpty && selectedFiles.every((f) => _destinationFor(f) == UploadDestination.both);
 
     return Column(
       children: [
@@ -730,8 +685,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                   '$selectedCount / $totalFiles files '
                   '(${formatHumanReadableBytes(selectedBytes, 1)})'
                   '${allBoth ? '' : '  ·  CP $cpCount · Immich $immichCount'}',
-                  style: context.textTheme.bodyMedium
-                      ?.copyWith(fontWeight: FontWeight.w500),
+                  style: context.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -750,10 +704,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
             child: Row(
               children: [
-                const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2)),
+                const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
                 const SizedBox(width: 10),
                 Text('Checking server…', style: context.textTheme.bodySmall),
               ],
@@ -769,29 +720,21 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
             ),
             child: Row(
               children: [
-                Icon(Icons.cloud_off_rounded,
-                    size: 18, color: context.colorScheme.onErrorContainer),
+                Icon(Icons.cloud_off_rounded, size: 18, color: context.colorScheme.onErrorContainer),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     'Couldn\'t reach copyparty — upload status unknown.',
-                    style: context.textTheme.bodySmall
-                        ?.copyWith(color: context.colorScheme.onErrorContainer),
+                    style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.onErrorContainer),
                   ),
                 ),
-                TextButton(
-                  onPressed: _verify,
-                  child: const Text('Refresh'),
-                ),
+                TextButton(onPressed: _verify, child: const Text('Refresh')),
               ],
             ),
           ),
         Builder(
           builder: (ctx) {
-            final alreadyCount = sets
-                .expand((s) => s.files)
-                .where(_OptionsStepState._looksPresent)
-                .length;
+            final alreadyCount = sets.expand((s) => s.files).where(_OptionsStepState._looksPresent).length;
             if (alreadyCount == 0) {
               return const SizedBox.shrink();
             }
@@ -804,16 +747,12 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
               ),
               child: Row(
                 children: [
-                  Icon(Icons.check_circle_outline,
-                      size: 16,
-                      color: ctx.colorScheme.onSecondaryContainer),
+                  Icon(Icons.check_circle_outline, size: 16, color: ctx.colorScheme.onSecondaryContainer),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       '$alreadyCount file${alreadyCount == 1 ? '' : 's'} already on the server by name+size (hash not checked) — unchecked by default.',
-                      style: ctx.textTheme.bodySmall?.copyWith(
-                        color: ctx.colorScheme.onSecondaryContainer,
-                      ),
+                      style: ctx.textTheme.bodySmall?.copyWith(color: ctx.colorScheme.onSecondaryContainer),
                     ),
                   ),
                 ],
@@ -851,15 +790,11 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                             _applyDestinations();
                             ref
                                 .read(importSessionProvider.notifier)
-                                .startUpload(
-                                  selectedFilePaths: Set.of(_selectedPaths),
-                                );
+                                .startUpload(selectedFilePaths: Set.of(_selectedPaths));
                           }
                         : null,
                     icon: const Icon(Icons.upload_rounded),
-                    label: Text(
-                      'Upload $selectedCount file${selectedCount == 1 ? '' : 's'}',
-                    ),
+                    label: Text('Upload $selectedCount file${selectedCount == 1 ? '' : 's'}'),
                     style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
                   ),
                 ),
@@ -912,13 +847,13 @@ class _SelectableUploadSetTile extends StatelessWidget {
   });
 
   Widget _relPathLine(BuildContext context, String relPath) => Text(
-        relPath,
-        style: context.textTheme.bodySmall?.copyWith(
-          color: context.colorScheme.onSurface.withValues(alpha: 0.5),
-          fontFamily: 'monospace',
-        ),
-        overflow: TextOverflow.ellipsis,
-      );
+    relPath,
+    style: context.textTheme.bodySmall?.copyWith(
+      color: context.colorScheme.onSurface.withValues(alpha: 0.5),
+      fontFamily: 'monospace',
+    ),
+    overflow: TextOverflow.ellipsis,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -933,10 +868,7 @@ class _SelectableUploadSetTile extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (relPath.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(left: 16, top: 6),
-              child: _relPathLine(context, relPath),
-            ),
+            Padding(padding: const EdgeInsets.only(left: 16, top: 6), child: _relPathLine(context, relPath)),
           _SelectableFileTile(
             file: f,
             selected: selectedPaths.contains(f.localPath),
@@ -948,17 +880,11 @@ class _SelectableUploadSetTile extends StatelessWidget {
       );
     }
 
-    final filesSelected =
-        set.files.where((f) => selectedPaths.contains(f.localPath)).length;
-    final bool? groupChecked =
-        filesSelected == 0 ? false : (filesSelected == total ? true : null);
+    final filesSelected = set.files.where((f) => selectedPaths.contains(f.localPath)).length;
+    final bool? groupChecked = filesSelected == 0 ? false : (filesSelected == total ? true : null);
 
     return ExpansionTile(
-      leading: Checkbox(
-        tristate: true,
-        value: groupChecked,
-        onChanged: (v) => onToggleGroup(v == true),
-      ),
+      leading: Checkbox(tristate: true, value: groupChecked, onChanged: (v) => onToggleGroup(v == true)),
       // Item 3: show the file count right in the group entry.
       title: Text('${set.displayName}  ·  $total files'),
       subtitle: Column(
@@ -998,10 +924,10 @@ class _GroupSummary extends StatelessWidget {
     if (files.every((f) => f.verification == null)) {
       return Padding(
         padding: const EdgeInsets.only(top: 4),
-        child: Text('checking server…',
-            style: context.textTheme.labelSmall?.copyWith(
-              color: context.colorScheme.onSurfaceVariant,
-            )),
+        child: Text(
+          'checking server…',
+          style: context.textTheme.labelSmall?.copyWith(color: context.colorScheme.onSurfaceVariant),
+        ),
       );
     }
     // name & size are determined together by the folder listing, so use the
@@ -1010,14 +936,10 @@ class _GroupSummary extends StatelessWidget {
     // so it keeps a "known" denominator that hides the chip until resolved.
     final checked = files.where((f) => f.verification != null).toList();
     final n = checked.length;
-    final nameYes =
-        checked.where((f) => f.verification!.filenamePresent == VerifyState.yes).length;
-    final sizeYes =
-        checked.where((f) => f.verification!.sizeMatches == VerifyState.yes).length;
-    final partial =
-        files.where((f) => f.verification?.partialExists == VerifyState.yes).length;
-    final immichApplicable =
-        files.where((f) => f.verification?.immichApplicable ?? false).toList();
+    final nameYes = checked.where((f) => f.verification!.filenamePresent == VerifyState.yes).length;
+    final sizeYes = checked.where((f) => f.verification!.sizeMatches == VerifyState.yes).length;
+    final partial = files.where((f) => f.verification?.partialExists == VerifyState.yes).length;
+    final immichApplicable = files.where((f) => f.verification?.immichApplicable ?? false).toList();
 
     return Padding(
       padding: const EdgeInsets.only(top: 4),
@@ -1028,8 +950,7 @@ class _GroupSummary extends StatelessWidget {
           if (n > 0) _countChip(context, 'name', nameYes, n),
           if (n > 0) _countChip(context, 'size', sizeYes, n),
           if (partial > 0)
-            _rawChip(context, 'partial $partial/${files.length}',
-                context.colorScheme.error, Icons.error_outline),
+            _rawChip(context, 'partial $partial/${files.length}', context.colorScheme.error, Icons.error_outline),
           _axisChip(context, 'Immich', immichApplicable, (v) => v.immich),
         ].whereType<Widget>().toList(),
       ),
@@ -1039,9 +960,7 @@ class _GroupSummary extends StatelessWidget {
   Widget _countChip(BuildContext context, String label, int yes, int total) {
     final full = yes == total;
     final none = yes == 0;
-    final color = full
-        ? Colors.green.shade600
-        : (none ? context.colorScheme.error : Colors.orange.shade700);
+    final color = full ? Colors.green.shade600 : (none ? context.colorScheme.error : Colors.orange.shade700);
     final icon = full ? Icons.check_circle : (none ? Icons.cancel : Icons.adjust);
     return _rawChip(context, '$label $yes/$total', color, icon);
   }
@@ -1055,9 +974,7 @@ class _GroupSummary extends StatelessWidget {
     List<UploadFile> pool,
     VerifyState Function(ServerFileVerification v) get,
   ) {
-    final known = pool
-        .where((f) => f.verification != null && get(f.verification!) != VerifyState.unknown)
-        .toList();
+    final known = pool.where((f) => f.verification != null && get(f.verification!) != VerifyState.unknown).toList();
     if (known.isEmpty) {
       return null;
     }
@@ -1066,23 +983,19 @@ class _GroupSummary extends StatelessWidget {
     final full = yes == total;
     final none = yes == 0;
     // none here means every KNOWN file is genuinely "no" → error, not grey.
-    final color = full
-        ? Colors.green.shade600
-        : (none ? context.colorScheme.error : Colors.orange.shade700);
-    final icon = full
-        ? Icons.check_circle
-        : (none ? Icons.cancel : Icons.adjust);
+    final color = full ? Colors.green.shade600 : (none ? context.colorScheme.error : Colors.orange.shade700);
+    final icon = full ? Icons.check_circle : (none ? Icons.cancel : Icons.adjust);
     return _rawChip(context, '$label $yes/$total', color, icon);
   }
 
   Widget _rawChip(BuildContext context, String label, Color color, IconData icon) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 12, color: color),
-          const SizedBox(width: 3),
-          Text(label, style: context.textTheme.labelSmall?.copyWith(color: color)),
-        ],
-      );
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, size: 12, color: color),
+      const SizedBox(width: 3),
+      Text(label, style: context.textTheme.labelSmall?.copyWith(color: color)),
+    ],
+  );
 }
 
 class _SelectableFileTile extends StatelessWidget {
@@ -1107,18 +1020,10 @@ class _SelectableFileTile extends StatelessWidget {
       children: [
         ListTile(
           contentPadding: const EdgeInsets.only(left: 16, right: 16),
-          leading: Checkbox(
-            value: selected,
-            onChanged: (v) => onToggle(v ?? false),
-          ),
+          leading: Checkbox(value: selected, onChanged: (v) => onToggle(v ?? false)),
           title: Text(file.filename, style: context.textTheme.bodyMedium),
-          subtitle: Text(
-            formatHumanReadableBytes(file.sizeBytes, 1),
-            style: context.textTheme.bodySmall,
-          ),
-          trailing: file.isTriggerFile
-              ? Icon(Icons.star_rounded, color: context.primaryColor, size: 20)
-              : null,
+          subtitle: Text(formatHumanReadableBytes(file.sizeBytes, 1), style: context.textTheme.bodySmall),
+          trailing: file.isTriggerFile ? Icon(Icons.star_rounded, color: context.primaryColor, size: 20) : null,
           dense: true,
         ),
         // Live server state (Issue 3): name/size from copyparty, NOT a stored
@@ -1171,13 +1076,13 @@ class _LiveChips extends StatelessWidget {
   const _LiveChips({required this.v});
 
   Widget _chip(BuildContext context, IconData icon, Color color, String label) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 12, color: color),
-          const SizedBox(width: 3),
-          Text(label, style: context.textTheme.labelSmall?.copyWith(color: color)),
-        ],
-      );
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, size: 12, color: color),
+      const SizedBox(width: 3),
+      Text(label, style: context.textTheme.labelSmall?.copyWith(color: color)),
+    ],
+  );
 
   Widget _state(BuildContext context, String label, VerifyState s) {
     final (icon, color) = switch (s) {
@@ -1203,11 +1108,13 @@ class _LiveChips extends StatelessWidget {
         _chip(context, Icons.help_outline, grey, 'hash not checked'),
         if (v.immichApplicable)
           switch (v.immich) {
-            VerifyState.yes =>
-              _chip(context, Icons.photo_library_rounded, Colors.green.shade600, 'Immich ✓'),
-            VerifyState.no =>
-              _chip(context, Icons.image_not_supported_outlined, context.colorScheme.error,
-                  'Immich missing'),
+            VerifyState.yes => _chip(context, Icons.photo_library_rounded, Colors.green.shade600, 'Immich ✓'),
+            VerifyState.no => _chip(
+              context,
+              Icons.image_not_supported_outlined,
+              context.colorScheme.error,
+              'Immich missing',
+            ),
             VerifyState.unknown => _chip(context, Icons.hourglass_empty, grey, 'Immich…'),
           },
       ],
@@ -1262,16 +1169,11 @@ class _DestinationBanner extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('Uploading to', style: context.textTheme.labelSmall),
-                Text(
-                  '$host$path',
-                  style: context.textTheme.bodySmall
-                      ?.copyWith(fontWeight: FontWeight.w600),
-                ),
+                Text('$host$path', style: context.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600)),
                 if (cp.recreateFolderStructure)
                   Text(
                     '+ recreating folder structure',
-                    style: context.textTheme.labelSmall
-                        ?.copyWith(color: context.colorScheme.primary),
+                    style: context.textTheme.labelSmall?.copyWith(color: context.colorScheme.primary),
                   ),
               ],
             ),
@@ -1286,8 +1188,7 @@ class _UploadProgressStep extends ConsumerWidget {
   final ImportSessionState session;
   final VoidCallback onCancel;
   final VoidCallback onAddFolders;
-  const _UploadProgressStep(this.session,
-      {required this.onCancel, required this.onAddFolders});
+  const _UploadProgressStep(this.session, {required this.onCancel, required this.onAddFolders});
 
   Future<void> _confirmCancel(BuildContext context) async {
     final stop = await showDialog<bool>(
@@ -1324,10 +1225,8 @@ class _UploadProgressStep extends ConsumerWidget {
     // (not scan order, which looks random once "upload smallest first" reorders
     // the actual queue). Smallest-first → sort by group size; otherwise keep
     // scan order (= upload order for the unsorted case).
-    final sortSmallest =
-        ref.watch(appConfigProvider.select((c) => c.copyparty.sortSmallestFirst));
-    final visibleSets =
-        session.uploadSets.where((s) => s.files.any(keep)).toList();
+    final sortSmallest = ref.watch(appConfigProvider.select((c) => c.copyparty.sortSmallestFirst));
+    final visibleSets = session.uploadSets.where((s) => s.files.any(keep)).toList();
     if (sortSmallest) {
       visibleSets.sort((a, b) => a.totalBytes.compareTo(b.totalBytes));
     }
@@ -1335,29 +1234,25 @@ class _UploadProgressStep extends ConsumerWidget {
     final totalBytes = allFiles.fold<int>(0, (s, f) => s + f.sizeBytes);
     final doneBytes = allFiles.fold<int>(0, (s, f) => s + f.uploadedBytes);
     final activeCount = allFiles
-        .where((f) =>
-            f.status != UploadFileStatus.receiptWritten &&
-            f.status != UploadFileStatus.failed &&
-            !(f.status == UploadFileStatus.confirmed && !f.needsImmich))
+        .where(
+          (f) =>
+              f.status != UploadFileStatus.receiptWritten &&
+              f.status != UploadFileStatus.failed &&
+              !(f.status == UploadFileStatus.confirmed && !f.needsImmich),
+        )
         .length;
 
     return Column(
       children: [
         LinearProgressIndicator(
-          value: session.totalFiles > 0
-              ? session.completedFiles / session.totalFiles
-              : null,
+          value: session.totalFiles > 0 ? session.completedFiles / session.totalFiles : null,
           minHeight: 4,
         ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           child: Row(
             children: [
-              _SectionBadge(
-                label: 'Uploading',
-                count: activeCount,
-                color: context.colorScheme.primary,
-              ),
+              _SectionBadge(label: 'Uploading', count: activeCount, color: context.colorScheme.primary),
               const Spacer(),
               Text(
                 '${session.completedFiles} / ${session.totalFiles} files  '
@@ -1375,8 +1270,7 @@ class _UploadProgressStep extends ConsumerWidget {
           child: ListView.builder(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             itemCount: visibleSets.length,
-            itemBuilder: (ctx, i) =>
-                _ProgressSetSection(set: visibleSets[i], selectedPaths: selected),
+            itemBuilder: (ctx, i) => _ProgressSetSection(set: visibleSets[i], selectedPaths: selected),
           ),
         ),
         SafeArea(
@@ -1391,9 +1285,7 @@ class _UploadProgressStep extends ConsumerWidget {
                     onPressed: onAddFolders,
                     icon: const Icon(Icons.create_new_folder_outlined),
                     label: const Text('Add folders'),
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size.fromHeight(48),
-                    ),
+                    style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -1405,9 +1297,7 @@ class _UploadProgressStep extends ConsumerWidget {
                     style: OutlinedButton.styleFrom(
                       minimumSize: const Size.fromHeight(48),
                       foregroundColor: context.colorScheme.error,
-                      side: BorderSide(
-                        color: context.colorScheme.error.withValues(alpha: 0.5),
-                      ),
+                      side: BorderSide(color: context.colorScheme.error.withValues(alpha: 0.5)),
                     ),
                   ),
                 ),
@@ -1433,20 +1323,15 @@ class _SectionBadge extends StatelessWidget {
       children: [
         Text(
           label,
-          style: context.textTheme.titleSmall
-              ?.copyWith(fontWeight: FontWeight.w600, color: color),
+          style: context.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600, color: color),
         ),
         const SizedBox(width: 6),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.15),
-            borderRadius: BorderRadius.circular(12),
-          ),
+          decoration: BoxDecoration(color: color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(12)),
           child: Text(
             '$count',
-            style: context.textTheme.labelSmall
-                ?.copyWith(fontWeight: FontWeight.bold, color: color),
+            style: context.textTheme.labelSmall?.copyWith(fontWeight: FontWeight.bold, color: color),
           ),
         ),
       ],
@@ -1475,8 +1360,7 @@ class _ProgressSetSection extends StatelessWidget {
               Expanded(
                 child: Text(
                   set.displayName,
-                  style: context.textTheme.labelMedium
-                      ?.copyWith(fontWeight: FontWeight.w600),
+                  style: context.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -1489,10 +1373,12 @@ class _ProgressSetSection extends StatelessWidget {
             ],
           ),
         ),
-        ...files.map((f) => Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: _ProgressFileCard(file: f),
-            )),
+        ...files.map(
+          (f) => Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: _ProgressFileCard(file: f),
+          ),
+        ),
         const SizedBox(height: 4),
       ],
     );
@@ -1543,8 +1429,7 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
 
     // Freeze the elapsed transfer time + average once the file is fully done
     // (item 3). Files already on the server never transferred, so skip them.
-    final done = s == UploadFileStatus.receiptWritten ||
-        (s == UploadFileStatus.confirmed && !f.needsImmich);
+    final done = s == UploadFileStatus.receiptWritten || (s == UploadFileStatus.confirmed && !f.needsImmich);
     if (done && _finalElapsed == null && _transferStart != null && !f.alreadyOnServer) {
       _finalElapsed = DateTime.now().difference(_transferStart!);
       final secs = _finalElapsed!.inMilliseconds / 1000.0;
@@ -1583,12 +1468,11 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
   /// (Copyparty vs Immich), so a "both" file makes its two phases obvious.
   Widget _phaseChip(BuildContext context, UploadFile file) {
     final (String label, IconData icon, Color color) = switch (file.status) {
-      UploadFileStatus.hashing =>
-        ('Hashing', Icons.tag_rounded, context.colorScheme.onSurfaceVariant),
-      UploadFileStatus.handshaking || UploadFileStatus.uploading || UploadFileStatus.confirmed =>
-        ('Copyparty', Icons.sd_card_rounded, context.colorScheme.primary),
-      UploadFileStatus.immichUploading =>
-        ('Immich', Icons.cloud_upload_rounded, context.colorScheme.tertiary),
+      UploadFileStatus.hashing => ('Hashing', Icons.tag_rounded, context.colorScheme.onSurfaceVariant),
+      UploadFileStatus.handshaking ||
+      UploadFileStatus.uploading ||
+      UploadFileStatus.confirmed => ('Copyparty', Icons.sd_card_rounded, context.colorScheme.primary),
+      UploadFileStatus.immichUploading => ('Immich', Icons.cloud_upload_rounded, context.colorScheme.tertiary),
       _ => ('', Icons.circle, context.colorScheme.primary),
     };
     if (label.isEmpty) {
@@ -1607,8 +1491,7 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
           const SizedBox(width: 4),
           Text(
             label,
-            style: context.textTheme.labelSmall
-                ?.copyWith(color: color, fontWeight: FontWeight.w600),
+            style: context.textTheme.labelSmall?.copyWith(color: color, fontWeight: FontWeight.w600),
           ),
         ],
       ),
@@ -1618,7 +1501,8 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
   @override
   Widget build(BuildContext context) {
     final file = widget.file;
-    final isDone = file.status == UploadFileStatus.receiptWritten ||
+    final isDone =
+        file.status == UploadFileStatus.receiptWritten ||
         (file.status == UploadFileStatus.confirmed && !file.needsImmich);
     final isFailed = file.status == UploadFileStatus.failed;
     final isActive = !isDone && !isFailed;
@@ -1629,13 +1513,13 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
     final cardColor = isFailed
         ? context.colorScheme.errorContainer
         : isDone
-            ? context.colorScheme.surfaceContainerLow
-            : context.colorScheme.primaryContainer.withValues(alpha: 0.5);
+        ? context.colorScheme.surfaceContainerLow
+        : context.colorScheme.primaryContainer.withValues(alpha: 0.5);
     final borderColor = isFailed
         ? context.colorScheme.error.withValues(alpha: 0.3)
         : isDone
-            ? context.colorScheme.outline.withValues(alpha: 0.15)
-            : context.colorScheme.primary.withValues(alpha: 0.3);
+        ? context.colorScheme.outline.withValues(alpha: 0.15)
+        : context.colorScheme.primary.withValues(alpha: 0.3);
 
     return Card(
       elevation: 0,
@@ -1661,16 +1545,12 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                       Expanded(
                         child: Text(
                           file.filename,
-                          style: context.textTheme.bodyMedium
-                              ?.copyWith(fontWeight: FontWeight.w600),
+                          style: context.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      if (isActive) ...[
-                        const SizedBox(width: 8),
-                        _phaseChip(context, file),
-                      ],
+                      if (isActive) ...[const SizedBox(width: 8), _phaseChip(context, file)],
                     ],
                   ),
                   const SizedBox(height: 2),
@@ -1678,17 +1558,17 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                     isFailed
                         ? file.errorMessage ?? 'Upload failed'
                         : isDone
-                            ? (file.alreadyOnServer
-                                ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · already on server (hash verified)'
-                                : _finalElapsed != null
-                                    // total · elapsed · avg speed (item 3)
-                                    ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · '
-                                      '${_formatDuration(_finalElapsed!)} · avg $_finalAvg'
-                                    : '${formatHumanReadableBytes(file.sizeBytes, 1)} · Done')
-                            : isHashing
-                                ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · computing checksum…'
-                                // transferred / total · speed (item 1)
-                                : '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · $_speed',
+                        ? (file.alreadyOnServer
+                              ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · already on server (hash verified)'
+                              : _finalElapsed != null
+                              // total · elapsed · avg speed (item 3)
+                              ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · '
+                                    '${_formatDuration(_finalElapsed!)} · avg $_finalAvg'
+                              : '${formatHumanReadableBytes(file.sizeBytes, 1)} · Done')
+                        : isHashing
+                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · computing checksum…'
+                        // transferred / total · speed (item 1)
+                        : '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · $_speed',
                     style: context.textTheme.labelLarge?.copyWith(
                       color: isFailed
                           ? context.colorScheme.error
@@ -1703,11 +1583,8 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                       borderRadius: BorderRadius.circular(4),
                       child: LinearProgressIndicator(
                         value: file.progress,
-                        backgroundColor:
-                            context.colorScheme.primary.withValues(alpha: 0.2),
-                        valueColor: AlwaysStoppedAnimation(
-                          context.colorScheme.primary,
-                        ),
+                        backgroundColor: context.colorScheme.primary.withValues(alpha: 0.2),
+                        valueColor: AlwaysStoppedAnimation(context.colorScheme.primary),
                         minHeight: 4,
                       ),
                     ),
@@ -1719,34 +1596,31 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
             SizedBox(
               width: 56,
               child: isFailed
-                  ? Icon(Icons.error_rounded,
-                      color: context.colorScheme.error, size: 28)
+                  ? Icon(Icons.error_rounded, color: context.colorScheme.error, size: 28)
                   : isDone
-                      ? const Icon(Icons.check_circle_rounded,
-                          color: Colors.green, size: 28)
-                      : Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                              '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
-                              textAlign: TextAlign.right,
-                              style: context.textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                                color: context.colorScheme.primary,
-                              ),
-                            ),
-                            if (_eta != '--:--')
-                              Text(
-                                'est $_eta',
-                                textAlign: TextAlign.right,
-                                style: context.textTheme.labelSmall?.copyWith(
-                                  color: context.colorScheme.onSurface
-                                      .withValues(alpha: 0.5),
-                                ),
-                              ),
-                          ],
+                  ? const Icon(Icons.check_circle_rounded, color: Colors.green, size: 28)
+                  : Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
+                          textAlign: TextAlign.right,
+                          style: context.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: context.colorScheme.primary,
+                          ),
                         ),
+                        if (_eta != '--:--')
+                          Text(
+                            'est $_eta',
+                            textAlign: TextAlign.right,
+                            style: context.textTheme.labelSmall?.copyWith(
+                              color: context.colorScheme.onSurface.withValues(alpha: 0.5),
+                            ),
+                          ),
+                      ],
+                    ),
             ),
           ],
         ),
@@ -1760,11 +1634,7 @@ class _FileTypeIcon extends StatelessWidget {
   final bool isDone;
   final bool isFailed;
 
-  const _FileTypeIcon({
-    required this.filename,
-    required this.isDone,
-    required this.isFailed,
-  });
+  const _FileTypeIcon({required this.filename, required this.isDone, required this.isFailed});
 
   static IconData _iconFor(String name) {
     final ext = name.toLowerCase().split('.').last;
@@ -1780,15 +1650,12 @@ class _FileTypeIcon extends StatelessWidget {
     final color = isFailed
         ? context.colorScheme.error
         : isDone
-            ? Colors.green
-            : context.colorScheme.primary;
+        ? Colors.green
+        : context.colorScheme.primary;
     return Container(
       width: 48,
       height: 48,
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(8),
-      ),
+      decoration: BoxDecoration(color: color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(8)),
       child: Icon(_iconFor(filename), size: 24, color: color),
     );
   }
@@ -1827,47 +1694,35 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
     // Only files that were actually part of THIS upload count toward the
     // success/error tally. Files left as `pending` were skipped (unselected)
     // and must not turn a clean run into "Completed with errors". (Issue 1)
-    final attempted =
-        allFiles.where((f) => f.status != UploadFileStatus.pending).toList();
+    final attempted = allFiles.where((f) => f.status != UploadFileStatus.pending).toList();
     final cpSucceeded = attempted.where((f) => f.copypartyConfirmed).length;
     final cpNeeded = attempted.where((f) => f.needsCopyparty).length;
     final imSucceeded = attempted.where((f) => f.immichConfirmed).length;
     final imNeeded = attempted.where((f) => f.needsImmich).length;
-    final failed =
-        attempted.where((f) => f.status == UploadFileStatus.failed).length;
+    final failed = attempted.where((f) => f.status == UploadFileStatus.failed).length;
     final hasErrors = failed > 0 || cpSucceeded < cpNeeded;
 
-    final checkedFiles = allFiles
-        .where((f) => _checkedForDeletion.contains(f.localPath))
-        .toList();
+    final checkedFiles = allFiles.where((f) => _checkedForDeletion.contains(f.localPath)).toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // Header banner
         Container(
-          color: hasErrors
-              ? context.colorScheme.errorContainer
-              : context.colorScheme.primaryContainer,
+          color: hasErrors ? context.colorScheme.errorContainer : context.colorScheme.primaryContainer,
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
           child: Row(
             children: [
               Icon(
-                hasErrors
-                    ? Icons.warning_rounded
-                    : Icons.check_circle_rounded,
-                color: hasErrors
-                    ? context.colorScheme.onErrorContainer
-                    : context.colorScheme.onPrimaryContainer,
+                hasErrors ? Icons.warning_rounded : Icons.check_circle_rounded,
+                color: hasErrors ? context.colorScheme.onErrorContainer : context.colorScheme.onPrimaryContainer,
                 size: 26,
               ),
               const SizedBox(width: 10),
               Text(
                 hasErrors ? 'Completed with errors' : 'Upload Complete',
                 style: context.textTheme.titleLarge?.copyWith(
-                  color: hasErrors
-                      ? context.colorScheme.onErrorContainer
-                      : context.colorScheme.onPrimaryContainer,
+                  color: hasErrors ? context.colorScheme.onErrorContainer : context.colorScheme.onPrimaryContainer,
                 ),
               ),
             ],
@@ -1890,12 +1745,7 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
                   label: 'Immich $imSucceeded/$imNeeded',
                   ok: imSucceeded == imNeeded,
                 ),
-              if (failed > 0)
-                _StatChip(
-                  icon: Icons.error_outline_rounded,
-                  label: '$failed failed',
-                  ok: false,
-                ),
+              if (failed > 0) _StatChip(icon: Icons.error_outline_rounded, label: '$failed failed', ok: false),
             ],
           ),
         ),
@@ -1903,32 +1753,32 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
         // Per-group file list — only the files the user actually selected for
         // THIS run, not every scanned file. (item 2)
         Expanded(
-          child: Builder(builder: (ctx) {
-            final selected = session.selectedPaths;
-            bool keep(UploadFile f) =>
-                selected == null || selected.contains(f.localPath);
-            final visibleSets =
-                session.uploadSets.where((s) => s.files.any(keep)).toList();
-            return ListView.builder(
-              itemCount: visibleSets.length,
-              itemBuilder: (ctx, i) {
-                final set = visibleSets[i];
-                return _CompletionSetSection(
-                  set: set,
-                  rootPath: session.directoryPath,
-                  selectedPaths: selected,
-                  checkedForDeletion: _checkedForDeletion,
-                  onToggle: (path, v) => setState(() {
-                    if (v) {
-                      _checkedForDeletion.add(path);
-                    } else {
-                      _checkedForDeletion.remove(path);
-                    }
-                  }),
-                );
-              },
-            );
-          }),
+          child: Builder(
+            builder: (ctx) {
+              final selected = session.selectedPaths;
+              bool keep(UploadFile f) => selected == null || selected.contains(f.localPath);
+              final visibleSets = session.uploadSets.where((s) => s.files.any(keep)).toList();
+              return ListView.builder(
+                itemCount: visibleSets.length,
+                itemBuilder: (ctx, i) {
+                  final set = visibleSets[i];
+                  return _CompletionSetSection(
+                    set: set,
+                    rootPath: session.directoryPath,
+                    selectedPaths: selected,
+                    checkedForDeletion: _checkedForDeletion,
+                    onToggle: (path, v) => setState(() {
+                      if (v) {
+                        _checkedForDeletion.add(path);
+                      } else {
+                        _checkedForDeletion.remove(path);
+                      }
+                    }),
+                  );
+                },
+              );
+            },
+          ),
         ),
         // Footer
         const Divider(height: 1),
@@ -1942,12 +1792,9 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton.tonalIcon(
-                      onPressed: () =>
-                          ref.read(importSessionProvider.notifier).retryFailed(),
+                      onPressed: () => ref.read(importSessionProvider.notifier).retryFailed(),
                       icon: const Icon(Icons.refresh_rounded),
-                      label: Text(
-                        'Retry $failed failed file${failed == 1 ? '' : 's'}',
-                      ),
+                      label: Text('Retry $failed failed file${failed == 1 ? '' : 's'}'),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -1956,8 +1803,7 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
-                      onPressed: () =>
-                          _confirmDelete(context, ref, checkedFiles),
+                      onPressed: () => _confirmDelete(context, ref, checkedFiles),
                       icon: const Icon(Icons.delete_outline_rounded),
                       label: Text(
                         'Delete ${checkedFiles.length} selected '
@@ -1967,8 +1813,7 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
                   ),
                   const SizedBox(height: 8),
                 ],
-                if (ref.watch(
-                    appConfigProvider.select((c) => c.copyparty.debugMode))) ...[
+                if (ref.watch(appConfigProvider.select((c) => c.copyparty.debugMode))) ...[
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
@@ -2004,16 +1849,11 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
     await Share.shareXFiles(
       [XFile(path)],
       subject: 'Copyparty diagnostic log',
-      sharePositionOrigin:
-          box != null ? box.localToGlobal(Offset.zero) & box.size : null,
+      sharePositionOrigin: box != null ? box.localToGlobal(Offset.zero) & box.size : null,
     );
   }
 
-  Future<void> _confirmDelete(
-    BuildContext context,
-    WidgetRef ref,
-    List<UploadFile> files,
-  ) async {
+  Future<void> _confirmDelete(BuildContext context, WidgetRef ref, List<UploadFile> files) async {
     // Status-driven (Issue 5) with a LIVE re-check right before deleting — we
     // never trust the upload-time flag alone. A file is safe only if it is
     // STILL on the server now with a freshly RE-VALIDATED content hash (the
@@ -2036,27 +1876,25 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
     // metered/slow link this is N round-trips + a re-hash each; never freeze
     // the UI silently.
     final progress = ValueNotifier<int>(0);
-    unawaited(showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        content: ValueListenableBuilder<int>(
-          valueListenable: progress,
-          builder: (ctx, done, _) => Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-              const SizedBox(width: 16),
-              Expanded(child: Text('Re-verifying $done / ${files.length}…')),
-            ],
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          content: ValueListenableBuilder<int>(
+            valueListenable: progress,
+            builder: (ctx, done, _) => Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                const SizedBox(width: 16),
+                Expanded(child: Text('Re-verifying $done / ${files.length}…')),
+              ],
+            ),
           ),
         ),
       ),
-    ));
+    );
 
     final now = DateTime.now();
     final unsafe = <UploadFile>[];
@@ -2089,8 +1927,7 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
           base: presence,
           now: now,
         );
-        final liveSafe =
-            v.copypartyVerifiedAt(now) && (!f.needsImmich || f.immichConfirmed);
+        final liveSafe = v.copypartyVerifiedAt(now) && (!f.needsImmich || f.immichConfirmed);
         if (!liveSafe) {
           unsafe.add(f);
         }
@@ -2119,9 +1956,7 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
             'The server could not be reached, so these files cannot be confirmed '
             'as safely stored. Deletion is blocked — try again when online.',
           ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
-          ],
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
         ),
       );
       return;
@@ -2129,18 +1964,17 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
       confirm = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: Text('Delete ${files.length} source '
-              'file${files.length == 1 ? '' : 's'}?'),
+          title: Text(
+            'Delete ${files.length} source '
+            'file${files.length == 1 ? '' : 's'}?',
+          ),
           content: const Text(
             'All selected files are confirmed on copyparty (and in Immich where '
             'applicable). This frees space on the memory card and cannot be undone.',
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text('Delete all ${files.length}'),
-            ),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text('Delete all ${files.length}')),
           ],
         ),
       );
@@ -2202,10 +2036,7 @@ class _StatChip extends StatelessWidget {
       children: [
         Icon(icon, size: 14, color: color),
         const SizedBox(width: 4),
-        Text(
-          label,
-          style: context.textTheme.labelSmall?.copyWith(color: color),
-        ),
+        Text(label, style: context.textTheme.labelSmall?.copyWith(color: color)),
       ],
     );
   }
@@ -2240,17 +2071,12 @@ class _CompletionSetSection extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                set.displayName,
-                style: context.textTheme.labelLarge
-                    ?.copyWith(fontWeight: FontWeight.w600),
-              ),
+              Text(set.displayName, style: context.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w600)),
               if (relPath.isNotEmpty)
                 Text(
                   relPath,
                   style: context.textTheme.bodySmall?.copyWith(
-                    color:
-                        context.colorScheme.onSurface.withValues(alpha: 0.5),
+                    color: context.colorScheme.onSurface.withValues(alpha: 0.5),
                     fontFamily: 'monospace',
                   ),
                   overflow: TextOverflow.ellipsis,
@@ -2276,11 +2102,7 @@ class _CompletionFileTile extends StatelessWidget {
   final bool checked;
   final void Function(bool) onToggle;
 
-  const _CompletionFileTile({
-    required this.file,
-    required this.checked,
-    required this.onToggle,
-  });
+  const _CompletionFileTile({required this.file, required this.checked, required this.onToggle});
 
   @override
   Widget build(BuildContext context) {
@@ -2292,30 +2114,26 @@ class _CompletionFileTile extends StatelessWidget {
     Widget cpIcon = const SizedBox.shrink();
     if (file.needsCopyparty) {
       if (cpOk) {
-        cpIcon = const Icon(Icons.cloud_done_rounded,
-            size: 16, color: Colors.green);
+        cpIcon = const Icon(Icons.cloud_done_rounded, size: 16, color: Colors.green);
       } else if (failed || (!skipped && !cpOk)) {
-        cpIcon = Icon(Icons.cloud_off_rounded,
-            size: 16, color: context.colorScheme.error);
+        cpIcon = Icon(Icons.cloud_off_rounded, size: 16, color: context.colorScheme.error);
       } else {
-        cpIcon = Icon(Icons.cloud_outlined,
-            size: 16,
-            color: context.colorScheme.onSurface.withValues(alpha: 0.3));
+        cpIcon = Icon(Icons.cloud_outlined, size: 16, color: context.colorScheme.onSurface.withValues(alpha: 0.3));
       }
     }
 
     Widget imIcon = const SizedBox.shrink();
     if (file.needsImmich) {
       if (imOk) {
-        imIcon = const Icon(Icons.photo_library_rounded,
-            size: 16, color: Colors.green);
+        imIcon = const Icon(Icons.photo_library_rounded, size: 16, color: Colors.green);
       } else if (failed || (!skipped && !imOk)) {
-        imIcon = Icon(Icons.image_not_supported_rounded,
-            size: 16, color: context.colorScheme.error);
+        imIcon = Icon(Icons.image_not_supported_rounded, size: 16, color: context.colorScheme.error);
       } else {
-        imIcon = Icon(Icons.photo_library_outlined,
-            size: 16,
-            color: context.colorScheme.onSurface.withValues(alpha: 0.3));
+        imIcon = Icon(
+          Icons.photo_library_outlined,
+          size: 16,
+          color: context.colorScheme.onSurface.withValues(alpha: 0.3),
+        );
       }
     }
 
@@ -2325,87 +2143,75 @@ class _CompletionFileTile extends StatelessWidget {
         ListTile(
           dense: true,
           contentPadding: const EdgeInsets.only(left: 8, right: 16),
-          leading: Checkbox(
-            value: checked,
-            onChanged: (v) => onToggle(v ?? false),
-          ),
+          leading: Checkbox(value: checked, onChanged: (v) => onToggle(v ?? false)),
           title: Text(
             file.filename,
             style: context.textTheme.bodyMedium?.copyWith(
-              color: skipped
-                  ? context.colorScheme.onSurface.withValues(alpha: 0.4)
-                  : null,
+              color: skipped ? context.colorScheme.onSurface.withValues(alpha: 0.4) : null,
             ),
           ),
           subtitle: skipped
               ? Text(
                   'Skipped',
                   style: context.textTheme.bodySmall?.copyWith(
-                    color:
-                        context.colorScheme.onSurface.withValues(alpha: 0.3),
+                    color: context.colorScheme.onSurface.withValues(alpha: 0.3),
                   ),
                 )
-              : Builder(builder: (_) {
-                  final immichGood = !file.needsImmich || imOk;
-                  final good = !failed && cpOk && immichGood;
-                  final text = file.alreadyOnServer
-                      ? 'already on server · hash verified'
-                      : failed
-                          ? 'not confirmed'
-                          : cpOk
-                              ? (file.needsImmich
-                                  ? (imOk
-                                      ? 'copyparty ✓ · Immich ✓'
-                                      : 'copyparty ✓ · Immich missing')
-                                  : 'copyparty ✓ (hash verified)')
-                              : 'not confirmed';
-                  final folder = _folderDisplay(file.uploadFolderUrl);
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        text,
-                        style: context.textTheme.bodySmall?.copyWith(
-                          color: good ? Colors.green : context.colorScheme.error,
+              : Builder(
+                  builder: (_) {
+                    final immichGood = !file.needsImmich || imOk;
+                    final good = !failed && cpOk && immichGood;
+                    final text = file.alreadyOnServer
+                        ? 'already on server · hash verified'
+                        : failed
+                        ? 'not confirmed'
+                        : cpOk
+                        ? (file.needsImmich
+                              ? (imOk ? 'copyparty ✓ · Immich ✓' : 'copyparty ✓ · Immich missing')
+                              : 'copyparty ✓ (hash verified)')
+                        : 'not confirmed';
+                    final folder = _folderDisplay(file.uploadFolderUrl);
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          text,
+                          style: context.textTheme.bodySmall?.copyWith(
+                            color: good ? Colors.green : context.colorScheme.error,
+                          ),
                         ),
-                      ),
-                      if (folder != null)
-                        Row(
-                          children: [
-                            Icon(Icons.folder_outlined,
+                        if (folder != null)
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.folder_outlined,
                                 size: 12,
-                                color: context.colorScheme.onSurface
-                                    .withValues(alpha: 0.5)),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: Text(
-                                folder,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: context.textTheme.labelSmall?.copyWith(
-                                  color: context.colorScheme.onSurface
-                                      .withValues(alpha: 0.6),
+                                color: context.colorScheme.onSurface.withValues(alpha: 0.5),
+                              ),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  folder,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: context.textTheme.labelSmall?.copyWith(
+                                    color: context.colorScheme.onSurface.withValues(alpha: 0.6),
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
-                    ],
-                  );
-                }),
+                            ],
+                          ),
+                      ],
+                    );
+                  },
+                ),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               cpIcon,
-              if (file.needsImmich) ...[
-                const SizedBox(width: 6),
-                imIcon,
-              ],
+              if (file.needsImmich) ...[const SizedBox(width: 6), imIcon],
               const SizedBox(width: 8),
-              Text(
-                formatHumanReadableBytes(file.sizeBytes, 1),
-                style: context.textTheme.bodySmall,
-              ),
+              Text(formatHumanReadableBytes(file.sizeBytes, 1), style: context.textTheme.bodySmall),
             ],
           ),
         ),
@@ -2414,8 +2220,7 @@ class _CompletionFileTile extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(56, 0, 16, 4),
             child: SelectableText(
               file.errorMessage!,
-              style: context.textTheme.bodySmall
-                  ?.copyWith(color: context.colorScheme.error),
+              style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.error),
             ),
           ),
       ],

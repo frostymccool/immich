@@ -139,10 +139,7 @@ class CopypartyLogger {
 
   static String _redactHeader(String key, String value) {
     final lower = key.toLowerCase();
-    if (lower.contains('password') ||
-        lower.contains('authorization') ||
-        lower == 'pw' ||
-        lower == 'x-password') {
+    if (lower.contains('password') || lower.contains('authorization') || lower == 'pw' || lower == 'x-password') {
       return '***';
     }
     return value;

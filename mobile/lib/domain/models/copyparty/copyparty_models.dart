@@ -55,21 +55,15 @@ class UploadFile {
     this.existingReceipt,
     this.alreadyOnServer = false,
     this.verification,
-  }) : destination = destination ??
-           (isNativeImmichFile ? UploadDestination.both : UploadDestination.copypartyOnly);
+  }) : destination = destination ?? (isNativeImmichFile ? UploadDestination.both : UploadDestination.copypartyOnly);
 
   double get progress => sizeBytes > 0 ? uploadedBytes / sizeBytes : 0.0;
 
-  bool get safeToDelete =>
-      sha512 != null &&
-      dbRecordWritten &&
-      (!needsImmich || immichAssetId != null);
+  bool get safeToDelete => sha512 != null && dbRecordWritten && (!needsImmich || immichAssetId != null);
 
-  bool get needsCopyparty =>
-      destination == UploadDestination.copypartyOnly || destination == UploadDestination.both;
+  bool get needsCopyparty => destination == UploadDestination.copypartyOnly || destination == UploadDestination.both;
 
-  bool get needsImmich =>
-      destination == UploadDestination.immichNative || destination == UploadDestination.both;
+  bool get needsImmich => destination == UploadDestination.immichNative || destination == UploadDestination.both;
 
   bool get alreadyUploaded => existingReceipt != null;
   bool get alreadyUploadedToImmich => existingReceipt?.immichAssetId != null;
@@ -86,13 +80,8 @@ class UploadSet {
   String? rootPath;
   UploadSetStatus status;
 
-  UploadSet({
-    String? id,
-    required this.files,
-    this.directoryPath,
-    this.rootPath,
-    this.status = UploadSetStatus.pending,
-  }) : id = id ?? const Uuid().v4();
+  UploadSet({String? id, required this.files, this.directoryPath, this.rootPath, this.status = UploadSetStatus.pending})
+    : id = id ?? const Uuid().v4();
 
   int get totalBytes => files.fold(0, (sum, f) => sum + f.sizeBytes);
 
@@ -101,10 +90,7 @@ class UploadSet {
   double get progress => totalBytes > 0 ? uploadedBytes / totalBytes : 0.0;
 
   String get displayName {
-    final triggerFile = files.firstWhere(
-      (f) => f.isTriggerFile,
-      orElse: () => files.first,
-    );
+    final triggerFile = files.firstWhere((f) => f.isTriggerFile, orElse: () => files.first);
     return triggerFile.filename;
   }
 
@@ -243,8 +229,7 @@ class ServerFileVerification {
   /// first files before the user taps delete, but still time-bounded so a
   /// long-stale verification isn't trusted.
   bool hashFreshAt(DateTime now) =>
-      hashValidatedAt != null &&
-      now.difference(hashValidatedAt!) < const Duration(minutes: 10);
+      hashValidatedAt != null && now.difference(hashValidatedAt!) < const Duration(minutes: 10);
 
   /// Copyparty side is fully proven: present, same size, no lingering partial,
   /// and a fresh hash validation.
@@ -279,16 +264,15 @@ class ServerFileVerification {
     bool? immichApplicable,
     String? error,
     bool clearError = false,
-  }) =>
-      ServerFileVerification(
-        filenamePresent: filenamePresent ?? this.filenamePresent,
-        sizeMatches: sizeMatches ?? this.sizeMatches,
-        partialExists: partialExists ?? this.partialExists,
-        hashValidatedAt: clearHash ? null : (hashValidatedAt ?? this.hashValidatedAt),
-        immich: immich ?? this.immich,
-        immichApplicable: immichApplicable ?? this.immichApplicable,
-        error: clearError ? null : (error ?? this.error),
-      );
+  }) => ServerFileVerification(
+    filenamePresent: filenamePresent ?? this.filenamePresent,
+    sizeMatches: sizeMatches ?? this.sizeMatches,
+    partialExists: partialExists ?? this.partialExists,
+    hashValidatedAt: clearHash ? null : (hashValidatedAt ?? this.hashValidatedAt),
+    immich: immich ?? this.immich,
+    immichApplicable: immichApplicable ?? this.immichApplicable,
+    error: clearError ? null : (error ?? this.error),
+  );
 }
 
 class CopypartyReceipt {

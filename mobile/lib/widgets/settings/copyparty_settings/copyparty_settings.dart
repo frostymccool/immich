@@ -78,12 +78,12 @@ class _DebugModeTile extends ConsumerWidget {
       padding: const EdgeInsets.only(left: 8.0),
       child: SettingListTile(
         title: 'Enable debug mode',
-        subtitle: 'Show self-test and diagnostic-log actions across the '
+        subtitle:
+            'Show self-test and diagnostic-log actions across the '
             'copyparty pages. Leave off for normal use.',
         trailing: Switch(
           value: value,
-          onChanged: (v) =>
-              ref.read(settingsProvider).write(SettingsKey.copypartyDebugMode, v),
+          onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyDebugMode, v),
         ),
       ),
     );
@@ -107,8 +107,7 @@ class _DownloadLogButton extends ConsumerWidget {
             await Share.shareXFiles(
               [XFile(path)],
               subject: 'Copyparty diagnostic log',
-              sharePositionOrigin:
-                  box != null ? box.localToGlobal(Offset.zero) & box.size : null,
+              sharePositionOrigin: box != null ? box.localToGlobal(Offset.zero) & box.size : null,
             );
           },
           icon: const Icon(Icons.download_rounded),
@@ -138,9 +137,7 @@ class _DiagnosticLogTile extends ConsumerWidget {
             'Every import writes a verbose protocol log (requests, responses, '
             'chunk hashes). Share it after a failed run so the exact server '
             'exchange can be inspected.',
-            style: context.textTheme.bodySmall?.copyWith(
-              color: context.colorScheme.onSurface.withValues(alpha: 0.6),
-            ),
+            style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.onSurface.withValues(alpha: 0.6)),
           ),
         ),
         Padding(
@@ -152,9 +149,7 @@ class _DiagnosticLogTile extends ConsumerWidget {
                   onPressed: () => _shareLog(context, ref),
                   icon: const Icon(Icons.share_outlined),
                   label: const Text('Share log'),
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(48),
-                  ),
+                  style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
                 ),
               ),
               const SizedBox(width: 12),
@@ -162,9 +157,7 @@ class _DiagnosticLogTile extends ConsumerWidget {
                 onPressed: () => _clearLog(context, ref),
                 icon: const Icon(Icons.delete_outline_rounded),
                 label: const Text('Clear'),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(48),
-                ),
+                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
               ),
             ],
           ),
@@ -180,17 +173,14 @@ class _DiagnosticLogTile extends ConsumerWidget {
     await Share.shareXFiles(
       [XFile(path)],
       subject: 'Copyparty diagnostic log',
-      sharePositionOrigin:
-          box != null ? box.localToGlobal(Offset.zero) & box.size : null,
+      sharePositionOrigin: box != null ? box.localToGlobal(Offset.zero) & box.size : null,
     );
   }
 
   Future<void> _clearLog(BuildContext context, WidgetRef ref) async {
     await ref.read(copypartyLoggerProvider).clear();
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Diagnostic log cleared')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Diagnostic log cleared')));
     }
   }
 }
@@ -216,10 +206,7 @@ class _HostUrlTile extends ConsumerWidget {
           title: 'Copyparty Host URL',
           hint: 'https://copyparty.yourdomain.com',
           initialValue: hostUrl,
-          onSave: (value) => ref.read(settingsProvider).write(
-            SettingsKey.copypartyHostUrl,
-            value.trim(),
-          ),
+          onSave: (value) => ref.read(settingsProvider).write(SettingsKey.copypartyHostUrl, value.trim()),
         ),
       ),
     );
@@ -240,10 +227,7 @@ class _PasswordTile extends ConsumerWidget {
       padding: const EdgeInsets.only(left: 8.0),
       child: SettingListTile(
         title: 'Copyparty password',
-        subtitle: password.maybeWhen(
-          data: (pw) => pw.isEmpty ? 'Not set' : '••••••••',
-          orElse: () => 'Loading...',
-        ),
+        subtitle: password.maybeWhen(data: (pw) => pw.isEmpty ? 'Not set' : '••••••••', orElse: () => 'Loading...'),
         leading: const Icon(Icons.lock_outline),
         onTap: () => _showPasswordDialog(context, ref, password.valueOrNull ?? ''),
       ),
@@ -259,18 +243,12 @@ class _PasswordTile extends ConsumerWidget {
         content: TextField(
           controller: controller,
           obscureText: true,
-          decoration: const InputDecoration(
-            hintText: 'Leave empty for no password',
-            border: OutlineInputBorder(),
-          ),
+          decoration: const InputDecoration(hintText: 'Leave empty for no password', border: OutlineInputBorder()),
           autofocus: true,
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text),
-            child: const Text('Save'),
-          ),
+          FilledButton(onPressed: () => Navigator.pop(ctx, controller.text), child: const Text('Save')),
         ],
       ),
     );
@@ -303,10 +281,7 @@ class _UploadPathTile extends ConsumerWidget {
           title: 'Upload Path',
           hint: '/uploads',
           initialValue: uploadPath,
-          onSave: (value) => ref.read(settingsProvider).write(
-            SettingsKey.copypartyUploadPath,
-            value.trim(),
-          ),
+          onSave: (value) => ref.read(settingsProvider).write(SettingsKey.copypartyUploadPath, value.trim()),
         ),
       ),
     );
@@ -339,14 +314,8 @@ class _ParallelConnectionsSlider extends ConsumerWidget {
           max: 16,
           divisions: 15,
           label: '$parallel',
-          onChanged: (v) => ref.read(settingsProvider).write(
-            SettingsKey.copypartyParallelConnections,
-            v.toInt(),
-          ),
-          onChangeEnd: (v) => ref.read(settingsProvider).write(
-            SettingsKey.copypartyParallelConnections,
-            v.toInt(),
-          ),
+          onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyParallelConnections, v.toInt()),
+          onChangeEnd: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyParallelConnections, v.toInt()),
         ),
       ],
     );
@@ -366,20 +335,17 @@ class _SortSmallestFirstTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final value =
-        ref.watch(appConfigProvider.select((c) => c.copyparty.sortSmallestFirst));
+    final value = ref.watch(appConfigProvider.select((c) => c.copyparty.sortSmallestFirst));
     return Padding(
       padding: const EdgeInsets.only(left: 8.0),
       child: SettingListTile(
         title: 'Upload smallest first',
-        subtitle: 'Upload groups in ascending total size, so quick wins land '
+        subtitle:
+            'Upload groups in ascending total size, so quick wins land '
             'first on slow connections',
         trailing: Switch(
           value: value,
-          onChanged: (v) => ref.read(settingsProvider).write(
-            SettingsKey.copypartySortSmallestFirst,
-            v,
-          ),
+          onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartySortSmallestFirst, v),
         ),
       ),
     );
@@ -391,20 +357,17 @@ class _RecreateFolderStructureTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final value =
-        ref.watch(appConfigProvider.select((c) => c.copyparty.recreateFolderStructure));
+    final value = ref.watch(appConfigProvider.select((c) => c.copyparty.recreateFolderStructure));
     return Padding(
       padding: const EdgeInsets.only(left: 8.0),
       child: SettingListTile(
         title: 'Recreate folder structure',
-        subtitle: 'Upload into a subfolder named after the picked folder '
+        subtitle:
+            'Upload into a subfolder named after the picked folder '
             '(preserving any nested folders) instead of the flat upload path',
         trailing: Switch(
           value: value,
-          onChanged: (v) => ref.read(settingsProvider).write(
-            SettingsKey.copypartyRecreateFolderStructure,
-            v,
-          ),
+          onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyRecreateFolderStructure, v),
         ),
       ),
     );
@@ -424,10 +387,7 @@ class _AutoDeleteTile extends ConsumerWidget {
         subtitle: 'Delete source files automatically once upload is hash-verified',
         trailing: Switch(
           value: value,
-          onChanged: (v) => ref.read(settingsProvider).write(
-            SettingsKey.copypartyAutoDeleteAfterVerify,
-            v,
-          ),
+          onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyAutoDeleteAfterVerify, v),
         ),
       ),
     );
@@ -469,7 +429,6 @@ class _TriggerExtensionsTile extends ConsumerWidget {
   }
 }
 
-
 // ---------------------------------------------------------------------------
 // Import from memory card button
 // ---------------------------------------------------------------------------
@@ -483,17 +442,13 @@ class _ImportFromMemoryCardButton extends ConsumerWidget {
     final isConfigured = hostUrl.isNotEmpty;
     // FB6: while a background upload is running, this becomes "Show active
     // uploads" and reverts automatically when it finishes.
-    final uploading = ref.watch(
-      importSessionProvider.select((s) => s.step == ImportSessionStep.uploading),
-    );
+    final uploading = ref.watch(importSessionProvider.select((s) => s.step == ImportSessionStep.uploading));
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
       child: FilledButton.icon(
         onPressed: isConfigured
-            ? () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const CopypartyImportPage()),
-              )
+            ? () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CopypartyImportPage()))
             : null,
         icon: Icon(uploading ? Icons.cloud_upload_rounded : Icons.sd_card_rounded),
         label: Text(uploading ? 'Show active uploads' : 'Import from Memory Card'),
@@ -569,11 +524,7 @@ class _ConnectTestButton extends HookConsumerWidget {
       child: OutlinedButton.icon(
         onPressed: hostUrl.isEmpty || testing.value ? null : runTest,
         icon: testing.value
-            ? const SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
+            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
             : const Icon(Icons.wifi_tethering_rounded),
         label: Text(testing.value ? 'Testing…' : 'Test Connection'),
         style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(44)),
@@ -605,13 +556,8 @@ class _PendingCleanupTile extends ConsumerWidget {
           child: SettingListTile(
             title: 'Free up space — delete uploaded source files',
             subtitle: '$count file${count == 1 ? '' : 's'} uploaded and awaiting deletion',
-            leading: Badge(
-              label: Text('$count'),
-              child: const Icon(Icons.cleaning_services_rounded),
-            ),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const CopypartyCleanupPage()),
-            ),
+            leading: Badge(label: Text('$count'), child: const Icon(Icons.cleaning_services_rounded)),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CopypartyCleanupPage())),
           ),
         );
       },
@@ -643,10 +589,7 @@ Future<void> _showTextDialog(
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-        FilledButton(
-          onPressed: () => Navigator.pop(ctx, controller.text),
-          child: const Text('Save'),
-        ),
+        FilledButton(onPressed: () => Navigator.pop(ctx, controller.text), child: const Text('Save')),
       ],
     ),
   );

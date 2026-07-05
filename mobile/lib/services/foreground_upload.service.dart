@@ -107,6 +107,7 @@ class ForegroundUploadService {
           }
         }
       }
+
       await Future.wait(List.generate(8, (_) => fetchSize()));
       // Photos before videos; within each group, smallest first.
       candidates.sort((a, b) {

@@ -300,4 +300,3 @@ class MainWidget extends StatelessWidget {
     );
   }
 }
-

@@ -9,9 +9,7 @@ import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 class CopypartyFilePairer {
   final List<String> triggerExtensions;
 
-  const CopypartyFilePairer({
-    this.triggerExtensions = const ['lrv', 'insv', 'insp'],
-  });
+  const CopypartyFilePairer({this.triggerExtensions = const ['lrv', 'insv', 'insp']});
 
   // ---------------------------------------------------------------------------
   // Public API
@@ -21,10 +19,7 @@ class CopypartyFilePairer {
   ///
   /// [onFileFound] is called with the running total each time a file is
   /// discovered, so callers can show live progress.
-  Future<List<UploadSet>> scanDirectory(
-    String directoryPath, {
-    void Function(int count)? onFileFound,
-  }) async {
+  Future<List<UploadSet>> scanDirectory(String directoryPath, {void Function(int count)? onFileFound}) async {
     final dir = Directory(directoryPath);
     if (!await dir.exists()) {
       return [];
@@ -154,10 +149,7 @@ class CopypartyFilePairer {
   // Filesystem scanning
   // ---------------------------------------------------------------------------
 
-  Future<List<FileInfo>> _listFiles(
-    Directory dir, {
-    void Function(int count)? onFileFound,
-  }) async {
+  Future<List<FileInfo>> _listFiles(Directory dir, {void Function(int count)? onFileFound}) async {
     final result = <FileInfo>[];
     await for (final entity in dir.list(recursive: true, followLinks: true)) {
       if (entity is File) {
@@ -182,13 +174,28 @@ class CopypartyFilePairer {
 
   // Files Immich handles natively (no need to route through copyparty)
   static const _nativeImmichExtensions = {
-    'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif',
-    'mp4', 'mov', 'avi', 'mkv', 'webm',
-    'raw', 'arw', 'cr2', 'cr3', 'nef', 'orf', 'rw2',
+    'jpg',
+    'jpeg',
+    'png',
+    'gif',
+    'webp',
+    'heic',
+    'heif',
+    'mp4',
+    'mov',
+    'avi',
+    'mkv',
+    'webm',
+    'raw',
+    'arw',
+    'cr2',
+    'cr3',
+    'nef',
+    'orf',
+    'rw2',
   };
 
-  static bool _isNativeImmichFile(String ext) =>
-      _nativeImmichExtensions.contains(ext);
+  static bool _isNativeImmichFile(String ext) => _nativeImmichExtensions.contains(ext);
 
   /// Whether a filename is a media type Immich would ingest. Used to decide if
   /// the Immich axis applies to a file when its intended destination isn't
@@ -209,10 +216,5 @@ class FileInfo {
   final int sizeBytes;
   final int lastModifiedMs;
 
-  const FileInfo({
-    required this.path,
-    required this.name,
-    required this.sizeBytes,
-    required this.lastModifiedMs,
-  });
+  const FileInfo({required this.path, required this.name, required this.sizeBytes, required this.lastModifiedMs});
 }

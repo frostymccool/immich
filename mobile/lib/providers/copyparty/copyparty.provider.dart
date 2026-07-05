@@ -71,31 +71,21 @@ class _DigestSink implements Sink<Digest> {
 
 /// Shared diagnostic logger — single instance so the settings screen can read
 /// the same file the uploader writes to.
-final copypartyLoggerProvider = Provider<CopypartyLogger>(
-  (ref) => CopypartyLogger.instance,
-);
+final copypartyLoggerProvider = Provider<CopypartyLogger>((ref) => CopypartyLogger.instance);
 
-final copypartyUploaderProvider = Provider<CopypartyUploaderService>(
-  (ref) {
-    final allowSelfSigned = ref.watch(
-      appConfigProvider.select((c) => c.copyparty.allowSelfSignedCert),
-    );
-    http.Client client;
-    if (allowSelfSigned) {
-      final httpClient = HttpClient()
-        ..badCertificateCallback = (cert, host, port) => true;
-      client = IOClient(httpClient);
-    } else {
-      client = http.Client();
-    }
-    final service = CopypartyUploaderService(
-      client: client,
-      logger: ref.watch(copypartyLoggerProvider),
-    );
-    ref.onDispose(service.dispose);
-    return service;
-  },
-);
+final copypartyUploaderProvider = Provider<CopypartyUploaderService>((ref) {
+  final allowSelfSigned = ref.watch(appConfigProvider.select((c) => c.copyparty.allowSelfSignedCert));
+  http.Client client;
+  if (allowSelfSigned) {
+    final httpClient = HttpClient()..badCertificateCallback = (cert, host, port) => true;
+    client = IOClient(httpClient);
+  } else {
+    client = http.Client();
+  }
+  final service = CopypartyUploaderService(client: client, logger: ref.watch(copypartyLoggerProvider));
+  ref.onDispose(service.dispose);
+  return service;
+});
 
 final copypartyReceiptRepositoryProvider = Provider<CopypartyReceiptRepository>(
   (ref) => CopypartyReceiptRepository(ref.watch(driftProvider)),
@@ -196,7 +186,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   CopypartyLogger get _log => _ref.read(copypartyLoggerProvider);
 
   ImportSessionNotifier(this._uploader, this._receiptRepo, this._immichUploadRepo, this._ref)
-      : super(const ImportSessionState());
+    : super(const ImportSessionState());
 
   /// Completed when the user cancels the in-progress upload. The uploader
   /// races its in-flight chunk POST against this, and the per-file loop checks
@@ -222,17 +212,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   }
 
   Future<void> scan(String directoryPath) async {
-    state = state.copyWith(
-      step: ImportSessionStep.scanning,
-      directoryPath: directoryPath,
-      scannedFiles: 0,
-    );
+    state = state.copyWith(step: ImportSessionStep.scanning, directoryPath: directoryPath, scannedFiles: 0);
 
     try {
       final config = _ref.read(appConfigProvider).copyparty;
-      final pairer = CopypartyFilePairer(
-        triggerExtensions: config.triggerExtensions,
-      );
+      final pairer = CopypartyFilePairer(triggerExtensions: config.triggerExtensions);
       final sets = await pairer.scanDirectory(
         directoryPath,
         onFileFound: (count) => state = state.copyWith(scannedFiles: count),
@@ -252,16 +236,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         totalFiles: sets.fold<int>(0, (s, u) => s + u.files.length),
       );
     } catch (e) {
-      state = state.copyWith(
-        step: ImportSessionStep.idle,
-        errorMessage: 'Scan failed: $e',
-      );
+      state = state.copyWith(step: ImportSessionStep.idle, errorMessage: 'Scan failed: $e');
     }
   }
 
-  Future<void> startUpload({
-    Set<String>? selectedFilePaths,
-  }) async {
+  Future<void> startUpload({Set<String>? selectedFilePaths}) async {
     final config = _ref.read(appConfigProvider).copyparty;
     // Q3: folder recreation is now a persistent setting, not a per-import flag.
     final createFolders = config.recreateFolderStructure;
@@ -278,9 +257,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     _log.log('password set         = ${password.isNotEmpty}');
     _log.log('files selected       = ${selectedFilePaths?.length ?? state.totalFiles}');
 
-    final effectiveTotal = selectedFilePaths != null
-        ? selectedFilePaths.length
-        : state.totalFiles;
+    final effectiveTotal = selectedFilePaths != null ? selectedFilePaths.length : state.totalFiles;
 
     final cancelToken = _uploadCancelToken = Completer<void>();
 
@@ -327,8 +304,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         // the upload path, rooted at the set's OWN picked folder (so added
         // folders mirror correctly, not against the first pick's root).
         final uploadPath = createFolders
-            ? mirroredUploadPath(
-                config.uploadPath, set.rootPath ?? state.directoryPath, file.localPath)
+            ? mirroredUploadPath(config.uploadPath, set.rootPath ?? state.directoryPath, file.localPath)
             : config.uploadPath;
         int? receiptId;
         try {
@@ -373,8 +349,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             // Record the ACTUAL folder this file went to (mirrored sub-path
             // under FB9) so the completion-screen delete re-verifies the right
             // location, not the flat base path. (Review BLOCKER 1)
-            final uploadFolderUrl =
-                '${config.hostUrl.trimRight()}/${_stripSlashes(uploadPath)}';
+            final uploadFolderUrl = '${config.hostUrl.trimRight()}/${_stripSlashes(uploadPath)}';
             file.uploadFolderUrl = uploadFolderUrl;
 
             // Write DB receipt — upload_confirmed=true since uploadFile() only
@@ -448,8 +423,10 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     }
 
     _uploadCancelToken = null;
-    _log.log('IMPORT SESSION ${cancelled ? 'cancelled' : 'complete'}: '
-        '${state.completedFiles}/${state.totalFiles} files done');
+    _log.log(
+      'IMPORT SESSION ${cancelled ? 'cancelled' : 'complete'}: '
+      '${state.completedFiles}/${state.totalFiles} files done',
+    );
     // Only advance to the completion screen if we're still uploading — a
     // concurrent reset() (e.g. the user left the page) must not be clobbered.
     if (state.step == ImportSessionStep.uploading) {
@@ -532,27 +509,26 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     final stamp = DateTime.now().millisecondsSinceEpoch;
 
     _log.section('SELF-TEST SUITE  app v${packageInfo.version}');
-    _log.log('host=${config.hostUrl}  uploadPath=${config.uploadPath}  '
-        'files=${filePaths.length}  stamp=$stamp');
+    _log.log(
+      'host=${config.hostUrl}  uploadPath=${config.uploadPath}  '
+      'files=${filePaths.length}  stamp=$stamp',
+    );
 
     final tmp = await getTemporaryDirectory();
     final results = <UploadAttemptResult>[];
 
-    Future<void> attempt(
-      String path,
-      String uploadPath,
-      String label, {
-      bool sequential = false,
-    }) async {
-      results.add(await _uploader.runInstrumentedUpload(
-        filePath: path,
-        hostUrl: config.hostUrl,
-        uploadPath: uploadPath,
-        password: password,
-        label: label,
-        parallelism: config.parallelConnections,
-        sequential: sequential,
-      ));
+    Future<void> attempt(String path, String uploadPath, String label, {bool sequential = false}) async {
+      results.add(
+        await _uploader.runInstrumentedUpload(
+          filePath: path,
+          hostUrl: config.hostUrl,
+          uploadPath: uploadPath,
+          password: password,
+          label: label,
+          parallelism: config.parallelConnections,
+          sequential: sequential,
+        ),
+      );
     }
 
     for (final path in filePaths) {
@@ -577,10 +553,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       File? newc;
       try {
         newc = await File(path).copy('${tmp.path}/${stem}__nc$stamp$ext');
-        await newc.writeAsBytes(
-          utf8.encode('\n#immich-selftest-$stamp\n'),
-          mode: FileMode.append,
-        );
+        await newc.writeAsBytes(utf8.encode('\n#immich-selftest-$stamp\n'), mode: FileMode.append);
         await attempt(newc.path, config.uploadPath, 'newcontent:$base');
         await attempt(newc.path, '${config.uploadPath}/selftest_$stamp', 'newfolder:$base');
       } catch (e) {
@@ -593,10 +566,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       File? seqc;
       try {
         seqc = await File(path).copy('${tmp.path}/${stem}__sq$stamp$ext');
-        await seqc.writeAsBytes(
-          utf8.encode('\n#immich-selftest-SEQ-$stamp\n'),
-          mode: FileMode.append,
-        );
+        await seqc.writeAsBytes(utf8.encode('\n#immich-selftest-SEQ-$stamp\n'), mode: FileMode.append);
         await attempt(seqc.path, config.uploadPath, 'seq-newcontent:$base', sequential: true);
       } catch (e) {
         _log.log('sequential variation setup failed: $e');
@@ -643,28 +613,21 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
 
     for (final path in filePaths) {
       final name = path.split('/').last;
-      final fileUrl =
-          '${config.hostUrl.trimRight()}/${_stripSlashes(config.uploadPath)}/$name';
+      final fileUrl = '${config.hostUrl.trimRight()}/${_stripSlashes(config.uploadPath)}/$name';
       try {
         final size = await File(path).length();
         var v = CopypartyUploaderService.verificationFromListing(sizes, name, size);
-        v = await _uploader.verifyHash(
-          fileUrl: fileUrl,
-          localPath: path,
-          password: password,
-          base: v,
-        );
+        v = await _uploader.verifyHash(fileUrl: fileUrl, localPath: path, password: password, base: v);
         final applicable = CopypartyFilePairer.isNativeImmichFilename(name);
         VerifyState immich = VerifyState.unknown;
         if (applicable) {
           try {
-            immich = (await immichAssetIdByChecksum(api, path)) != null
-                ? VerifyState.yes
-                : VerifyState.no;
+            immich = (await immichAssetIdByChecksum(api, path)) != null ? VerifyState.yes : VerifyState.no;
           } catch (_) {}
         }
         v = v.copyWith(immich: immich, immichApplicable: applicable);
-        final line = '$name → name=${v.filenamePresent.name} '
+        final line =
+            '$name → name=${v.filenamePresent.name} '
             'size=${v.sizeMatches.name} partial=${v.partialExists.name} '
             'hash=${v.hashFreshAt(now) ? "ok" : "no"} immich=${immich.name} '
             'SAFE=${v.safeToDeleteAt(now)}';
@@ -699,12 +662,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     final fields = {
       'deviceAssetId': file.localPath,
       'deviceId': Store.get(StoreKey.deviceId),
-      'fileCreatedAt': DateTime.fromMillisecondsSinceEpoch(file.lastModifiedMs)
-          .toUtc()
-          .toIso8601String(),
-      'fileModifiedAt': DateTime.fromMillisecondsSinceEpoch(file.lastModifiedMs)
-          .toUtc()
-          .toIso8601String(),
+      'fileCreatedAt': DateTime.fromMillisecondsSinceEpoch(file.lastModifiedMs).toUtc().toIso8601String(),
+      'fileModifiedAt': DateTime.fromMillisecondsSinceEpoch(file.lastModifiedMs).toUtc().toIso8601String(),
       'isFavorite': 'false',
       'duration': '0',
     };

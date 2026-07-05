@@ -20,13 +20,12 @@ class CopypartyUploaderService {
   final CopypartyLogger? _log;
 
   CopypartyUploaderService({http.Client? client, CopypartyLogger? logger})
-      : _client = client ?? _createClient(),
-        _log = logger;
+    : _client = client ?? _createClient(),
+      _log = logger;
 
   // Build an HTTP client that accepts self-signed certs (common for home servers).
   static http.Client _createClient() {
-    final inner = HttpClient()
-      ..badCertificateCallback = (cert, host, port) => true;
+    final inner = HttpClient()..badCertificateCallback = (cert, host, port) => true;
     return IOClient(inner);
   }
 
@@ -45,9 +44,7 @@ class CopypartyUploaderService {
       }
       final uri = Uri.parse(base);
       final headers = password.isNotEmpty ? {'X-Password': password} : <String, String>{};
-      final response = await _client
-          .get(uri, headers: headers)
-          .timeout(const Duration(seconds: 10));
+      final response = await _client.get(uri, headers: headers).timeout(const Duration(seconds: 10));
       if (response.statusCode < 400) {
         return null;
       }
@@ -83,11 +80,8 @@ class CopypartyUploaderService {
     int stepSize = 512 * 1024;
     while (true) {
       for (final mul in const [1, 2]) {
-        final nchunks = fileSizeBytes <= 0
-            ? 0
-            : (fileSizeBytes + chunkSize - 1) ~/ chunkSize; // ceil
-        if (nchunks <= 256 ||
-            (chunkSize >= 32 * 1024 * 1024 && nchunks <= 4096)) {
+        final nchunks = fileSizeBytes <= 0 ? 0 : (fileSizeBytes + chunkSize - 1) ~/ chunkSize; // ceil
+        if (nchunks <= 256 || (chunkSize >= 32 * 1024 * 1024 && nchunks <= 4096)) {
           return chunkSize;
         }
         chunkSize += stepSize;
@@ -104,10 +98,7 @@ class CopypartyUploaderService {
   ///
   /// Reads the file sequentially in chunks of [computeChunkSizeBytes] size.
   /// The whole-file hash is computed over all bytes in order.
-  Future<HashedFile> hashFile(
-    String filePath, {
-    void Function(int bytesProcessed, int totalBytes)? onProgress,
-  }) async {
+  Future<HashedFile> hashFile(String filePath, {void Function(int bytesProcessed, int totalBytes)? onProgress}) async {
     final file = File(filePath);
     final fileSize = await file.length();
     final chunkSize = computeChunkSizeBytes(fileSize);
@@ -215,14 +206,11 @@ class CopypartyUploaderService {
     };
     final body = jsonEncode(bodyMap);
 
-    _log?.request('POST', uri, const {'Content-Type': 'application/json'},
-        body: jsonEncode({...bodyMap, 'hash': '[${file.chunkHashes.length} cids]'}));
+    _log?.request('POST', uri, const {
+      'Content-Type': 'application/json',
+    }, body: jsonEncode({...bodyMap, 'hash': '[${file.chunkHashes.length} cids]'}));
 
-    final response = await _client.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: body,
-    );
+    final response = await _client.post(uri, headers: {'Content-Type': 'application/json'}, body: body);
 
     _log?.response(response.statusCode, headers: response.headers, body: response.body);
 
@@ -242,9 +230,7 @@ class CopypartyUploaderService {
     }
 
     if (response.statusCode != 200) {
-      throw CopypartyUploadException(
-        'Handshake failed: HTTP ${response.statusCode}\n${response.body}',
-      );
+      throw CopypartyUploadException('Handshake failed: HTTP ${response.statusCode}\n${response.body}');
     }
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;
@@ -282,12 +268,7 @@ class CopypartyUploaderService {
       }
     }
 
-    return HandshakeResult(
-      wark: wark,
-      neededChunks: need,
-      purl: purl,
-      unmatchedHashes: unmatched,
-    );
+    return HandshakeResult(wark: wark, neededChunks: need, purl: purl, unmatchedHashes: unmatched);
   }
 
   /// Extracts the resume path from a 422 response body.
@@ -325,9 +306,11 @@ class CopypartyUploaderService {
 
     _log?.request('GET', uri, const {'Accept': 'application/json'});
     final resp = await _client.get(uri, headers: {'Accept': 'application/json'});
-    _log?.response(resp.statusCode,
-        headers: resp.headers,
-        body: resp.body.length > 600 ? '${resp.body.substring(0, 600)}…' : resp.body);
+    _log?.response(
+      resp.statusCode,
+      headers: resp.headers,
+      body: resp.body.length > 600 ? '${resp.body.substring(0, 600)}…' : resp.body,
+    );
 
     if (resp.statusCode == 404) {
       // The folder doesn't exist yet — e.g. an FB9 mirrored subfolder that
@@ -358,11 +341,7 @@ class CopypartyUploaderService {
 
   /// Lists the configured upload folder once (name → size). Used by the import
   /// picker to verify many files against the server with a single request.
-  Future<Map<String, int>> listUploadFolder(
-    String hostUrl,
-    String uploadPath,
-    String password,
-  ) =>
+  Future<Map<String, int>> listUploadFolder(String hostUrl, String uploadPath, String password) =>
       listFolderSizes(_buildUri(hostUrl, uploadPath, ''), password);
 
   /// Builds a name/size/partial verification for [filename] from an already
@@ -382,8 +361,7 @@ class CopypartyUploaderService {
     final nameFound = sizes.containsKey(filename) || partial;
     return ServerFileVerification(
       filenamePresent: nameFound ? VerifyState.yes : VerifyState.no,
-      sizeMatches:
-          serverSize == null ? VerifyState.unknown : (sizeOk ? VerifyState.yes : VerifyState.no),
+      sizeMatches: serverSize == null ? VerifyState.unknown : (sizeOk ? VerifyState.yes : VerifyState.no),
       partialExists: partial ? VerifyState.yes : VerifyState.no,
       immichApplicable: immichApplicable,
     );
@@ -394,10 +372,12 @@ class CopypartyUploaderService {
   /// attribute partials. Covers `<name>.PARTIAL`, dotpart `.<name>.PARTIAL`,
   /// and copyparty's suffixed `<name>-<time>-<token>.<ext>.PARTIAL`.
   static bool _hasPartialFor(Iterable<String> names, String filename) {
-    return names.any((n) =>
-        n == '$filename.PARTIAL' ||
-        n == '.$filename.PARTIAL' ||
-        (n.startsWith('$filename-') && n.endsWith('.PARTIAL')));
+    return names.any(
+      (n) =>
+          n == '$filename.PARTIAL' ||
+          n == '.$filename.PARTIAL' ||
+          (n.startsWith('$filename-') && n.endsWith('.PARTIAL')),
+    );
   }
 
   /// Cheap presence check (states 1-3) for a file via a single folder listing.
@@ -428,9 +408,7 @@ class CopypartyUploaderService {
 
       return ServerFileVerification(
         filenamePresent: nameFound ? VerifyState.yes : VerifyState.no,
-        sizeMatches: serverSize == null
-            ? VerifyState.unknown
-            : (sizeOk ? VerifyState.yes : VerifyState.no),
+        sizeMatches: serverSize == null ? VerifyState.unknown : (sizeOk ? VerifyState.yes : VerifyState.no),
         partialExists: partial ? VerifyState.yes : VerifyState.no,
       );
     } catch (e) {
@@ -494,13 +472,8 @@ class CopypartyUploaderService {
   }) async {
     // X-Up2k-Stat is optional progress telemetry (u2c.py only sends it "if
     // stats"); omit it rather than risk a malformed value confusing the server.
-    final headers = {
-      'Content-Type': 'application/octet-stream',
-      'X-Up2k-Wark': wark,
-      'X-Up2k-Hash': chunkHash,
-    };
-    _log?.request('POST', chunkUri, headers,
-        body: 'chunk #$chunkIdx (${chunkBytes.length} bytes)');
+    final headers = {'Content-Type': 'application/octet-stream', 'X-Up2k-Wark': wark, 'X-Up2k-Hash': chunkHash};
+    _log?.request('POST', chunkUri, headers, body: 'chunk #$chunkIdx (${chunkBytes.length} bytes)');
 
     final request = http.Request('POST', chunkUri);
     request.headers.addAll(headers);
@@ -512,9 +485,10 @@ class CopypartyUploaderService {
     // instead of waiting for the timeout.
     final sendFuture = _client
         .send(request)
-        .timeout(const Duration(seconds: 120),
-            onTimeout: () => throw const CopypartyUploadException(
-                'Chunk upload stalled (no response in 120s)'));
+        .timeout(
+          const Duration(seconds: 120),
+          onTimeout: () => throw const CopypartyUploadException('Chunk upload stalled (no response in 120s)'),
+        );
     final http.StreamedResponse response;
     if (cancelToken != null) {
       final winner = await Future.any<http.StreamedResponse?>([
@@ -524,9 +498,7 @@ class CopypartyUploaderService {
       if (winner == null) {
         // Cancelled: drain/ignore the in-flight response when it arrives so it
         // doesn't surface as an unhandled error, then bail.
-        unawaited(sendFuture
-            .then((r) => r.stream.drain<void>().catchError((_) {}))
-            .catchError((_) {}));
+        unawaited(sendFuture.then((r) => r.stream.drain<void>().catchError((_) {})).catchError((_) {}));
         throw const CopypartyCancelledException();
       }
       response = winner;
@@ -546,8 +518,7 @@ class CopypartyUploaderService {
     // name") is a real failure and must NOT be swallowed — swallowing it just
     // resurfaces later as a confusing "still needs N chunks" at confirmation.
     final lower = respBody.toLowerCase();
-    final alreadyHave = statusCode == 400 &&
-        (lower.contains('already') || lower.contains('got that'));
+    final alreadyHave = statusCode == 400 && (lower.contains('already') || lower.contains('got that'));
     if (alreadyHave) {
       _log?.log('    chunk #$chunkIdx → 400 already-present (benign)');
       return;
@@ -596,14 +567,7 @@ class CopypartyUploaderService {
         final start = chunkIdx * file.chunkSizeBytes;
         final end = (start + file.chunkSizeBytes).clamp(0, file.totalBytes);
         final chunkBytes = await _readChunk(file.path, start, end - start);
-        await _uploadChunk(
-          chunkUri,
-          wark,
-          file.chunkHashes[chunkIdx],
-          chunkBytes,
-          chunkIdx,
-          cancelToken: cancelToken,
-        );
+        await _uploadChunk(chunkUri, wark, file.chunkHashes[chunkIdx], chunkBytes, chunkIdx, cancelToken: cancelToken);
         done++;
         onProgress?.call(done, neededChunkIndices.length);
       } finally {
@@ -617,13 +581,7 @@ class CopypartyUploaderService {
   /// Confirm the upload by re-running handshake and checking need is empty.
   ///
   /// Returns true if the server confirms receipt, false if chunks are missing.
-  Future<bool> confirmUpload(
-    HashedFile file,
-    String wark,
-    String hostUrl,
-    String uploadPath,
-    String password,
-  ) async {
+  Future<bool> confirmUpload(HashedFile file, String wark, String hostUrl, String uploadPath, String password) async {
     final result = await handshake(file, hostUrl, uploadPath, password);
     return result.fullyConfirmed;
   }
@@ -646,8 +604,10 @@ class CopypartyUploaderService {
   }) async {
     final name = filePath.split('/').last;
     _log?.section('SELFTEST $label');
-    _log?.log('name="$name"  uploadPath="$uploadPath"  '
-        'mode=${sequential ? 'sequential(in-order, parallelism=1)' : 'parallel($parallelism)'}');
+    _log?.log(
+      'name="$name"  uploadPath="$uploadPath"  '
+      'mode=${sequential ? 'sequential(in-order, parallelism=1)' : 'parallel($parallelism)'}',
+    );
 
     // Snapshot the destination folder before/after so we can SEE what the
     // server actually does with our chunks (partial created? grows? corrupt
@@ -659,8 +619,10 @@ class CopypartyUploaderService {
         final sizes = await listFolderSizes(folderUri, password);
         final related = sizes.entries.where((e) => e.key.contains(prefix)).toList()
           ..sort((a, b) => a.key.compareTo(b.key));
-        _log?.log('FOLDER $when — ${sizes.length} total file(s); '
-            '${related.length} matching "$prefix*":');
+        _log?.log(
+          'FOLDER $when — ${sizes.length} total file(s); '
+          '${related.length} matching "$prefix*":',
+        );
         if (related.isEmpty) {
           _log?.log('    (none)');
         } else {
@@ -679,8 +641,7 @@ class CopypartyUploaderService {
       final hs = await handshake(hashed, hostUrl, uploadPath, password, label: '$label/init');
       // Sequential mode: upload one chunk at a time, in ascending offset order,
       // to test whether this server mis-places concurrent/out-of-order chunks.
-      final needed =
-          sequential ? (List<int>.from(hs.neededChunks)..sort()) : hs.neededChunks;
+      final needed = sequential ? (List<int>.from(hs.neededChunks)..sort()) : hs.neededChunks;
       final initialNeeded = needed.length;
       await uploadChunks(
         hashed,
@@ -692,8 +653,7 @@ class CopypartyUploaderService {
         parallelism: sequential ? 1 : parallelism,
       );
       await snapshotFolder('AFTER-UPLOAD (pre-confirm)');
-      final confirm =
-          await handshake(hashed, hostUrl, uploadPath, password, label: '$label/confirm');
+      final confirm = await handshake(hashed, hostUrl, uploadPath, password, label: '$label/confirm');
       await snapshotFolder('AFTER-CONFIRM');
       final result = UploadAttemptResult(
         label: label,
@@ -741,8 +701,7 @@ class CopypartyUploaderService {
     String appVersion,
   ) async {
     try {
-      final uploadUrl =
-          '${hostUrl.trimRight()}/${uploadPath.replaceAll(RegExp(r'^/+|/+$'), '')}/${file.filename}';
+      final uploadUrl = '${hostUrl.trimRight()}/${uploadPath.replaceAll(RegExp(r'^/+|/+$'), '')}/${file.filename}';
       final receiptData = {
         'version': 1,
         'filename': file.filename,
@@ -754,9 +713,7 @@ class CopypartyUploaderService {
         'app_version': appVersion,
       };
       final receiptPath = '${file.path}.cpreceipt';
-      await File(receiptPath).writeAsString(
-        const JsonEncoder.withIndent('  ').convert(receiptData),
-      );
+      await File(receiptPath).writeAsString(const JsonEncoder.withIndent('  ').convert(receiptData));
       return true;
     } catch (_) {
       return false;
@@ -802,15 +759,16 @@ class CopypartyUploaderService {
     // Step 2: initial handshake — find out which chunks the server needs.
     // This IS the content hash check: if it comes back fullyConfirmed, the
     // file's bytes are already on the server.
-    final handshakeResult =
-        await handshake(hashed, hostUrl, uploadPath, password);
+    final handshakeResult = await handshake(hashed, hostUrl, uploadPath, password);
 
     // If the content is already fully present, STOP. Sending a second
     // (confirm) handshake here would re-register the now-existing name and make
     // copyparty serialise a duplicate `<name>-<time>-<token>` file. (Issue 2.)
     if (handshakeResult.fullyConfirmed) {
-      _log?.log('✓ already on server (hash verified, no upload): '
-          'wark=${handshakeResult.wark}');
+      _log?.log(
+        '✓ already on server (hash verified, no upload): '
+        'wark=${handshakeResult.wark}',
+      );
       return (hashed, handshakeResult, true);
     }
 
@@ -830,13 +788,12 @@ class CopypartyUploaderService {
     throwIfCancelled();
     // Step 4: confirmation handshake — triggers server finalization
     // (.PARTIAL → file). Only needed because we actually uploaded chunks.
-    final confirmed =
-        await handshake(hashed, hostUrl, uploadPath, password, label: 'confirm');
+    final confirmed = await handshake(hashed, hostUrl, uploadPath, password, label: 'confirm');
     if (!confirmed.fullyConfirmed) {
       final detail = confirmed.unmatchedHashes.isNotEmpty
           ? 'server needs ${confirmed.unmatchedHashes.length} chunk(s) whose '
-              'hashes do not match what we computed — likely a hashing or '
-              'partial-file mismatch (see diagnostic log)'
+                'hashes do not match what we computed — likely a hashing or '
+                'partial-file mismatch (see diagnostic log)'
           : 'server still needs ${confirmed.neededChunks.length} chunk(s)';
       _log?.log('!! CONFIRM FAILED: $detail');
       throw CopypartyUploadException('Upload confirmation failed: $detail');
@@ -889,8 +846,7 @@ class CopypartyUploaderService {
       base = host.replace(path: purl);
     } else {
       // Fallback: use the same base URL as the handshake
-      return _buildUri(hostUrl, '', password)
-          .replace(path: Uri.parse(hostUrl.trimRight()).path);
+      return _buildUri(hostUrl, '', password).replace(path: Uri.parse(hostUrl.trimRight()).path);
     }
     if (password.isEmpty) {
       return base;
