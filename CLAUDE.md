@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.0.0-custom.N+<3048+N>  →  3.0.0-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.0.0-custom.42+3090** (next push → `43+3091`).
+Latest pushed: **3.0.0-custom.80+3128** (next push → `81+3129`).
 
 ### Branch targets
 - New feature branches off `feature/custom-upload-settings`, not `main`.
@@ -124,14 +124,35 @@ Upload settings overhaul for slow/metered connections:
 - Bug fixes: parallel uploads not reaching configured limit, upload detail page bugs
 
 ### PR #2 — `feature/copyparty-up2k-import` (stacks on PR #1)
-Complete "Import from Memory Card" via the up2k protocol:
-- `CopypartyConfig` settings: `hostUrl`, `uploadPath`, `parallelConnections`,
-  `autoDeleteAfterVerify`, `writeReceipts`, `triggerExtensions`, `stripPrefixes`
-- Password stored in `flutter_secure_storage` under key `copyparty_password`
-  (NOT in `SettingsKey` / `AppConfig`)
-- DB schema v31: `copyparty_upload_receipts` table + wark index (raw SQL,
-  outside Drift entity model — see migration conventions below)
-- 5-step import UI: directory picker → scan → options → progress → completion
+Complete "Import from Memory Card" via the up2k protocol, plus a full live
+verification + cleanup workflow. Grown well beyond the original 5-step import.
+
+**Config** (`CopypartyConfig`): `hostUrl`, `uploadPath`, `parallelConnections`,
+`autoDeleteAfterVerify`, `triggerExtensions`, `allowSelfSignedCert`,
+`recreateFolderStructure`, `sortSmallestFirst`, `debugMode`. Password in
+`flutter_secure_storage` (key `copyparty_password`, NOT in `SettingsKey`/`AppConfig`).
+(`writeReceipts` still exists but is unused — the `.cpreceipt` sidecar was dropped.)
+
+**DB** schema **v32**: `copyparty_upload_receipts` (v31) + `upload_confirmed` /
+`immich_asset_id` columns (v32). Raw SQL, outside the Drift entity model.
+
+**Import** — directory picker → scan → options (per-file live name/size/partial
+verification + Immich-by-checksum axis, destination CP-only / Both / Immich) →
+progress → completion. Groups shown/uploaded in a stable order (smallest-first
+optional). Cancel/resume, "add folders" mid-upload, and per-file phase status
+(Hashing → Copyparty → Immich) with transfer/total · speed and a done time+avg.
+
+**Pending Cleanup page** — never trusts a stored flag: every file is re-verified
+LIVE (name/size/partial via `?ls`, content hash via re-handshake, Immich by
+checksum) before any delete. Collapsible groups, rolled-up per-group status,
+select-verified, per-file "Upload now" recovery + "Remove from list".
+
+**Entry points** — main app-bar memory-card indicator (spins while uploading) +
+the copyparty settings pages (main = full config; backup-embedded = simplified,
+server section hidden, URL in the title).
+
+**Diagnostics** gated behind `debugMode` (off by default): self-test / share-log
+links hidden in normal use; a "Download log" button stays on the main settings.
 
 ---
 
@@ -164,7 +185,7 @@ When adding a new settings domain:
 | `mobile/test/drift/main/generated/` | Generated schema snapshots (versions 1-30) |
 
 Migration rules:
-- Bump `schemaVersion` (currently 31)
+- Bump `schemaVersion` (currently 32)
 - Add raw-SQL migration in `onUpgrade` guarded by version range
 - Mirror the same `CREATE TABLE/INDEX IF NOT EXISTS` in `beforeOpen` for fresh installs
 - Do NOT regenerate `test/drift/main/generated/` — only covers 1-30 and tests only test to the last generated version
@@ -244,9 +265,13 @@ Diagnostic tooling that already exists — use it, don't rebuild it:
 
 ---
 
-## Copyparty cleanup-phase plan (PENDING — agreed after build 50)
+## Copyparty cleanup-phase plan (✅ DONE — shipped builds 51–55)
 
-Uploads work (build 49). These 9 follow-up issues are the agreed next work,
+All 9 issues below are **implemented and shipped**. Kept here as the design
+record (decisions + rationale). The verification/cleanup model described here is
+now the live behaviour. Many further feedback rounds built on top (see below).
+
+Uploads work (build 49). These 9 follow-up issues were the agreed next work,
 captured from on-device testing. **Locked design decisions (asked + answered):**
 - **Picker hashing [A]**: name/size verified LIVE on scan; the content HASH is
   checked only at upload time (the handshake) or via a per-file "Verify hash"
@@ -305,6 +330,42 @@ verify live. (Proposal mockups were rendered in-session via headless Chromium.)
 Immich checksum lookup: use the generated openapi `AssetsApi` bulk-upload-check
 (`/assets/bulk-upload-check`; checksum = base64 SHA-1) — confirm the exact
 generated method name during implementation.
+
+---
+
+## Copyparty feedback rounds (✅ DONE — builds 56–79)
+
+Everything below is shipped. Each landed build was compile-reviewed (no local
+Dart toolchain — the CI APK build + review agents are the gate) and most
+data-safety-touching batches went through a 3-persona review.
+
+- **Delete safety**: completion-screen delete re-verifies with a fresh hash
+  against the file's ACTUAL (FB9-mirrored) folder; deletion is BLOCKED when the
+  server is unreachable (never "delete anyway" offline). `verifyHash` clears the
+  stale hash on any non-success so a failed re-verify drops out of "safe".
+- **FB9 folder mirror** is a persistent setting (`recreateFolderStructure`) — the
+  picked folder's own name becomes the top-level server subfolder; URLs are
+  percent-encoded (`mirroredUploadPath` is a public top-level fn).
+- **Picker**: verifies each file's mirrored target folder (a 404 = folder not
+  created yet = empty, NOT "offline"); single-file groups render flat; group
+  headers roll up name/size/hash/Immich with per-axis known-count denominators;
+  Immich-present files auto-switch to CP-only; header shows a CP/Immich breakdown.
+- **Progress**: dynamic queue loop (add folders mid-run via `addFolders`, honours
+  smallest-first, shown in upload order); phase chip Hashing→Copyparty→Immich;
+  compact "transferred / total · speed"; done shows "total · elapsed · avg"
+  (speed excludes hashing). Cancel with resume-safe pending state; "Add folders".
+- **Auto-delete after verify** runs after BOTH backends, gated by `safeToDelete`
+  (requires the Immich asset id for Immich-native files).
+- **Cleanup**: `pendingCleanupProvider` filters to files that still exist on
+  device (DISPLAY ONLY — never `markSourceDeleted` from a passive read, since an
+  unmounted card makes `exists()` false transiently). Collapsible groups +
+  expand/collapse all, "Select verified", per-file "Remove from list".
+- **Settings**: `debugMode` (default off) hides self-test/log links everywhere,
+  keeps a "Download log" button on the main page. `sortSmallestFirst` (by group
+  total size). The backup-entry copyparty page hides the server section (lives in
+  main settings) and shows the full URL in its title.
+- **App bar**: memory-card indicator left of the backup indicator; spins while an
+  import upload is active.
 
 ---
 
