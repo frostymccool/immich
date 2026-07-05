@@ -29,18 +29,24 @@ class CopypartyImportPage extends ConsumerStatefulWidget {
 class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
   static const _safChannel = MethodChannel('immich/saf_picker');
 
-  /// Item 2: pick another folder and append it to the active upload queue.
+  /// Item 4: pick another folder, scan it, then show a selection page so the
+  /// user can pick files as normal BEFORE they're appended to the active task.
   Future<void> _pickAndAddFolder() async {
+    String? path;
     try {
-      final path = await _safChannel.invokeMethod<String?>('pickDirectory');
-      if (path != null) {
-        await ref.read(importSessionProvider.notifier).addFolders([path]);
-      }
+      path = await _safChannel.invokeMethod<String?>('pickDirectory');
     } on PlatformException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Picker error: ${e.message}')));
       }
+      return;
     }
+    if (path == null || !mounted) {
+      return;
+    }
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => _AddFoldersSelectionPage(directoryPath: path!)));
   }
 
   @override
@@ -76,6 +82,203 @@ class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
           },
         ),
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Add-folders selection page (item 4)
+//
+// When the user taps "Add folders" during an active/finished import, we scan
+// the picked folder off to the side and show this normal selection page so they
+// can pick exactly which files to append — instead of silently queuing them all.
+// ---------------------------------------------------------------------------
+
+class _AddFoldersSelectionPage extends ConsumerStatefulWidget {
+  final String directoryPath;
+  const _AddFoldersSelectionPage({required this.directoryPath});
+
+  @override
+  ConsumerState<_AddFoldersSelectionPage> createState() => _AddFoldersSelectionPageState();
+}
+
+class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPage> {
+  List<UploadSet>? _sets;
+  String? _error;
+  final Set<String> _selectedPaths = {};
+  final Map<String, UploadDestination> _destinationOverrides = {};
+  bool _adding = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scan());
+  }
+
+  Future<void> _scan() async {
+    try {
+      final sets = await ref.read(importSessionProvider.notifier).scanFolders([widget.directoryPath]);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _sets = sets;
+        // Default: everything selected (this is a deliberate "add" action).
+        _selectedPaths
+          ..clear()
+          ..addAll(sets.expand((s) => s.files).map((f) => f.localPath));
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _error = 'Scan failed: $e');
+    }
+  }
+
+  UploadDestination _destinationFor(UploadFile file) => _destinationOverrides[file.localPath] ?? file.destination;
+
+  void _toggleGroup(UploadSet set, bool select) {
+    setState(() {
+      for (final f in set.files) {
+        if (select) {
+          _selectedPaths.add(f.localPath);
+        } else {
+          _selectedPaths.remove(f.localPath);
+        }
+      }
+    });
+  }
+
+  void _toggleFile(String path, bool select) {
+    setState(() {
+      if (select) {
+        _selectedPaths.add(path);
+      } else {
+        _selectedPaths.remove(path);
+      }
+    });
+  }
+
+  Future<void> _add() async {
+    final sets = _sets;
+    if (sets == null || _adding) {
+      return;
+    }
+    setState(() => _adding = true);
+    // Commit destination overrides onto the scanned files before appending.
+    for (final set in sets) {
+      for (final file in set.files) {
+        final override = _destinationOverrides[file.localPath];
+        if (override != null) {
+          file.destination = override;
+        }
+      }
+    }
+    await ref.read(importSessionProvider.notifier).appendSelectedSets(sets, Set.of(_selectedPaths));
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sets = _sets;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Add folders'), centerTitle: false),
+      body: SelectionArea(
+        child: _error != null
+            ? Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(_error!, style: TextStyle(color: context.colorScheme.error)),
+                ),
+              )
+            : sets == null
+            ? const Center(child: CircularProgressIndicator())
+            : sets.isEmpty
+            ? const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text('No new files found in that folder.', textAlign: TextAlign.center),
+                ),
+              )
+            : _buildList(context, sets),
+      ),
+    );
+  }
+
+  Widget _buildList(BuildContext context, List<UploadSet> sets) {
+    final allFiles = sets.expand((s) => s.files).toList();
+    final selectedFiles = allFiles.where((f) => _selectedPaths.contains(f.localPath)).toList();
+    final selectedCount = selectedFiles.length;
+    final selectedBytes = selectedFiles.fold<int>(0, (s, f) => s + f.sizeBytes);
+    final allSelected = selectedCount == allFiles.length;
+
+    return Column(
+      children: [
+        Container(
+          color: context.colorScheme.surfaceContainer,
+          padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+          child: Row(
+            children: [
+              const Icon(Icons.create_new_folder_outlined, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '$selectedCount / ${allFiles.length} files '
+                  '(${formatHumanReadableBytes(selectedBytes, 1)})',
+                  style: context.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              TextButton(
+                onPressed: () => setState(() {
+                  if (allSelected) {
+                    _selectedPaths.clear();
+                  } else {
+                    _selectedPaths
+                      ..clear()
+                      ..addAll(allFiles.map((f) => f.localPath));
+                  }
+                }),
+                child: Text(allSelected ? 'Deselect All' : 'Select All'),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            itemCount: sets.length,
+            itemBuilder: (ctx, i) => _SelectableUploadSetTile(
+              set: sets[i],
+              rootPath: widget.directoryPath,
+              selectedPaths: _selectedPaths,
+              getDestination: _destinationFor,
+              onToggleGroup: (select) => _toggleGroup(sets[i], select),
+              onToggleFile: _toggleFile,
+              onDestinationChange: (path, dest) => setState(() => _destinationOverrides[path] = dest),
+            ),
+          ),
+        ),
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: selectedCount > 0 && !_adding ? _add : null,
+                icon: _adding
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.playlist_add_rounded),
+                label: Text('Add $selectedCount file${selectedCount == 1 ? '' : 's'} to upload'),
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1702,27 +1905,48 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
     final failed = attempted.where((f) => f.status == UploadFileStatus.failed).length;
     final hasErrors = failed > 0 || cpSucceeded < cpNeeded;
 
+    // items 2/3: distinguish a STOPPED run from a finished one, and count the
+    // selected files that never got uploaded (still pending) so they can resume.
+    final stopped = session.cancelled;
+    final selected = session.selectedPaths;
+    bool sel(UploadFile f) => selected == null || selected.contains(f.localPath);
+    final remaining = allFiles.where((f) => sel(f) && f.status == UploadFileStatus.pending).length;
+
     final checkedFiles = allFiles.where((f) => _checkedForDeletion.contains(f.localPath)).toList();
+
+    final headerColor = stopped
+        ? context.colorScheme.tertiaryContainer
+        : (hasErrors ? context.colorScheme.errorContainer : context.colorScheme.primaryContainer);
+    final onHeaderColor = stopped
+        ? context.colorScheme.onTertiaryContainer
+        : (hasErrors ? context.colorScheme.onErrorContainer : context.colorScheme.onPrimaryContainer);
+    final headerText = stopped ? 'Upload stopped' : (hasErrors ? 'Completed with errors' : 'Upload Complete');
+    final headerIcon = stopped
+        ? Icons.stop_circle_rounded
+        : (hasErrors ? Icons.warning_rounded : Icons.check_circle_rounded);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // Header banner
         Container(
-          color: hasErrors ? context.colorScheme.errorContainer : context.colorScheme.primaryContainer,
+          color: headerColor,
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
           child: Row(
             children: [
-              Icon(
-                hasErrors ? Icons.warning_rounded : Icons.check_circle_rounded,
-                color: hasErrors ? context.colorScheme.onErrorContainer : context.colorScheme.onPrimaryContainer,
-                size: 26,
-              ),
+              Icon(headerIcon, color: onHeaderColor, size: 26),
               const SizedBox(width: 10),
-              Text(
-                hasErrors ? 'Completed with errors' : 'Upload Complete',
-                style: context.textTheme.titleLarge?.copyWith(
-                  color: hasErrors ? context.colorScheme.onErrorContainer : context.colorScheme.onPrimaryContainer,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(headerText, style: context.textTheme.titleLarge?.copyWith(color: onHeaderColor)),
+                    if (stopped)
+                      Text(
+                        '$cpSucceeded uploaded · $remaining not uploaded',
+                        style: context.textTheme.bodySmall?.copyWith(color: onHeaderColor),
+                      ),
+                  ],
                 ),
               ),
             ],
@@ -1746,6 +1970,8 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
                   ok: imSucceeded == imNeeded,
                 ),
               if (failed > 0) _StatChip(icon: Icons.error_outline_rounded, label: '$failed failed', ok: false),
+              if (remaining > 0)
+                _StatChip(icon: Icons.pause_circle_outline_rounded, label: '$remaining remaining', ok: false),
             ],
           ),
         ),
@@ -1824,15 +2050,37 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
                   ),
                   const SizedBox(height: 8),
                 ],
+                // item 3: after a STOP, offer to resume the files that never
+                // got uploaded (still pending). Picks up exactly where it left
+                // off using the same selection.
+                if (stopped && remaining > 0) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () => ref.read(importSessionProvider.notifier).resumeUpload(),
+                      icon: const Icon(Icons.play_arrow_rounded),
+                      label: Text('Resume ($remaining left)'),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
                 SizedBox(
                   width: double.infinity,
-                  child: FilledButton(
-                    onPressed: () {
-                      ref.read(importSessionProvider.notifier).reset();
-                      Navigator.of(context).pop();
-                    },
-                    child: const Text('Done'),
-                  ),
+                  child: stopped && remaining > 0
+                      ? OutlinedButton(
+                          onPressed: () {
+                            ref.read(importSessionProvider.notifier).reset();
+                            Navigator.of(context).pop();
+                          },
+                          child: const Text('Done'),
+                        )
+                      : FilledButton(
+                          onPressed: () {
+                            ref.read(importSessionProvider.notifier).reset();
+                            Navigator.of(context).pop();
+                          },
+                          child: const Text('Done'),
+                        ),
                 ),
               ],
             ),

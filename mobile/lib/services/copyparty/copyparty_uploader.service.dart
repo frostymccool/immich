@@ -98,7 +98,11 @@ class CopypartyUploaderService {
   ///
   /// Reads the file sequentially in chunks of [computeChunkSizeBytes] size.
   /// The whole-file hash is computed over all bytes in order.
-  Future<HashedFile> hashFile(String filePath, {void Function(int bytesProcessed, int totalBytes)? onProgress}) async {
+  Future<HashedFile> hashFile(
+    String filePath, {
+    void Function(int bytesProcessed, int totalBytes)? onProgress,
+    Completer<void>? cancelToken,
+  }) async {
     final file = File(filePath);
     final fileSize = await file.length();
     final chunkSize = computeChunkSizeBytes(fileSize);
@@ -111,6 +115,11 @@ class CopypartyUploaderService {
     try {
       int bytesRead = 0;
       while (bytesRead < fileSize) {
+        // Cancellation must interrupt hashing too — on a large file this loop
+        // runs for many seconds and used to ignore the cancel token entirely.
+        if (cancelToken?.isCompleted ?? false) {
+          throw const CopypartyCancelledException();
+        }
         final chunkExpected = (fileSize - bytesRead).clamp(0, chunkSize);
 
         // Accumulate into a full chunk — read() may return fewer bytes than
@@ -752,8 +761,8 @@ class CopypartyUploaderService {
     }
 
     throwIfCancelled();
-    // Step 1: hash
-    final hashed = await hashFile(filePath, onProgress: onHashProgress);
+    // Step 1: hash (cancellable — hashing a multi-GB file can take a while).
+    final hashed = await hashFile(filePath, onProgress: onHashProgress, cancelToken: cancelToken);
 
     throwIfCancelled();
     // Step 2: initial handshake — find out which chunks the server needs.

@@ -143,6 +143,11 @@ class ImportSessionState {
   /// files are not listed during upload.
   final Set<String>? selectedPaths;
 
+  /// True when the run reached the completion screen because the user STOPPED
+  /// it (not because everything finished). Drives the "Upload stopped" header
+  /// and the Resume option. (items 2/3)
+  final bool cancelled;
+
   const ImportSessionState({
     this.step = ImportSessionStep.idle,
     this.directoryPath,
@@ -152,6 +157,7 @@ class ImportSessionState {
     this.scannedFiles = 0,
     this.errorMessage,
     this.selectedPaths,
+    this.cancelled = false,
   });
 
   ImportSessionState copyWith({
@@ -163,6 +169,7 @@ class ImportSessionState {
     int? scannedFiles,
     String? errorMessage,
     Set<String>? selectedPaths,
+    bool? cancelled,
   }) => ImportSessionState(
     step: step ?? this.step,
     directoryPath: directoryPath ?? this.directoryPath,
@@ -172,6 +179,7 @@ class ImportSessionState {
     scannedFiles: scannedFiles ?? this.scannedFiles,
     errorMessage: errorMessage,
     selectedPaths: selectedPaths ?? this.selectedPaths,
+    cancelled: cancelled ?? this.cancelled,
   );
 
   int get totalBytes => uploadSets.fold(0, (s, u) => s + u.totalBytes);
@@ -266,6 +274,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       completedFiles: 0,
       totalFiles: effectiveTotal,
       selectedPaths: selectedFilePaths,
+      cancelled: false,
     );
 
     // Dynamic queue loop: on each iteration pick the next SELECTED + PENDING
@@ -380,13 +389,16 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             file.uploadedBytes = 0;
             _notify();
 
-            final result = await _uploadToImmich(file);
+            final result = await _uploadToImmich(file, cancelToken);
             if (result.isSuccess) {
               file.immichAssetId = result.remoteAssetId;
               if (receiptId != null && result.remoteAssetId != null) {
                 await _receiptRepo.markImmichUploaded(receiptId, result.remoteAssetId!);
               }
-            } else if (!result.isCancelled) {
+            } else if (result.isCancelled || cancelToken.isCompleted) {
+              // Cancelled during the Immich upload → stop like a copyparty cancel.
+              throw const CopypartyCancelledException();
+            } else {
               throw Exception(result.errorMessage ?? 'Immich upload failed');
             }
           }
@@ -430,39 +442,57 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     // Only advance to the completion screen if we're still uploading — a
     // concurrent reset() (e.g. the user left the page) must not be clobbered.
     if (state.step == ImportSessionStep.uploading) {
-      state = state.copyWith(step: ImportSessionStep.complete);
+      state = state.copyWith(step: ImportSessionStep.complete, cancelled: cancelled);
     }
   }
 
-  /// Add more folders to an in-progress (or just-finished) import (item 2):
-  /// scans each folder, appends its sets to the live queue and selection so the
-  /// running upload loop picks them up. If no upload is currently running, kicks
-  /// one off for the merged selection.
-  Future<void> addFolders(List<String> directoryPaths) async {
+  /// Resume a stopped run (item 3): re-runs the upload loop for the files still
+  /// pending in the current selection (already-done files are skipped).
+  Future<void> resumeUpload() async {
+    await startUpload(selectedFilePaths: state.selectedPaths);
+  }
+
+  /// Scan folders WITHOUT touching the live session (item 4): returns the found
+  /// upload sets (rootPath set, receipts loaded) so a selection page can let the
+  /// user pick before anything is appended to the ongoing task.
+  Future<List<UploadSet>> scanFolders(List<String> directoryPaths) async {
     final config = _ref.read(appConfigProvider).copyparty;
     final pairer = CopypartyFilePairer(triggerExtensions: config.triggerExtensions);
     final newSets = <UploadSet>[];
-    final newPaths = <String>{};
+    // De-dup against files already queued so re-picking a folder can't double it.
+    final existing = state.uploadSets.expand((s) => s.files).map((f) => f.localPath).toSet();
     for (final dir in directoryPaths) {
       final sets = await pairer.scanDirectory(dir);
       for (final set in sets) {
         set.rootPath = dir;
+        set.files.removeWhere((f) => existing.contains(f.localPath));
         for (final file in set.files) {
           file.existingReceipt = await _receiptRepo.findByLocalPath(file.localPath);
-          newPaths.add(file.localPath);
         }
       }
-      newSets.addAll(sets);
+      newSets.addAll(sets.where((s) => s.files.isNotEmpty));
     }
-    if (newPaths.isEmpty) {
+    return newSets;
+  }
+
+  /// Append user-selected files from already-scanned sets to the live queue and
+  /// selection (item 4). Only [selectedPaths] are marked for upload; unselected
+  /// files still show in the group but stay out of the selection. If no upload
+  /// is currently running, kicks one off for the merged selection.
+  Future<void> appendSelectedSets(List<UploadSet> newSets, Set<String> selectedPaths) async {
+    // Keep only sets that contributed at least one selected file, so the queue
+    // isn't cluttered with fully-deselected groups.
+    final keptSets = newSets.where((s) => s.files.any((f) => selectedPaths.contains(f.localPath))).toList();
+    final addedPaths = keptSets.expand((s) => s.files).map((f) => f.localPath).where(selectedPaths.contains).toSet();
+    if (addedPaths.isEmpty) {
       return;
     }
 
-    _log.log('ADD FOLDERS: +${newSets.length} set(s), +${newPaths.length} file(s)');
+    _log.log('ADD FOLDERS: +${keptSets.length} set(s), +${addedPaths.length} selected file(s)');
     state = state.copyWith(
-      uploadSets: [...state.uploadSets, ...newSets],
-      selectedPaths: {...?state.selectedPaths, ...newPaths},
-      totalFiles: state.totalFiles + newPaths.length,
+      uploadSets: [...state.uploadSets, ...keptSets],
+      selectedPaths: {...?state.selectedPaths, ...addedPaths},
+      totalFiles: state.totalFiles + addedPaths.length,
     );
     _notify();
 
@@ -657,7 +687,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     return result.isSuccess ? result.remoteAssetId : null;
   }
 
-  Future<UploadResult> _uploadToImmich(UploadFile file) async {
+  Future<UploadResult> _uploadToImmich(UploadFile file, [Completer<void>? cancelToken]) async {
     final f = File(file.localPath);
     final fields = {
       'deviceAssetId': file.localPath,
@@ -671,7 +701,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       file: f,
       originalFileName: file.filename,
       fields: fields,
-      cancelToken: null,
+      cancelToken: cancelToken,
       onProgress: (bytes, total) {
         if (total > 0) {
           file.uploadedBytes = bytes;
@@ -696,6 +726,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       scannedFiles: state.scannedFiles,
       errorMessage: state.errorMessage,
       selectedPaths: state.selectedPaths,
+      cancelled: state.cancelled,
     );
   }
 }
