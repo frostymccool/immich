@@ -1435,7 +1435,22 @@ class _UploadProgressStep extends ConsumerWidget {
     }
     final allFiles = session.uploadSets.expand((s) => s.files).where(keep).toList();
     final totalBytes = allFiles.fold<int>(0, (s, f) => s + f.sizeBytes);
-    final doneBytes = allFiles.fold<int>(0, (s, f) => s + f.uploadedBytes);
+    // Bytes actually UPLOADED to a backend. `uploadedBytes` doubles as the
+    // per-file bar value for the hashing and copy-to-phone phases too, so it must
+    // NOT be summed blindly — a file that's been copied to the phone (or hashed)
+    // but not yet uploaded would wrongly inflate this. Count a finished file's
+    // full size, an in-flight upload's live bytes, and everything else as 0. (feedback)
+    final doneBytes = allFiles.fold<int>(0, (s, f) {
+      final fileDone =
+          f.status == UploadFileStatus.receiptWritten || (f.status == UploadFileStatus.confirmed && !f.needsImmich);
+      if (fileDone) {
+        return s + f.sizeBytes;
+      }
+      if (f.status == UploadFileStatus.uploading || f.status == UploadFileStatus.immichUploading) {
+        return s + f.uploadedBytes;
+      }
+      return s;
+    });
     final activeCount = allFiles
         .where(
           (f) =>
