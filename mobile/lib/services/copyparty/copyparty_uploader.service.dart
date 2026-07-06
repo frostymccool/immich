@@ -190,9 +190,10 @@ class CopypartyUploaderService {
     String uploadPath,
     String password, {
     String label = 'handshake',
+    Completer<void>? cancelToken,
   }) async {
     final uri = _buildUri(hostUrl, uploadPath, password);
-    return _handshakeAtUri(file, uri, hostUrl, password, label: label);
+    return _handshakeAtUri(file, uri, hostUrl, password, label: label, cancelToken: cancelToken);
   }
 
   Future<HandshakeResult> _handshakeAtUri(
@@ -201,6 +202,7 @@ class CopypartyUploaderService {
     String hostUrl,
     String password, {
     String label = 'handshake',
+    Completer<void>? cancelToken,
   }) async {
     // lmod must be INTEGER seconds (floor(mtime/1000)) — both the browser
     // (up2k.js) and python (u2c.py) clients send an int; our earlier fractional
@@ -219,7 +221,32 @@ class CopypartyUploaderService {
       'Content-Type': 'application/json',
     }, body: jsonEncode({...bodyMap, 'hash': '[${file.chunkHashes.length} cids]'}));
 
-    final response = await _client.post(uri, headers: {'Content-Type': 'application/json'}, body: body);
+    // A bad-wifi handshake POST can hang forever (it had no timeout, unlike the
+    // chunk upload — the prime suspect for an upload "stuck at 0%" that only a
+    // Stop+Resume cleared). Bound it with a stall timeout AND race it against the
+    // cancel token so Stop is immediate. Mirrors _uploadChunk.
+    final postFuture = _client
+        .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
+        .timeout(
+          const Duration(seconds: 60),
+          onTimeout: () => throw const CopypartyUploadException('$label stalled (no response in 60s)'),
+        );
+    final http.Response response;
+    if (cancelToken != null) {
+      final winner = await Future.any<http.Response?>([
+        postFuture,
+        cancelToken.future.then<http.Response?>((_) => null),
+      ]);
+      if (winner == null) {
+        // Cancelled mid-handshake: swallow the eventual response so it doesn't
+        // surface as an unhandled error, then bail.
+        unawaited(postFuture.then<void>((_) {}, onError: (_) {}));
+        throw const CopypartyCancelledException();
+      }
+      response = winner;
+    } else {
+      response = await postFuture;
+    }
 
     _log?.response(response.statusCode, headers: response.headers, body: response.body);
 
@@ -800,7 +827,7 @@ class CopypartyUploaderService {
     // Step 2: initial handshake — find out which chunks the server needs.
     // This IS the content hash check: if it comes back fullyConfirmed, the
     // file's bytes are already on the server.
-    final handshakeResult = await handshake(hashed, hostUrl, uploadPath, password);
+    final handshakeResult = await handshake(hashed, hostUrl, uploadPath, password, cancelToken: cancelToken);
 
     // If the content is already fully present, STOP. Sending a second
     // (confirm) handshake here would re-register the now-existing name and make
@@ -829,7 +856,14 @@ class CopypartyUploaderService {
     throwIfCancelled();
     // Step 4: confirmation handshake — triggers server finalization
     // (.PARTIAL → file). Only needed because we actually uploaded chunks.
-    final confirmed = await handshake(hashed, hostUrl, uploadPath, password, label: 'confirm');
+    final confirmed = await handshake(
+      hashed,
+      hostUrl,
+      uploadPath,
+      password,
+      label: 'confirm',
+      cancelToken: cancelToken,
+    );
     if (!confirmed.fullyConfirmed) {
       final detail = confirmed.unmatchedHashes.isNotEmpty
           ? 'server needs ${confirmed.unmatchedHashes.length} chunk(s) whose '

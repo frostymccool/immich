@@ -373,6 +373,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             if (useStaging && (file.needsCopyparty || file.needsImmich)) {
               staged = await _acquireStaged(file, cancelToken);
             }
+            // Copy phase is over for THIS file — clear the flag so the card
+            // stops showing "Copying" regardless of which backend runs next.
+            file.staging = false;
             final readPath = staged?.path ?? file.localPath;
 
             // Now that the (foreground) copy of THIS file is done, start copying
@@ -385,7 +388,10 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             // ---- Copyparty upload ----
             if (file.needsCopyparty) {
               file.staging = false;
-              file.status = UploadFileStatus.hashing;
+              // A staged file is already hashed → it's now handshaking, not
+              // hashing; reset the bar so it doesn't flash "hashing 100%".
+              file.status = staged != null ? UploadFileStatus.handshaking : UploadFileStatus.hashing;
+              file.uploadedBytes = 0;
               _notify();
 
               void onUp(int done, int total) {
@@ -680,8 +686,27 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     _prefetchFuture = () async {
       try {
         final existing = await _staging.findValidStaged(next.localPath);
-        return existing ?? await _staging.stage(next.localPath, cancelToken: cancelToken);
+        if (existing != null) {
+          return existing;
+        }
+        return await _staging.stage(
+          next.localPath,
+          cancelToken: cancelToken,
+          // Surface the copy-ahead so the file being prefetched shows
+          // "Copying to phone N%" while the current file uploads — otherwise a
+          // large file being staged looks frozen at 0%. We deliberately do NOT
+          // touch `status` (it must stay `pending` so the loop still picks it);
+          // only the transient `staging` flag drives the card. (feedback)
+          onProgress: (done, total) {
+            next.staging = true;
+            next.uploadedBytes = done;
+            _notify();
+          },
+        );
       } catch (_) {
+        next.staging = false;
+        next.uploadedBytes = 0;
+        _notify();
         return null;
       }
     }();

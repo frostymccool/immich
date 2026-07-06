@@ -1690,9 +1690,9 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
   /// A small pill showing which backend the bytes are currently going to
   /// (Copyparty vs Immich), so a "both" file makes its two phases obvious.
   Widget _phaseChip(BuildContext context, UploadFile file) {
-    // Copying to local phone storage (batch item 4) reuses the hashing status
-    // but is surfaced as its own "Copying" phase.
-    if (file.staging && file.status == UploadFileStatus.hashing) {
+    // Copying to local phone storage (batch item 4). A prefetched file copies
+    // ahead while still `pending`, so key this off the transient flag, not status.
+    if (file.staging) {
       return _chip(context, 'Copying', Icons.phone_android_rounded, context.colorScheme.secondary);
     }
     final (String label, IconData icon, Color color) = switch (file.status) {
@@ -1738,9 +1738,13 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
         (file.status == UploadFileStatus.confirmed && !file.needsImmich);
     final isFailed = file.status == UploadFileStatus.failed;
     final isActive = !isDone && !isFailed;
+    // Copying to phone (staging, batch item 4) can happen while status is still
+    // `pending` (a prefetched file copies ahead but must stay pickable by the
+    // loop), so it's driven by the transient flag, not the status.
+    final isCopying = file.staging;
     // Hashing is a LOCAL checksum pass, not a network transfer — don't show
     // "transferred / MiB/s" for it (item 1).
-    final isHashing = file.status == UploadFileStatus.hashing;
+    final isHashing = !isCopying && file.status == UploadFileStatus.hashing;
 
     final cardColor = isFailed
         ? context.colorScheme.errorContainer
@@ -1796,11 +1800,15 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                               // total · elapsed · avg speed — read from the model (item 2)
                               ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · ${_doneTimingSuffix(file)}'
                               : '${formatHumanReadableBytes(file.sizeBytes, 1)} · Done')
+                        : isCopying
+                        // Copying to phone (staging, batch item 4) % on the full
+                        // bar so a large file being staged isn't a frozen 0%.
+                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · copying to phone '
+                              '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}%'
                         : isHashing
-                        // Hashing (or copying-to-phone, batch item 4) % on the
-                        // full bar so progress is legible on large files (item 3).
-                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · '
-                              '${file.staging ? 'copying to phone' : 'hashing'} '
+                        // Hashing % on the full bar so progress is legible on
+                        // large files (item 3).
+                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · hashing '
                               '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}%'
                         // transferred / total · speed
                         : '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · $_speed',
