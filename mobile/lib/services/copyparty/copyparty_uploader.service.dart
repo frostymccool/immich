@@ -229,7 +229,7 @@ class CopypartyUploaderService {
         .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
         .timeout(
           const Duration(seconds: 60),
-          onTimeout: () => throw const CopypartyUploadException('$label stalled (no response in 60s)'),
+          onTimeout: () => throw CopypartyUploadException('$label stalled (no response in 60s)'),
         );
     final http.Response response;
     if (cancelToken != null) {
