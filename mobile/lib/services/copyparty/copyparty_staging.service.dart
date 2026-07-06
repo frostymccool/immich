@@ -1,0 +1,200 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:crypto/crypto.dart';
+import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
+
+/// Local staging for copyparty imports (batch: item 4).
+///
+/// Copies each source file (typically on a slow/removable USB volume) to local
+/// phone storage BEFORE hashing/uploading, so:
+///   * the slow source is read exactly once (the copy also computes the up2k
+///     hashes in the same pass),
+///   * an upload can finish even if the card is pulled mid-transfer,
+///   * an interrupted upload resumes from the local copy with no re-read.
+///
+/// Corruption safety is anchored on a completion MARKER sidecar that is written
+/// (atomically, temp→rename) ONLY after a fully-copied, length-verified local
+/// copy. The marker's presence therefore proves the staged copy is complete and
+/// records everything needed to upload it (chunk hashes, file hash, sizes). On
+/// resume we trust a marker whose recorded source size + mtime still match the
+/// current source — no re-hash needed (the marker can't exist for a partial copy).
+class CopypartyStagingService {
+  final CopypartyUploaderService _uploader;
+  final CopypartyLogger? _log;
+  final Future<Directory> Function() _stagingDirProvider;
+
+  CopypartyStagingService(
+    this._uploader, {
+    CopypartyLogger? logger,
+    required Future<Directory> Function() stagingDirProvider,
+  }) : _log = logger,
+       _stagingDirProvider = stagingDirProvider;
+
+  static const int _markerVersion = 1;
+
+  Directory? _cachedDir;
+
+  Future<Directory> _dir() async {
+    final cached = _cachedDir;
+    if (cached != null) {
+      return cached;
+    }
+    final dir = await _stagingDirProvider();
+    await dir.create(recursive: true);
+    _cachedDir = dir;
+    return dir;
+  }
+
+  /// Deterministic, collision-resistant staged base name for a source path.
+  String _baseFor(String sourcePath) {
+    final digest = sha1.convert(utf8.encode(sourcePath));
+    final ext = sourcePath.contains('.') ? sourcePath.split('.').last : 'bin';
+    // Keep the extension so tools inspecting the staging dir can tell file types.
+    return '${digest.toString()}.$ext';
+  }
+
+  Future<({File staged, File marker})> _pathsFor(String sourcePath) async {
+    final dir = await _dir();
+    final base = _baseFor(sourcePath);
+    return (staged: File('${dir.path}/$base'), marker: File('${dir.path}/$base.stagemeta'));
+  }
+
+  /// Returns a ready-to-upload [HashedFile] pointing at an EXISTING valid staged
+  /// copy for [sourcePath], or null if none exists / it no longer matches the
+  /// source (in which case any stale staged files are removed).
+  Future<HashedFile?> findValidStaged(String sourcePath) async {
+    final paths = await _pathsFor(sourcePath);
+    if (!await paths.marker.exists() || !await paths.staged.exists()) {
+      return null;
+    }
+    try {
+      final meta = jsonDecode(await paths.marker.readAsString()) as Map<String, dynamic>;
+      if (meta['v'] != _markerVersion || meta['sourcePath'] != sourcePath) {
+        await _deletePaths(paths);
+        return null;
+      }
+      final source = File(sourcePath);
+      if (!await source.exists()) {
+        // Source gone (card unmounted). Don't delete the staged copy — it may
+        // still be uploadable — but we can't validate it against the source now.
+        return null;
+      }
+      final srcStat = await source.stat();
+      final stagedLen = await paths.staged.length();
+      final sourceSize = meta['sourceSize'] as int;
+      final matches =
+          sourceSize == srcStat.size &&
+          meta['sourceMtimeMs'] == srcStat.modified.millisecondsSinceEpoch &&
+          meta['stagedSize'] == stagedLen &&
+          stagedLen == sourceSize;
+      if (!matches) {
+        _log?.log('staging: stale copy for ${sourcePath.split('/').last} (source changed) — discarding');
+        await _deletePaths(paths);
+        return null;
+      }
+      final chunkHashes = (meta['chunkHashes'] as List<dynamic>).cast<String>();
+      _log?.log('staging: reusing valid local copy for ${sourcePath.split('/').last} (no re-read)');
+      return HashedFile(
+        path: paths.staged.path,
+        filename: meta['filename'] as String,
+        totalBytes: sourceSize,
+        chunkSizeBytes: meta['chunkSize'] as int,
+        chunkHashes: chunkHashes,
+        fileHash: meta['fileHash'] as String,
+        lastModifiedMs: meta['lastModifiedMs'] as int,
+      );
+    } catch (e) {
+      _log?.log('staging: unreadable marker for ${sourcePath.split('/').last} ($e) — discarding');
+      await _deletePaths(paths);
+      return null;
+    }
+  }
+
+  /// Copies [sourcePath] to local storage (computing hashes in the same pass)
+  /// and writes the completion marker atomically. Returns a [HashedFile] whose
+  /// `path` is the local staged copy. Throws on any IO failure (e.g. out of
+  /// space) — the caller should fall back to uploading directly from the source.
+  Future<HashedFile> stage(
+    String sourcePath, {
+    void Function(int bytesProcessed, int totalBytes)? onProgress,
+    Completer<void>? cancelToken,
+  }) async {
+    final paths = await _pathsFor(sourcePath);
+    // Clear any stale partial before starting so writeOnly can't inherit bytes.
+    await _deletePaths(paths);
+
+    final hashed = await _uploader.stageAndHash(
+      sourcePath,
+      paths.staged.path,
+      onProgress: onProgress,
+      cancelToken: cancelToken,
+    );
+
+    final srcStat = await File(sourcePath).stat();
+    final marker = {
+      'v': _markerVersion,
+      'sourcePath': sourcePath,
+      'sourceSize': hashed.totalBytes,
+      'sourceMtimeMs': srcStat.modified.millisecondsSinceEpoch,
+      'stagedSize': hashed.totalBytes,
+      'filename': hashed.filename,
+      'chunkSize': hashed.chunkSizeBytes,
+      'fileHash': hashed.fileHash,
+      'chunkHashes': hashed.chunkHashes,
+      'lastModifiedMs': hashed.lastModifiedMs,
+    };
+    // Atomic marker write: temp then rename, so a crash mid-write can never
+    // leave a truncated marker that would be trusted on resume.
+    final tmp = File('${paths.marker.path}.tmp');
+    await tmp.writeAsString(jsonEncode(marker), flush: true);
+    await tmp.rename(paths.marker.path);
+    return hashed;
+  }
+
+  /// Deletes the staged copy + marker for a source path (after it is fully
+  /// confirmed on all backends, or when discarding a stale copy).
+  Future<void> discard(String sourcePath) async {
+    await _deletePaths(await _pathsFor(sourcePath));
+  }
+
+  Future<void> _deletePaths(({File staged, File marker}) paths) async {
+    for (final f in [paths.staged, paths.marker, File('${paths.marker.path}.tmp')]) {
+      try {
+        if (await f.exists()) {
+          await f.delete();
+        }
+      } catch (_) {}
+    }
+  }
+
+  /// Removes staged files whose marker is older than [maxAge] — a backstop
+  /// against leftovers from an app that was killed mid-import and never resumed.
+  /// Recent staged files (within [maxAge]) are kept so a near-term resume can
+  /// still reuse them.
+  Future<void> sweepStale(Duration maxAge, DateTime now) async {
+    try {
+      final dir = await _dir();
+      if (!await dir.exists()) {
+        return;
+      }
+      await for (final entity in dir.list()) {
+        if (entity is! File || !entity.path.endsWith('.stagemeta')) {
+          continue;
+        }
+        try {
+          final stat = await entity.stat();
+          if (now.difference(stat.modified) <= maxAge) {
+            continue;
+          }
+          final base = entity.path.substring(0, entity.path.length - '.stagemeta'.length);
+          await _deletePaths((staged: File(base), marker: entity));
+          _log?.log('staging: swept stale ${entity.path.split('/').last}');
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+}

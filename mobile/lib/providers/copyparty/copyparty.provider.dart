@@ -18,6 +18,7 @@ import 'package:immich_mobile/repositories/secure_storage.repository.dart';
 import 'package:immich_mobile/repositories/upload.repository.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_staging.service.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
@@ -90,6 +91,20 @@ final copypartyUploaderProvider = Provider<CopypartyUploaderService>((ref) {
 final copypartyReceiptRepositoryProvider = Provider<CopypartyReceiptRepository>(
   (ref) => CopypartyReceiptRepository(ref.watch(driftProvider)),
 );
+
+/// Local-staging service (batch: item 4). Stages into a dedicated subfolder of
+/// app documents so staged copies survive an app restart (enabling resume) —
+/// unlike the temp dir, which the OS may evict.
+final copypartyStagingProvider = Provider<CopypartyStagingService>((ref) {
+  return CopypartyStagingService(
+    ref.watch(copypartyUploaderProvider),
+    logger: ref.watch(copypartyLoggerProvider),
+    stagingDirProvider: () async {
+      final docs = await getApplicationDocumentsDirectory();
+      return Directory('${docs.path}/copyparty_staging');
+    },
+  );
+});
 
 // ---------------------------------------------------------------------------
 // Password (stored in secure storage, not AppConfig)
@@ -192,9 +207,17 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   final Ref _ref;
 
   CopypartyLogger get _log => _ref.read(copypartyLoggerProvider);
+  CopypartyStagingService get _staging => _ref.read(copypartyStagingProvider);
 
   ImportSessionNotifier(this._uploader, this._receiptRepo, this._immichUploadRepo, this._ref)
     : super(const ImportSessionState());
+
+  /// Prefetch of the NEXT file's local staged copy, kicked off while the current
+  /// file uploads (decision: stage one ahead). Keyed by source path so the loop
+  /// can await it if it turns out to be the file it picks next, or discard it if
+  /// the queue changed. (batch: item 4)
+  String? _prefetchPath;
+  Future<HashedFile?>? _prefetchFuture;
 
   /// Completed when the user cancels the in-progress upload. The uploader
   /// races its in-flight chunk POST against this, and the per-file loop checks
@@ -221,6 +244,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
 
   Future<void> scan(String directoryPath) async {
     state = state.copyWith(step: ImportSessionStep.scanning, directoryPath: directoryPath, scannedFiles: 0);
+
+    // Backstop cleanup for staged copies orphaned by an app that was killed
+    // mid-import and never resumed. Recent ones are kept so a near-term resume
+    // can still reuse them without re-reading the source. (batch: item 4)
+    unawaited(_staging.sweepStale(const Duration(days: 7), DateTime.now()));
 
     try {
       final config = _ref.read(appConfigProvider).copyparty;
@@ -252,6 +280,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     final config = _ref.read(appConfigProvider).copyparty;
     // Q3: folder recreation is now a persistent setting, not a per-import flag.
     final createFolders = config.recreateFolderStructure;
+    // batch item 4: copy each file to local phone storage before hashing/upload.
+    final useStaging = config.stageToLocalBeforeUpload;
     final password = await _ref.read(copypartyPasswordProvider.future);
     final packageInfo = await PackageInfo.fromPlatform();
 
@@ -316,39 +346,78 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             ? mirroredUploadPath(config.uploadPath, set.rootPath ?? state.directoryPath, file.localPath)
             : config.uploadPath;
         int? receiptId;
+        final fileSizeBytes = file.sizeBytes;
+        // Stage the file to local phone storage first (copy + hash in one USB
+        // read pass) when enabled — then upload from the fast local copy. Null
+        // means "read directly from the source" (staging off, or it failed /
+        // ran out of space → automatic fallback). (batch: item 4)
+        HashedFile? staged;
         try {
+          if (useStaging && (file.needsCopyparty || file.needsImmich)) {
+            staged = await _acquireStaged(file, cancelToken);
+          }
+          final readPath = staged?.path ?? file.localPath;
+
+          // Now that the (foreground) copy of THIS file is done, start copying
+          // the NEXT file ahead in the background while this one uploads over
+          // the network — the USB is otherwise idle during the transfer.
+          if (useStaging) {
+            _maybePrefetchNext(cancelToken, file.localPath);
+          }
+
           // ---- Copyparty upload ----
           if (file.needsCopyparty) {
+            file.staging = false;
             file.status = UploadFileStatus.hashing;
             _notify();
 
-            final fileSizeBytes = file.sizeBytes;
-            final (hashed, confirmed, alreadyOnServer) = await _uploader.uploadFile(
-              file.localPath,
-              config.hostUrl,
-              uploadPath,
-              password,
-              parallelism: config.parallelConnections,
-              onHashProgress: (done, total) {
-                // Local hashing — NOT a network transfer. Fill the WHOLE bar
-                // with hash progress (done/total), not a 0–20% slice, so the
-                // percentage is legible on large files. (batch: item 3)
-                file.status = UploadFileStatus.hashing;
-                file.uploadedBytes = done;
-                _notify();
-              },
-              onUploadProgress: (done, total) {
-                // Now actually POSTing chunks to copyparty — flip to `uploading`
-                // so the phase chip changes from "Hashing" to "Copyparty". The
-                // bar restarts at 0 and fills 0→100% over the chunk upload.
-                file.status = UploadFileStatus.uploading;
-                file.transferStartMs ??= DateTime.now().millisecondsSinceEpoch;
-                final chunkProgress = total > 0 ? done / total : 0.0;
-                file.uploadedBytes = (fileSizeBytes * chunkProgress).round();
-                _notify();
-              },
-              cancelToken: cancelToken,
-            );
+            void onUp(int done, int total) {
+              // POSTing chunks to copyparty — flip to `uploading` so the phase
+              // chip changes to "Copyparty". The bar fills 0→100% over upload.
+              file.status = UploadFileStatus.uploading;
+              file.transferStartMs ??= DateTime.now().millisecondsSinceEpoch;
+              final chunkProgress = total > 0 ? done / total : 0.0;
+              file.uploadedBytes = (fileSizeBytes * chunkProgress).round();
+              _notify();
+            }
+
+            final HashedFile hashed;
+            final HandshakeResult confirmed;
+            final bool alreadyOnServer;
+            if (staged != null) {
+              // Already hashed during staging — go straight to handshake/upload.
+              hashed = staged;
+              final (res, already) = await _uploader.uploadHashedFile(
+                staged,
+                config.hostUrl,
+                uploadPath,
+                password,
+                parallelism: config.parallelConnections,
+                onUploadProgress: onUp,
+                cancelToken: cancelToken,
+              );
+              confirmed = res;
+              alreadyOnServer = already;
+            } else {
+              // Direct-from-source path: hash + upload in one call as before.
+              final (h, res, already) = await _uploader.uploadFile(
+                readPath,
+                config.hostUrl,
+                uploadPath,
+                password,
+                parallelism: config.parallelConnections,
+                onHashProgress: (done, total) {
+                  file.status = UploadFileStatus.hashing;
+                  file.uploadedBytes = done;
+                  _notify();
+                },
+                onUploadProgress: onUp,
+                cancelToken: cancelToken,
+              );
+              hashed = h;
+              confirmed = res;
+              alreadyOnServer = already;
+            }
 
             file.sha512 = hashed.fileHash;
             file.wark = confirmed.wark;
@@ -391,7 +460,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             file.transferStartMs ??= DateTime.now().millisecondsSinceEpoch;
             _notify();
 
-            final result = await _uploadToImmich(file, cancelToken);
+            final result = await _uploadToImmich(file, cancelToken, staged?.path);
             if (result.isSuccess) {
               file.immichAssetId = result.remoteAssetId;
               if (receiptId != null && result.remoteAssetId != null) {
@@ -423,10 +492,19 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             file.transferEndMs = DateTime.now().millisecondsSinceEpoch;
           }
           file.status = UploadFileStatus.receiptWritten;
+          // Fully confirmed on all needed backends → the local staged copy has
+          // done its job; reclaim the space. (Only on SUCCESS — an interrupted
+          // upload keeps its staged copy so it can resume without re-reading
+          // the source.) (batch: item 4)
+          if (staged != null) {
+            await _staging.discard(file.localPath);
+          }
           state = state.copyWith(completedFiles: state.completedFiles + 1);
         } on CopypartyCancelledException {
           // User cancelled mid-file: leave it pending (not failed) so it can be
-          // resumed cleanly next run, and stop the loop.
+          // resumed cleanly next run, and stop the loop. The staged copy (if any)
+          // is intentionally KEPT for a fast resume.
+          file.staging = false;
           file.status = UploadFileStatus.pending;
           file.uploadedBytes = 0;
           cancelled = true;
@@ -434,6 +512,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
           _notify();
           break;
         } catch (e) {
+          file.staging = false;
           file.status = UploadFileStatus.failed;
           file.errorMessage = e.toString();
           _log.log('!! FAILED ${file.filename}: $e');
@@ -442,6 +521,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       }
     }
 
+    // Abandon any in-flight prefetch — the loop is done or was cancelled.
+    _prefetchPath = null;
+    _prefetchFuture = null;
     _uploadCancelToken = null;
     _log.log(
       'IMPORT SESSION ${cancelled ? 'cancelled' : 'complete'}: '
@@ -452,6 +534,98 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     if (state.step == ImportSessionStep.uploading) {
       state = state.copyWith(step: ImportSessionStep.complete, cancelled: cancelled);
     }
+  }
+
+  /// Returns a local staged [HashedFile] for [file], or null to upload directly
+  /// from the source (staging off / failed / out of space → fallback). Order:
+  /// consume a matching prefetch → reuse an existing valid staged copy (resume)
+  /// → stage now with on-card progress. (batch: item 4)
+  Future<HashedFile?> _acquireStaged(UploadFile file, Completer<void> cancelToken) async {
+    if (_prefetchPath == file.localPath && _prefetchFuture != null) {
+      final fut = _prefetchFuture!;
+      _prefetchPath = null;
+      _prefetchFuture = null;
+      final h = await fut;
+      if (h != null) {
+        return h;
+      }
+      // Prefetch failed — fall through and try again in the foreground.
+    }
+    try {
+      final existing = await _staging.findValidStaged(file.localPath);
+      if (existing != null) {
+        return existing;
+      }
+    } catch (_) {}
+    return _stageNow(file, cancelToken);
+  }
+
+  Future<HashedFile?> _stageNow(UploadFile file, Completer<void> cancelToken) async {
+    try {
+      file.staging = true;
+      file.status = UploadFileStatus.hashing;
+      file.uploadedBytes = 0;
+      _notify();
+      return await _staging.stage(
+        file.localPath,
+        cancelToken: cancelToken,
+        onProgress: (done, total) {
+          file.staging = true;
+          file.status = UploadFileStatus.hashing;
+          file.uploadedBytes = done;
+          _notify();
+        },
+      );
+    } on CopypartyCancelledException {
+      rethrow;
+    } catch (e) {
+      // Out of space / IO error → automatic fallback to reading from source.
+      _log.log('staging failed for ${file.filename}: $e — reading direct from source');
+      return null;
+    } finally {
+      file.staging = false;
+    }
+  }
+
+  /// Starts copying the next queued file to local storage in the background
+  /// (decision: stage one ahead), so its copy overlaps the current file's
+  /// network upload. At most one prefetch runs at a time. (batch: item 4)
+  void _maybePrefetchNext(Completer<void> cancelToken, String excludePath) {
+    if (_prefetchFuture != null || cancelToken.isCompleted) {
+      return;
+    }
+    final config = _ref.read(appConfigProvider).copyparty;
+    final sel = state.selectedPaths;
+    final candidates = <UploadFile>[];
+    final owner = <UploadFile, UploadSet>{};
+    for (final s in state.uploadSets) {
+      for (final f in s.files) {
+        if (f.localPath == excludePath || f.status != UploadFileStatus.pending) {
+          continue;
+        }
+        if (sel != null && !sel.contains(f.localPath)) {
+          continue;
+        }
+        candidates.add(f);
+        owner[f] = s;
+      }
+    }
+    if (candidates.isEmpty) {
+      return;
+    }
+    if (config.sortSmallestFirst) {
+      candidates.sort((a, b) => owner[a]!.totalBytes.compareTo(owner[b]!.totalBytes));
+    }
+    final next = candidates.first;
+    _prefetchPath = next.localPath;
+    _prefetchFuture = () async {
+      try {
+        final existing = await _staging.findValidStaged(next.localPath);
+        return existing ?? await _staging.stage(next.localPath, cancelToken: cancelToken);
+      } catch (_) {
+        return null;
+      }
+    }();
   }
 
   /// Resume a stopped run (item 3): re-runs the upload loop for the files still
@@ -695,8 +869,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     return result.isSuccess ? result.remoteAssetId : null;
   }
 
-  Future<UploadResult> _uploadToImmich(UploadFile file, [Completer<void>? cancelToken]) async {
-    final f = File(file.localPath);
+  Future<UploadResult> _uploadToImmich(UploadFile file, [Completer<void>? cancelToken, String? overridePath]) async {
+    // Read the BYTES from the local staged copy when we have one (batch item 4);
+    // identity fields (deviceAssetId, filename) stay the ORIGINAL so Immich
+    // dedups correctly regardless of where the bytes were read from.
+    final f = File(overridePath ?? file.localPath);
     final fields = {
       'deviceAssetId': file.localPath,
       'deviceId': Store.get(StoreKey.deviceId),

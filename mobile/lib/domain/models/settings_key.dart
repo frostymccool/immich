@@ -83,6 +83,7 @@ enum SettingsKey<T> {
   copypartyRecreateFolderStructure<bool>(),
   copypartySortSmallestFirst<bool>(),
   copypartyDebugMode<bool>(),
+  copypartyStageToLocalBeforeUpload<bool>(),
 
   // Slideshow
   slideshowTransition<bool>(),

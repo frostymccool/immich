@@ -174,6 +174,7 @@ class AppConfig {
             .copypartyRecreateFolderStructure => copyparty.recreateFolderStructure,
             .copypartySortSmallestFirst => copyparty.sortSmallestFirst,
             .copypartyDebugMode => copyparty.debugMode,
+            .copypartyStageToLocalBeforeUpload => copyparty.stageToLocalBeforeUpload,
             .slideshowTransition => slideshow.transition,
             .slideshowRepeat => slideshow.repeat,
             .slideshowDuration => slideshow.duration,
@@ -243,6 +244,9 @@ class AppConfig {
       ),
       .copypartySortSmallestFirst => copyWith(copyparty: copyparty.copyWith(sortSmallestFirst: value as bool)),
       .copypartyDebugMode => copyWith(copyparty: copyparty.copyWith(debugMode: value as bool)),
+      .copypartyStageToLocalBeforeUpload => copyWith(
+        copyparty: copyparty.copyWith(stageToLocalBeforeUpload: value as bool),
+      ),
       .slideshowTransition => copyWith(slideshow: slideshow.copyWith(transition: value as bool)),
       .slideshowRepeat => copyWith(slideshow: slideshow.copyWith(repeat: value as bool)),
       .slideshowDuration => copyWith(slideshow: slideshow.copyWith(duration: value as int)),

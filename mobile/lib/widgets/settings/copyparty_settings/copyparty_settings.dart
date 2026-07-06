@@ -40,6 +40,7 @@ class CopypartySettings extends ConsumerWidget {
           const _ParallelConnectionsSlider(),
           const _SortSmallestFirstTile(),
           const _RecreateFolderStructureTile(),
+          const _StageToLocalTile(),
           const _AutoDeleteTile(),
           const Divider(),
           const SettingGroupTitle(title: 'File Matching', icon: Icons.link_rounded),
@@ -368,6 +369,30 @@ class _RecreateFolderStructureTile extends ConsumerWidget {
         trailing: Switch(
           value: value,
           onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyRecreateFolderStructure, v),
+        ),
+      ),
+    );
+  }
+}
+
+class _StageToLocalTile extends ConsumerWidget {
+  const _StageToLocalTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final value = ref.watch(appConfigProvider.select((c) => c.copyparty.stageToLocalBeforeUpload));
+    return Padding(
+      padding: const EdgeInsets.only(left: 8.0),
+      child: SettingListTile(
+        title: 'Copy to phone before upload',
+        subtitle:
+            'Copy each file to phone storage first, then upload from that copy. '
+            'Faster on slow/USB cards, lets an upload finish if the card is '
+            'removed, and makes an interrupted upload resumable. Falls back to '
+            'reading the card directly when phone storage is low.',
+        trailing: Switch(
+          value: value,
+          onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyStageToLocalBeforeUpload, v),
         ),
       ),
     );

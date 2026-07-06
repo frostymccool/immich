@@ -764,6 +764,38 @@ class CopypartyUploaderService {
     // Step 1: hash (cancellable — hashing a multi-GB file can take a while).
     final hashed = await hashFile(filePath, onProgress: onHashProgress, cancelToken: cancelToken);
 
+    // Steps 2–4: handshake → upload → confirm.
+    final (result, alreadyOnServer) = await uploadHashedFile(
+      hashed,
+      hostUrl,
+      uploadPath,
+      password,
+      parallelism: parallelism,
+      onUploadProgress: onUploadProgress,
+      cancelToken: cancelToken,
+    );
+    return (hashed, result, alreadyOnServer);
+  }
+
+  /// Runs the up2k protocol for an ALREADY-hashed file (steps 2–4): initial
+  /// handshake → chunk upload → confirm. Chunk bytes are read from
+  /// [HashedFile.path], so this works whether that points at the original source
+  /// or a local staged copy. Returns `(result, alreadyOnServer)`.
+  Future<(HandshakeResult, bool)> uploadHashedFile(
+    HashedFile hashed,
+    String hostUrl,
+    String uploadPath,
+    String password, {
+    int parallelism = 2,
+    void Function(int chunksDone, int chunksTotal)? onUploadProgress,
+    Completer<void>? cancelToken,
+  }) async {
+    void throwIfCancelled() {
+      if (cancelToken?.isCompleted ?? false) {
+        throw const CopypartyCancelledException();
+      }
+    }
+
     throwIfCancelled();
     // Step 2: initial handshake — find out which chunks the server needs.
     // This IS the content hash check: if it comes back fullyConfirmed, the
@@ -778,7 +810,7 @@ class CopypartyUploaderService {
         '✓ already on server (hash verified, no upload): '
         'wark=${handshakeResult.wark}',
       );
-      return (hashed, handshakeResult, true);
+      return (handshakeResult, true);
     }
 
     // Step 3: upload the missing chunks to purl (matches u2c.py).
@@ -808,7 +840,111 @@ class CopypartyUploaderService {
       throw CopypartyUploadException('Upload confirmation failed: $detail');
     }
     _log?.log('✓ confirmed: wark=${confirmed.wark}');
-    return (hashed, confirmed, false);
+    return (confirmed, false);
+  }
+
+  /// Copies [sourcePath] → [stagedPath] while computing the up2k chunk hashes
+  /// and whole-file hash in the SAME single read pass (so the slow source volume
+  /// is read only once). The returned [HashedFile] has `path == stagedPath`, so
+  /// the subsequent upload reads from the fast local copy.
+  ///
+  /// Corruption safety: after writing, the staged file's length is verified to
+  /// equal the source length before the [HashedFile] is returned; a mismatch
+  /// throws. The caller is responsible for writing the completion marker only
+  /// after this returns successfully, and for deleting a partial [stagedPath] on
+  /// any throw. Uses the exact same chunk sizing + cid computation as
+  /// [hashFile], so the protocol invariant can never diverge between the two.
+  Future<HashedFile> stageAndHash(
+    String sourcePath,
+    String stagedPath, {
+    void Function(int bytesProcessed, int totalBytes)? onProgress,
+    Completer<void>? cancelToken,
+  }) async {
+    final source = File(sourcePath);
+    final fileSize = await source.length();
+    final chunkSize = computeChunkSizeBytes(fileSize);
+    final chunkHashes = <String>[];
+
+    final fileSink = _DigestSink();
+    final fileHasher = sha512.startChunkedConversion(fileSink);
+
+    final readHandle = await source.open(mode: FileMode.read);
+    // Truncating write handle — a stale partial from a previous aborted attempt
+    // must not leave trailing bytes past what we write now.
+    final dest = File(stagedPath);
+    await dest.parent.create(recursive: true);
+    final writeHandle = await dest.open(mode: FileMode.writeOnly);
+    var ok = false;
+    try {
+      int bytesRead = 0;
+      while (bytesRead < fileSize) {
+        if (cancelToken?.isCompleted ?? false) {
+          throw const CopypartyCancelledException();
+        }
+        final chunkExpected = (fileSize - bytesRead).clamp(0, chunkSize);
+        final chunkBuf = BytesBuilder(copy: false);
+        while (chunkBuf.length < chunkExpected) {
+          final toRead = chunkExpected - chunkBuf.length;
+          final slice = await readHandle.read(toRead);
+          if (slice.isEmpty) {
+            break;
+          }
+          chunkBuf.add(slice);
+          fileHasher.add(slice);
+        }
+        final chunkBytes = chunkBuf.takeBytes();
+        if (chunkBytes.isEmpty) {
+          break;
+        }
+        await writeHandle.writeFrom(chunkBytes);
+        chunkHashes.add(_chunkId(chunkBytes));
+        bytesRead += chunkBytes.length;
+        onProgress?.call(bytesRead, fileSize);
+      }
+      await writeHandle.flush();
+      ok = true;
+    } finally {
+      await readHandle.close();
+      await writeHandle.close();
+      if (!ok) {
+        // Leave nothing usable behind on failure/cancel — the caller treats a
+        // missing marker as "not staged", but delete the bytes too to reclaim space.
+        try {
+          await dest.delete();
+        } catch (_) {}
+      }
+    }
+
+    // Corruption guard: the staged copy MUST be byte-for-byte complete.
+    final stagedLen = await dest.length();
+    if (stagedLen != fileSize) {
+      try {
+        await dest.delete();
+      } catch (_) {}
+      throw CopypartyUploadException(
+        'Staging copy incomplete for ${sourcePath.split('/').last}: '
+        'wrote $stagedLen of $fileSize bytes',
+      );
+    }
+
+    fileHasher.close();
+    final fileHash = fileSink.value!.toString();
+    final stat = await source.stat();
+
+    _log?.log(
+      'staged: ${sourcePath.split('/').last}  size=$fileSize  '
+      'chunkSize=$chunkSize  chunks=${chunkHashes.length}  → ${stagedPath.split('/').last}',
+    );
+
+    return HashedFile(
+      path: stagedPath,
+      filename: sourcePath.split('/').last,
+      totalBytes: fileSize,
+      chunkSizeBytes: chunkSize,
+      chunkHashes: chunkHashes,
+      fileHash: fileHash,
+      lastModifiedMs: stat.modified.millisecondsSinceEpoch,
+    );
   }
 
   // ---------------------------------------------------------------------------

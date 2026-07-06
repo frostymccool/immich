@@ -41,6 +41,10 @@ class UploadFile {
   // live in ephemeral card state and vanished when the list scrolled. (Batch: item 2)
   int? transferStartMs;
   int? transferEndMs;
+  // Transient (not persisted): true while the file is being COPIED to local
+  // phone storage before hashing/upload, so the card can show "Copying" instead
+  // of "Hashing". (batch: item 4)
+  bool staging;
 
   UploadFile({
     required this.localPath,
@@ -61,6 +65,7 @@ class UploadFile {
     this.existingReceipt,
     this.alreadyOnServer = false,
     this.verification,
+    this.staging = false,
   }) : destination = destination ?? (isNativeImmichFile ? UploadDestination.both : UploadDestination.copypartyOnly);
 
   double get progress => sizeBytes > 0 ? uploadedBytes / sizeBytes : 0.0;

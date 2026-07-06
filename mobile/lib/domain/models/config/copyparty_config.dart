@@ -20,6 +20,14 @@ class CopypartyConfig {
   /// pages. Default off — normal use keeps those hidden. (item 5)
   final bool debugMode;
 
+  /// When true, each file is first COPIED from the (slow/removable) source
+  /// volume to local phone storage, then hashed + uploaded from that local
+  /// copy. This cuts USB read time, lets an upload finish even if the card is
+  /// pulled mid-transfer, and makes an interrupted upload resumable without
+  /// re-reading the source. Falls back to reading directly from the source when
+  /// phone storage is too low. Default ON. (batch: item 4)
+  final bool stageToLocalBeforeUpload;
+
   const CopypartyConfig({
     this.hostUrl = '',
     this.uploadPath = '/uploads',
@@ -31,6 +39,7 @@ class CopypartyConfig {
     this.recreateFolderStructure = false,
     this.sortSmallestFirst = false,
     this.debugMode = false,
+    this.stageToLocalBeforeUpload = true,
   });
 
   CopypartyConfig copyWith({
@@ -44,6 +53,7 @@ class CopypartyConfig {
     bool? recreateFolderStructure,
     bool? sortSmallestFirst,
     bool? debugMode,
+    bool? stageToLocalBeforeUpload,
   }) => CopypartyConfig(
     hostUrl: hostUrl ?? this.hostUrl,
     uploadPath: uploadPath ?? this.uploadPath,
@@ -55,6 +65,7 @@ class CopypartyConfig {
     recreateFolderStructure: recreateFolderStructure ?? this.recreateFolderStructure,
     sortSmallestFirst: sortSmallestFirst ?? this.sortSmallestFirst,
     debugMode: debugMode ?? this.debugMode,
+    stageToLocalBeforeUpload: stageToLocalBeforeUpload ?? this.stageToLocalBeforeUpload,
   );
 
   @override
@@ -70,7 +81,8 @@ class CopypartyConfig {
           other.allowSelfSignedCert == allowSelfSignedCert &&
           other.recreateFolderStructure == recreateFolderStructure &&
           other.sortSmallestFirst == sortSmallestFirst &&
-          other.debugMode == debugMode);
+          other.debugMode == debugMode &&
+          other.stageToLocalBeforeUpload == stageToLocalBeforeUpload);
 
   @override
   int get hashCode => Object.hash(
@@ -84,6 +96,7 @@ class CopypartyConfig {
     recreateFolderStructure,
     sortSmallestFirst,
     debugMode,
+    stageToLocalBeforeUpload,
   );
 
   @override
@@ -93,7 +106,8 @@ class CopypartyConfig {
       'writeReceipts: $writeReceipts, triggerExtensions: $triggerExtensions, '
       'allowSelfSignedCert: $allowSelfSignedCert, '
       'recreateFolderStructure: $recreateFolderStructure, '
-      'sortSmallestFirst: $sortSmallestFirst, debugMode: $debugMode)';
+      'sortSmallestFirst: $sortSmallestFirst, debugMode: $debugMode, '
+      'stageToLocalBeforeUpload: $stageToLocalBeforeUpload)';
 
   static bool _listEquals(List<String> a, List<String> b) {
     if (a.length != b.length) {

@@ -1690,6 +1690,11 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
   /// A small pill showing which backend the bytes are currently going to
   /// (Copyparty vs Immich), so a "both" file makes its two phases obvious.
   Widget _phaseChip(BuildContext context, UploadFile file) {
+    // Copying to local phone storage (batch item 4) reuses the hashing status
+    // but is surfaced as its own "Copying" phase.
+    if (file.staging && file.status == UploadFileStatus.hashing) {
+      return _chip(context, 'Copying', Icons.phone_android_rounded, context.colorScheme.secondary);
+    }
     final (String label, IconData icon, Color color) = switch (file.status) {
       UploadFileStatus.hashing => ('Hashing', Icons.tag_rounded, context.colorScheme.onSurfaceVariant),
       UploadFileStatus.handshaking ||
@@ -1701,6 +1706,10 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
     if (label.isEmpty) {
       return const SizedBox.shrink();
     }
+    return _chip(context, label, icon, color);
+  }
+
+  Widget _chip(BuildContext context, String label, IconData icon, Color color) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
@@ -1788,9 +1797,10 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                               ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · ${_doneTimingSuffix(file)}'
                               : '${formatHumanReadableBytes(file.sizeBytes, 1)} · Done')
                         : isHashing
-                        // Hashing % on the full bar so progress is legible on
-                        // large files (item 3).
-                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · hashing '
+                        // Hashing (or copying-to-phone, batch item 4) % on the
+                        // full bar so progress is legible on large files (item 3).
+                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · '
+                              '${file.staging ? 'copying to phone' : 'hashing'} '
                               '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}%'
                         // transferred / total · speed
                         : '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · $_speed',
