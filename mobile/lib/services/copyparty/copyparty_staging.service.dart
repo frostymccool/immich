@@ -27,12 +27,7 @@ class CopypartyStagingService {
   final CopypartyLogger? _log;
   final Future<Directory> Function() _stagingDirProvider;
 
-  CopypartyStagingService(
-    this._uploader, {
-    CopypartyLogger? logger,
-    required Future<Directory> Function() stagingDirProvider,
-  }) : _log = logger,
-       _stagingDirProvider = stagingDirProvider;
+  CopypartyStagingService(this._uploader, {CopypartyLogger? logger, required this._stagingDirProvider}) : _log = logger;
 
   static const int _markerVersion = 1;
 
@@ -77,25 +72,39 @@ class CopypartyStagingService {
         await _deletePaths(paths);
         return null;
       }
-      final source = File(sourcePath);
-      if (!await source.exists()) {
-        // Source gone (card unmounted). Don't delete the staged copy — it may
-        // still be uploadable — but we can't validate it against the source now.
-        return null;
-      }
-      final srcStat = await source.stat();
-      final stagedLen = await paths.staged.length();
       final sourceSize = meta['sourceSize'] as int;
-      final matches =
-          sourceSize == srcStat.size &&
-          meta['sourceMtimeMs'] == srcStat.modified.millisecondsSinceEpoch &&
-          meta['stagedSize'] == stagedLen &&
-          stagedLen == sourceSize;
-      if (!matches) {
-        _log?.log('staging: stale copy for ${sourcePath.split('/').last} (source changed) — discarding');
+      final stagedLen = await paths.staged.length();
+
+      // The staged copy must be internally complete per its OWN marker. The
+      // marker is written atomically only after a length-verified copy, so a
+      // present marker + matching staged length proves a complete copy. A
+      // mismatch here means the staged file is corrupt/incomplete → discard.
+      if (meta['stagedSize'] != stagedLen || stagedLen != sourceSize) {
+        _log?.log('staging: incomplete/corrupt staged copy for ${sourcePath.split('/').last} — discarding');
         await _deletePaths(paths);
         return null;
       }
+
+      final source = File(sourcePath);
+      if (await source.exists()) {
+        // Source still here: it must be UNCHANGED since we staged it, or the
+        // staged copy is stale (source edited) → re-stage.
+        final srcStat = await source.stat();
+        final sourceUnchanged =
+            sourceSize == srcStat.size && meta['sourceMtimeMs'] == srcStat.modified.millisecondsSinceEpoch;
+        if (!sourceUnchanged) {
+          _log?.log('staging: stale copy for ${sourcePath.split('/').last} (source changed) — discarding');
+          await _deletePaths(paths);
+          return null;
+        }
+      } else {
+        // Source GONE (card pulled) — this is the case the feature exists for.
+        // We can't cross-check against the source, but the atomic marker proves
+        // the staged copy was complete when written, so trust it and let the
+        // upload finish. NEVER delete it here. (data-integrity finding 1)
+        _log?.log('staging: source gone for ${sourcePath.split('/').last} — finishing from complete local copy');
+      }
+
       final chunkHashes = (meta['chunkHashes'] as List<dynamic>).cast<String>();
       _log?.log('staging: reusing valid local copy for ${sourcePath.split('/').last} (no re-read)');
       return HashedFile(

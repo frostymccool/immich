@@ -479,10 +479,34 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
           // "both"/Immich file is only removed once it's confirmed in Immich —
           // not just on copyparty. Runs for copyparty-only files too.
           if (config.autoDeleteAfterVerify && file.safeToDelete && receiptId != null) {
-            try {
-              await File(file.localPath).delete();
-              await _receiptRepo.markSourceDeleted(receiptId);
-            } catch (_) {}
+            // When we uploaded from a STAGED copy the source was read only once,
+            // so a transient read corruption would be self-consistent (its hash
+            // matches the corrupt bytes the server accepted). Before the
+            // IRREVERSIBLE source delete, re-read the source once and confirm it
+            // still matches what we uploaded. This restores the cross-check the
+            // direct (double-read) path gets for free. (data-integrity finding 2)
+            var safeToRemove = true;
+            if (staged != null) {
+              try {
+                final srcHash = await _wholeFileSha512(file.localPath);
+                safeToRemove = srcHash == file.sha512;
+                if (!safeToRemove) {
+                  _log.log(
+                    'AUTO-DELETE BLOCKED for ${file.filename}: source hash != uploaded hash '
+                    '(possible bad read) — keeping the source file',
+                  );
+                }
+              } catch (_) {
+                // Source unreadable (e.g. card pulled) → nothing to delete anyway.
+                safeToRemove = false;
+              }
+            }
+            if (safeToRemove) {
+              try {
+                await File(file.localPath).delete();
+                await _receiptRepo.markSourceDeleted(receiptId);
+              } catch (_) {}
+            }
           }
 
           // Freeze the transfer duration so "total · elapsed · avg" is stable in
@@ -521,9 +545,19 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       }
     }
 
-    // Abandon any in-flight prefetch — the loop is done or was cancelled.
+    // Settle any in-flight prefetch before returning. On cancel it holds the
+    // now-completed token, so it aborts within a chunk and self-deletes its
+    // partial; awaiting it here guarantees no detached writer survives into a
+    // subsequent resume (which would create a NEW token and could otherwise
+    // start a second writer for the same staged path). (review finding 2)
+    final pendingPrefetch = _prefetchFuture;
     _prefetchPath = null;
     _prefetchFuture = null;
+    if (pendingPrefetch != null) {
+      try {
+        await pendingPrefetch;
+      } catch (_) {}
+    }
     _uploadCancelToken = null;
     _log.log(
       'IMPORT SESSION ${cancelled ? 'cancelled' : 'complete'}: '
@@ -541,15 +575,19 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   /// consume a matching prefetch → reuse an existing valid staged copy (resume)
   /// → stage now with on-card progress. (batch: item 4)
   Future<HashedFile?> _acquireStaged(UploadFile file, Completer<void> cancelToken) async {
+    // If a prefetch for this file is in flight, await it so its staged copy +
+    // marker are fully written — but do NOT trust its result directly. We fall
+    // through to findValidStaged, which RE-VALIDATES the staged copy against the
+    // CURRENT source (size + mtime). The prefetch copied the bytes minutes ago
+    // (during the previous file's upload); the source could have changed since,
+    // and only findValidStaged's guard catches that. (review finding 1)
     if (_prefetchPath == file.localPath && _prefetchFuture != null) {
       final fut = _prefetchFuture!;
       _prefetchPath = null;
       _prefetchFuture = null;
-      final h = await fut;
-      if (h != null) {
-        return h;
-      }
-      // Prefetch failed — fall through and try again in the foreground.
+      try {
+        await fut;
+      } catch (_) {}
     }
     try {
       final existing = await _staging.findValidStaged(file.localPath);
@@ -867,6 +905,18 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     );
     final result = await _uploadToImmich(file);
     return result.isSuccess ? result.remoteAssetId : null;
+  }
+
+  /// Streams the whole-file SHA-512 of [path] (hex) — used to cross-check a
+  /// staged upload against the source before an irreversible auto-delete.
+  Future<String> _wholeFileSha512(String path) async {
+    final sink = _DigestSink();
+    final input = sha512.startChunkedConversion(sink);
+    await for (final chunk in File(path).openRead()) {
+      input.add(chunk);
+    }
+    input.close();
+    return sink.value!.toString();
   }
 
   Future<UploadResult> _uploadToImmich(UploadFile file, [Completer<void>? cancelToken, String? overridePath]) async {
