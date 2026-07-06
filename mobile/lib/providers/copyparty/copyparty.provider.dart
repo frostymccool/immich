@@ -225,6 +225,13 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   /// connection.
   Completer<void>? _uploadCancelToken;
 
+  /// True for the entire lifetime of one startUpload() invocation, including its
+  /// teardown (which now awaits an in-flight prefetch). Gates every entry point
+  /// so a SECOND upload loop can never start while one is active — which would
+  /// otherwise clobber the shared cancel token and leak an uncancellable
+  /// background loop. (concurrency review finding 1/4)
+  bool _uploadRunning = false;
+
   bool get isCancelling => _uploadCancelToken?.isCompleted ?? false;
 
   /// Request cancellation of the current upload run. Safe to call repeatedly.
@@ -277,6 +284,15 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   }
 
   Future<void> startUpload({Set<String>? selectedFilePaths}) async {
+    // Never run two upload loops at once. A caller (appendSelectedSets / resume /
+    // retry) that fires while a loop is still active — including during its
+    // teardown await — just returns; the live loop already picks up new pending
+    // files from state. Set synchronously before any await. (concurrency finding 1)
+    if (_uploadRunning) {
+      return;
+    }
+    _uploadRunning = true;
+
     final config = _ref.read(appConfigProvider).copyparty;
     // Q3: folder recreation is now a persistent setting, not a per-import flag.
     final createFolders = config.recreateFolderStructure;
@@ -312,261 +328,266 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     // picked up. When "upload smallest first" is on we take the pending file
     // from the smallest group. (item 2 + item 4)
     bool cancelled = false;
-    while (true) {
-      if (cancelToken.isCompleted) {
-        cancelled = true;
-        break;
-      }
-      final sel = state.selectedPaths;
-      final candidates = <({UploadSet set, UploadFile file})>[];
-      for (final s in state.uploadSets) {
-        for (final f in s.files) {
-          if (sel != null && !sel.contains(f.localPath)) {
-            continue;
-          }
-          if (f.status != UploadFileStatus.pending) {
-            continue;
-          }
-          candidates.add((set: s, file: f));
-        }
-      }
-      if (candidates.isEmpty) {
-        break;
-      }
-      if (config.sortSmallestFirst) {
-        candidates.sort((a, b) => a.set.totalBytes.compareTo(b.set.totalBytes));
-      }
-      final set = candidates.first.set;
-      final file = candidates.first.file;
-      {
-        // FB9: when "create folders" is on, mirror the file's subfolder beneath
-        // the upload path, rooted at the set's OWN picked folder (so added
-        // folders mirror correctly, not against the first pick's root).
-        final uploadPath = createFolders
-            ? mirroredUploadPath(config.uploadPath, set.rootPath ?? state.directoryPath, file.localPath)
-            : config.uploadPath;
-        int? receiptId;
-        final fileSizeBytes = file.sizeBytes;
-        // Stage the file to local phone storage first (copy + hash in one USB
-        // read pass) when enabled — then upload from the fast local copy. Null
-        // means "read directly from the source" (staging off, or it failed /
-        // ran out of space → automatic fallback). (batch: item 4)
-        HashedFile? staged;
-        try {
-          if (useStaging && (file.needsCopyparty || file.needsImmich)) {
-            staged = await _acquireStaged(file, cancelToken);
-          }
-          final readPath = staged?.path ?? file.localPath;
-
-          // Now that the (foreground) copy of THIS file is done, start copying
-          // the NEXT file ahead in the background while this one uploads over
-          // the network — the USB is otherwise idle during the transfer.
-          if (useStaging) {
-            _maybePrefetchNext(cancelToken, file.localPath);
-          }
-
-          // ---- Copyparty upload ----
-          if (file.needsCopyparty) {
-            file.staging = false;
-            file.status = UploadFileStatus.hashing;
-            _notify();
-
-            void onUp(int done, int total) {
-              // POSTing chunks to copyparty — flip to `uploading` so the phase
-              // chip changes to "Copyparty". The bar fills 0→100% over upload.
-              file.status = UploadFileStatus.uploading;
-              file.transferStartMs ??= DateTime.now().millisecondsSinceEpoch;
-              final chunkProgress = total > 0 ? done / total : 0.0;
-              file.uploadedBytes = (fileSizeBytes * chunkProgress).round();
-              _notify();
-            }
-
-            final HashedFile hashed;
-            final HandshakeResult confirmed;
-            final bool alreadyOnServer;
-            if (staged != null) {
-              // Already hashed during staging — go straight to handshake/upload.
-              hashed = staged;
-              final (res, already) = await _uploader.uploadHashedFile(
-                staged,
-                config.hostUrl,
-                uploadPath,
-                password,
-                parallelism: config.parallelConnections,
-                onUploadProgress: onUp,
-                cancelToken: cancelToken,
-              );
-              confirmed = res;
-              alreadyOnServer = already;
-            } else {
-              // Direct-from-source path: hash + upload in one call as before.
-              final (h, res, already) = await _uploader.uploadFile(
-                readPath,
-                config.hostUrl,
-                uploadPath,
-                password,
-                parallelism: config.parallelConnections,
-                onHashProgress: (done, total) {
-                  file.status = UploadFileStatus.hashing;
-                  file.uploadedBytes = done;
-                  _notify();
-                },
-                onUploadProgress: onUp,
-                cancelToken: cancelToken,
-              );
-              hashed = h;
-              confirmed = res;
-              alreadyOnServer = already;
-            }
-
-            file.sha512 = hashed.fileHash;
-            file.wark = confirmed.wark;
-            file.uploadedBytes = file.sizeBytes;
-            file.alreadyOnServer = alreadyOnServer;
-            file.status = UploadFileStatus.confirmed;
-
-            // Record the ACTUAL folder this file went to (mirrored sub-path
-            // under FB9) so the completion-screen delete re-verifies the right
-            // location, not the flat base path. (Review BLOCKER 1)
-            final uploadFolderUrl = '${config.hostUrl.trimRight()}/${_stripSlashes(uploadPath)}';
-            file.uploadFolderUrl = uploadFolderUrl;
-
-            // Write DB receipt — upload_confirmed=true since uploadFile() only
-            // returns successfully after the confirmation handshake passes.
-            final uploadUrl = '$uploadFolderUrl/${file.filename}';
-            receiptId = await _receiptRepo.insert(
-              CopypartyReceipt(
-                filename: file.filename,
-                localPath: file.localPath,
-                sizeBytes: file.sizeBytes,
-                sha512File: hashed.fileHash,
-                wark: confirmed.wark,
-                uploadTimestamp: DateTime.now().toUtc(),
-                copypartyUrl: uploadUrl,
-                uploadConfirmed: true,
-              ),
-            );
-            file.dbRecordWritten = true;
-
-            // FB11: the .cpreceipt sidecar file is redundant now that presence
-            // is verified live against the server; we no longer write it. The
-            // DB receipt (above) remains — Pending Cleanup needs it.
-          }
-
-          // ---- Immich native upload ----
-          if (file.needsImmich) {
-            file.status = UploadFileStatus.immichUploading;
-            file.uploadedBytes = 0;
-            file.transferStartMs ??= DateTime.now().millisecondsSinceEpoch;
-            _notify();
-
-            final result = await _uploadToImmich(file, cancelToken, staged?.path);
-            if (result.isSuccess) {
-              file.immichAssetId = result.remoteAssetId;
-              if (receiptId != null && result.remoteAssetId != null) {
-                await _receiptRepo.markImmichUploaded(receiptId, result.remoteAssetId!);
-              }
-            } else if (result.isCancelled || cancelToken.isCompleted) {
-              // Cancelled during the Immich upload → stop like a copyparty cancel.
-              throw const CopypartyCancelledException();
-            } else {
-              throw Exception(result.errorMessage ?? 'Immich upload failed');
-            }
-          }
-
-          // Auto-delete after BOTH backends are done (item 5): safeToDelete
-          // already requires the Immich asset id for Immich-native files, so a
-          // "both"/Immich file is only removed once it's confirmed in Immich —
-          // not just on copyparty. Runs for copyparty-only files too.
-          if (config.autoDeleteAfterVerify && file.safeToDelete && receiptId != null) {
-            // When we uploaded from a STAGED copy the source was read only once,
-            // so a transient read corruption would be self-consistent (its hash
-            // matches the corrupt bytes the server accepted). Before the
-            // IRREVERSIBLE source delete, re-read the source once and confirm it
-            // still matches what we uploaded. This restores the cross-check the
-            // direct (double-read) path gets for free. (data-integrity finding 2)
-            var safeToRemove = true;
-            if (staged != null) {
-              try {
-                final srcHash = await _wholeFileSha512(file.localPath);
-                safeToRemove = srcHash == file.sha512;
-                if (!safeToRemove) {
-                  _log.log(
-                    'AUTO-DELETE BLOCKED for ${file.filename}: source hash != uploaded hash '
-                    '(possible bad read) — keeping the source file',
-                  );
-                }
-              } catch (_) {
-                // Source unreadable (e.g. card pulled) → nothing to delete anyway.
-                safeToRemove = false;
-              }
-            }
-            if (safeToRemove) {
-              try {
-                await File(file.localPath).delete();
-                await _receiptRepo.markSourceDeleted(receiptId);
-              } catch (_) {}
-            }
-          }
-
-          // Freeze the transfer duration so "total · elapsed · avg" is stable in
-          // the UI (a file that never transferred — already on server — keeps
-          // both timestamps null and shows no timing). (batch: item 2)
-          if (file.transferStartMs != null && !file.alreadyOnServer) {
-            file.transferEndMs = DateTime.now().millisecondsSinceEpoch;
-          }
-          file.status = UploadFileStatus.receiptWritten;
-          // Fully confirmed on all needed backends → the local staged copy has
-          // done its job; reclaim the space. (Only on SUCCESS — an interrupted
-          // upload keeps its staged copy so it can resume without re-reading
-          // the source.) (batch: item 4)
-          if (staged != null) {
-            await _staging.discard(file.localPath);
-          }
-          state = state.copyWith(completedFiles: state.completedFiles + 1);
-        } on CopypartyCancelledException {
-          // User cancelled mid-file: leave it pending (not failed) so it can be
-          // resumed cleanly next run, and stop the loop. The staged copy (if any)
-          // is intentionally KEPT for a fast resume.
-          file.staging = false;
-          file.status = UploadFileStatus.pending;
-          file.uploadedBytes = 0;
+    try {
+      while (true) {
+        if (cancelToken.isCompleted) {
           cancelled = true;
-          _log.log('-- CANCELLED at ${file.filename}');
-          _notify();
           break;
-        } catch (e) {
-          file.staging = false;
-          file.status = UploadFileStatus.failed;
-          file.errorMessage = e.toString();
-          _log.log('!! FAILED ${file.filename}: $e');
-          _notify();
+        }
+        final sel = state.selectedPaths;
+        final candidates = <({UploadSet set, UploadFile file})>[];
+        for (final s in state.uploadSets) {
+          for (final f in s.files) {
+            if (sel != null && !sel.contains(f.localPath)) {
+              continue;
+            }
+            if (f.status != UploadFileStatus.pending) {
+              continue;
+            }
+            candidates.add((set: s, file: f));
+          }
+        }
+        if (candidates.isEmpty) {
+          break;
+        }
+        if (config.sortSmallestFirst) {
+          candidates.sort((a, b) => a.set.totalBytes.compareTo(b.set.totalBytes));
+        }
+        final set = candidates.first.set;
+        final file = candidates.first.file;
+        {
+          // FB9: when "create folders" is on, mirror the file's subfolder beneath
+          // the upload path, rooted at the set's OWN picked folder (so added
+          // folders mirror correctly, not against the first pick's root).
+          final uploadPath = createFolders
+              ? mirroredUploadPath(config.uploadPath, set.rootPath ?? state.directoryPath, file.localPath)
+              : config.uploadPath;
+          int? receiptId;
+          final fileSizeBytes = file.sizeBytes;
+          // Stage the file to local phone storage first (copy + hash in one USB
+          // read pass) when enabled — then upload from the fast local copy. Null
+          // means "read directly from the source" (staging off, or it failed /
+          // ran out of space → automatic fallback). (batch: item 4)
+          HashedFile? staged;
+          try {
+            if (useStaging && (file.needsCopyparty || file.needsImmich)) {
+              staged = await _acquireStaged(file, cancelToken);
+            }
+            final readPath = staged?.path ?? file.localPath;
+
+            // Now that the (foreground) copy of THIS file is done, start copying
+            // the NEXT file ahead in the background while this one uploads over
+            // the network — the USB is otherwise idle during the transfer.
+            if (useStaging) {
+              _maybePrefetchNext(cancelToken, file.localPath);
+            }
+
+            // ---- Copyparty upload ----
+            if (file.needsCopyparty) {
+              file.staging = false;
+              file.status = UploadFileStatus.hashing;
+              _notify();
+
+              void onUp(int done, int total) {
+                // POSTing chunks to copyparty — flip to `uploading` so the phase
+                // chip changes to "Copyparty". The bar fills 0→100% over upload.
+                file.status = UploadFileStatus.uploading;
+                file.transferStartMs ??= DateTime.now().millisecondsSinceEpoch;
+                final chunkProgress = total > 0 ? done / total : 0.0;
+                file.uploadedBytes = (fileSizeBytes * chunkProgress).round();
+                _notify();
+              }
+
+              final HashedFile hashed;
+              final HandshakeResult confirmed;
+              final bool alreadyOnServer;
+              if (staged != null) {
+                // Already hashed during staging — go straight to handshake/upload.
+                hashed = staged;
+                final (res, already) = await _uploader.uploadHashedFile(
+                  staged,
+                  config.hostUrl,
+                  uploadPath,
+                  password,
+                  parallelism: config.parallelConnections,
+                  onUploadProgress: onUp,
+                  cancelToken: cancelToken,
+                );
+                confirmed = res;
+                alreadyOnServer = already;
+              } else {
+                // Direct-from-source path: hash + upload in one call as before.
+                final (h, res, already) = await _uploader.uploadFile(
+                  readPath,
+                  config.hostUrl,
+                  uploadPath,
+                  password,
+                  parallelism: config.parallelConnections,
+                  onHashProgress: (done, total) {
+                    file.status = UploadFileStatus.hashing;
+                    file.uploadedBytes = done;
+                    _notify();
+                  },
+                  onUploadProgress: onUp,
+                  cancelToken: cancelToken,
+                );
+                hashed = h;
+                confirmed = res;
+                alreadyOnServer = already;
+              }
+
+              file.sha512 = hashed.fileHash;
+              file.wark = confirmed.wark;
+              file.uploadedBytes = file.sizeBytes;
+              file.alreadyOnServer = alreadyOnServer;
+              file.status = UploadFileStatus.confirmed;
+
+              // Record the ACTUAL folder this file went to (mirrored sub-path
+              // under FB9) so the completion-screen delete re-verifies the right
+              // location, not the flat base path. (Review BLOCKER 1)
+              final uploadFolderUrl = '${config.hostUrl.trimRight()}/${_stripSlashes(uploadPath)}';
+              file.uploadFolderUrl = uploadFolderUrl;
+
+              // Write DB receipt — upload_confirmed=true since uploadFile() only
+              // returns successfully after the confirmation handshake passes.
+              final uploadUrl = '$uploadFolderUrl/${file.filename}';
+              receiptId = await _receiptRepo.insert(
+                CopypartyReceipt(
+                  filename: file.filename,
+                  localPath: file.localPath,
+                  sizeBytes: file.sizeBytes,
+                  sha512File: hashed.fileHash,
+                  wark: confirmed.wark,
+                  uploadTimestamp: DateTime.now().toUtc(),
+                  copypartyUrl: uploadUrl,
+                  uploadConfirmed: true,
+                ),
+              );
+              file.dbRecordWritten = true;
+
+              // FB11: the .cpreceipt sidecar file is redundant now that presence
+              // is verified live against the server; we no longer write it. The
+              // DB receipt (above) remains — Pending Cleanup needs it.
+            }
+
+            // ---- Immich native upload ----
+            if (file.needsImmich) {
+              file.status = UploadFileStatus.immichUploading;
+              file.uploadedBytes = 0;
+              file.transferStartMs ??= DateTime.now().millisecondsSinceEpoch;
+              _notify();
+
+              final result = await _uploadToImmich(file, cancelToken, staged?.path);
+              if (result.isSuccess) {
+                file.immichAssetId = result.remoteAssetId;
+                if (receiptId != null && result.remoteAssetId != null) {
+                  await _receiptRepo.markImmichUploaded(receiptId, result.remoteAssetId!);
+                }
+              } else if (result.isCancelled || cancelToken.isCompleted) {
+                // Cancelled during the Immich upload → stop like a copyparty cancel.
+                throw const CopypartyCancelledException();
+              } else {
+                throw Exception(result.errorMessage ?? 'Immich upload failed');
+              }
+            }
+
+            // Auto-delete after BOTH backends are done (item 5): safeToDelete
+            // already requires the Immich asset id for Immich-native files, so a
+            // "both"/Immich file is only removed once it's confirmed in Immich —
+            // not just on copyparty. Runs for copyparty-only files too.
+            if (config.autoDeleteAfterVerify && file.safeToDelete && receiptId != null) {
+              // When we uploaded from a STAGED copy the source was read only once,
+              // so a transient read corruption would be self-consistent (its hash
+              // matches the corrupt bytes the server accepted). Before the
+              // IRREVERSIBLE source delete, re-read the source once and confirm it
+              // still matches what we uploaded. This restores the cross-check the
+              // direct (double-read) path gets for free. (data-integrity finding 2)
+              var safeToRemove = true;
+              if (staged != null) {
+                try {
+                  final srcHash = await _wholeFileSha512(file.localPath);
+                  safeToRemove = srcHash == file.sha512;
+                  if (!safeToRemove) {
+                    _log.log(
+                      'AUTO-DELETE BLOCKED for ${file.filename}: source hash != uploaded hash '
+                      '(possible bad read) — keeping the source file',
+                    );
+                  }
+                } catch (_) {
+                  // Source unreadable (e.g. card pulled) → nothing to delete anyway.
+                  safeToRemove = false;
+                }
+              }
+              if (safeToRemove) {
+                try {
+                  await File(file.localPath).delete();
+                  await _receiptRepo.markSourceDeleted(receiptId);
+                } catch (_) {}
+              }
+            }
+
+            // Freeze the transfer duration so "total · elapsed · avg" is stable in
+            // the UI (a file that never transferred — already on server — keeps
+            // both timestamps null and shows no timing). (batch: item 2)
+            if (file.transferStartMs != null && !file.alreadyOnServer) {
+              file.transferEndMs = DateTime.now().millisecondsSinceEpoch;
+            }
+            file.status = UploadFileStatus.receiptWritten;
+            // Fully confirmed on all needed backends → the local staged copy has
+            // done its job; reclaim the space. (Only on SUCCESS — an interrupted
+            // upload keeps its staged copy so it can resume without re-reading
+            // the source.) (batch: item 4)
+            if (staged != null) {
+              await _staging.discard(file.localPath);
+            }
+            state = state.copyWith(completedFiles: state.completedFiles + 1);
+          } on CopypartyCancelledException {
+            // User cancelled mid-file: leave it pending (not failed) so it can be
+            // resumed cleanly next run, and stop the loop. The staged copy (if any)
+            // is intentionally KEPT for a fast resume.
+            file.staging = false;
+            file.status = UploadFileStatus.pending;
+            file.uploadedBytes = 0;
+            cancelled = true;
+            _log.log('-- CANCELLED at ${file.filename}');
+            _notify();
+            break;
+          } catch (e) {
+            file.staging = false;
+            file.status = UploadFileStatus.failed;
+            file.errorMessage = e.toString();
+            _log.log('!! FAILED ${file.filename}: $e');
+            _notify();
+          }
         }
       }
-    }
-
-    // Settle any in-flight prefetch before returning. On cancel it holds the
-    // now-completed token, so it aborts within a chunk and self-deletes its
-    // partial; awaiting it here guarantees no detached writer survives into a
-    // subsequent resume (which would create a NEW token and could otherwise
-    // start a second writer for the same staged path). (review finding 2)
-    final pendingPrefetch = _prefetchFuture;
-    _prefetchPath = null;
-    _prefetchFuture = null;
-    if (pendingPrefetch != null) {
-      try {
-        await pendingPrefetch;
-      } catch (_) {}
-    }
-    _uploadCancelToken = null;
-    _log.log(
-      'IMPORT SESSION ${cancelled ? 'cancelled' : 'complete'}: '
-      '${state.completedFiles}/${state.totalFiles} files done',
-    );
-    // Only advance to the completion screen if we're still uploading — a
-    // concurrent reset() (e.g. the user left the page) must not be clobbered.
-    if (state.step == ImportSessionStep.uploading) {
-      state = state.copyWith(step: ImportSessionStep.complete, cancelled: cancelled);
+    } finally {
+      // Teardown ALWAYS runs (even on an unexpected throw) so _uploadRunning and
+      // the cancel token can't get stuck true → a wedged, unrestartable session.
+      // Because _uploadRunning gated entry, this invocation is the sole owner of
+      // the shared state here; no second loop can have started. (concurrency finding 1)
+      final pendingPrefetch = _prefetchFuture;
+      _prefetchPath = null;
+      _prefetchFuture = null;
+      if (pendingPrefetch != null) {
+        // On cancel the prefetch holds the now-completed token, so it aborts
+        // within a chunk and self-deletes its partial; awaiting it guarantees no
+        // detached writer survives into a later resume. (review finding 2)
+        try {
+          await pendingPrefetch;
+        } catch (_) {}
+      }
+      _uploadCancelToken = null;
+      _uploadRunning = false;
+      _log.log(
+        'IMPORT SESSION ${cancelled ? 'cancelled' : 'complete'}: '
+        '${state.completedFiles}/${state.totalFiles} files done',
+      );
+      // Only advance to the completion screen if we're still uploading — a
+      // concurrent reset() (e.g. the user left the page) must not be clobbered.
+      if (state.step == ImportSessionStep.uploading) {
+        state = state.copyWith(step: ImportSessionStep.complete, cancelled: cancelled);
+      }
     }
   }
 
@@ -716,9 +737,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     );
     _notify();
 
-    // If the loop isn't running, start it for the (merged) selection.
-    final running = _uploadCancelToken != null && !_uploadCancelToken!.isCompleted;
-    if (!running) {
+    // If a loop is already running it will pick up the newly-appended pending
+    // files from state on its next iteration; otherwise kick one off for the
+    // merged selection. Gated on _uploadRunning (not the cancel-token state) so
+    // it can't spawn a second loop during a teardown window. (concurrency finding 1)
+    if (!_uploadRunning) {
       await startUpload(selectedFilePaths: state.selectedPaths);
     }
   }
