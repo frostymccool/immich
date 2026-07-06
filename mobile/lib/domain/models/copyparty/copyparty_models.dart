@@ -35,6 +35,12 @@ class UploadFile {
   // upload path — the completion-screen delete must re-verify against THIS,
   // not config.uploadPath, or every mirrored upload looks "not present".
   String? uploadFolderUrl;
+  // Network-transfer timing (excludes hashing). Set in the upload loop when the
+  // first transfer tick lands and frozen when the file finishes, so the "total ·
+  // elapsed · avg" line is stable and survives widget recycling — it used to
+  // live in ephemeral card state and vanished when the list scrolled. (Batch: item 2)
+  int? transferStartMs;
+  int? transferEndMs;
 
   UploadFile({
     required this.localPath,
@@ -69,6 +75,12 @@ class UploadFile {
   bool get alreadyUploadedToImmich => existingReceipt?.immichAssetId != null;
   bool get copypartyConfirmed => sha512 != null && wark != null;
   bool get immichConfirmed => immichAssetId != null;
+
+  /// Frozen network-transfer duration (null until the file finishes transferring
+  /// or if it was already on the server and never transferred).
+  Duration? get transferElapsed => (transferStartMs != null && transferEndMs != null)
+      ? Duration(milliseconds: transferEndMs! - transferStartMs!)
+      : null;
 }
 
 class UploadSet {

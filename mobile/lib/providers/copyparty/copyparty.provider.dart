@@ -330,20 +330,21 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
               password,
               parallelism: config.parallelConnections,
               onHashProgress: (done, total) {
-                // Local hashing — NOT a network transfer. Keep the status on
-                // `hashing` so the card shows "Hashing" and hides "transferred".
+                // Local hashing — NOT a network transfer. Fill the WHOLE bar
+                // with hash progress (done/total), not a 0–20% slice, so the
+                // percentage is legible on large files. (batch: item 3)
                 file.status = UploadFileStatus.hashing;
-                if (total > 0) {
-                  file.uploadedBytes = (done * 0.2).round();
-                }
+                file.uploadedBytes = done;
                 _notify();
               },
               onUploadProgress: (done, total) {
                 // Now actually POSTing chunks to copyparty — flip to `uploading`
-                // so the phase chip changes from "Hashing" to "Copyparty".
+                // so the phase chip changes from "Hashing" to "Copyparty". The
+                // bar restarts at 0 and fills 0→100% over the chunk upload.
                 file.status = UploadFileStatus.uploading;
+                file.transferStartMs ??= DateTime.now().millisecondsSinceEpoch;
                 final chunkProgress = total > 0 ? done / total : 0.0;
-                file.uploadedBytes = (fileSizeBytes * (0.2 + 0.8 * chunkProgress)).round();
+                file.uploadedBytes = (fileSizeBytes * chunkProgress).round();
                 _notify();
               },
               cancelToken: cancelToken,
@@ -387,6 +388,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
           if (file.needsImmich) {
             file.status = UploadFileStatus.immichUploading;
             file.uploadedBytes = 0;
+            file.transferStartMs ??= DateTime.now().millisecondsSinceEpoch;
             _notify();
 
             final result = await _uploadToImmich(file, cancelToken);
@@ -414,6 +416,12 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             } catch (_) {}
           }
 
+          // Freeze the transfer duration so "total · elapsed · avg" is stable in
+          // the UI (a file that never transferred — already on server — keeps
+          // both timestamps null and shows no timing). (batch: item 2)
+          if (file.transferStartMs != null && !file.alreadyOnServer) {
+            file.transferEndMs = DateTime.now().millisecondsSinceEpoch;
+          }
           file.status = UploadFileStatus.receiptWritten;
           state = state.copyWith(completedFiles: state.completedFiles + 1);
         } on CopypartyCancelledException {

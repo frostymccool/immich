@@ -1445,12 +1445,30 @@ class _UploadProgressStep extends ConsumerWidget {
         )
         .length;
 
+    // item 1: the xx/yy top line counts upload OPERATIONS, not files — a file
+    // going to BOTH copyparty and Immich counts twice in the denominator, and
+    // xx ticks up as each backend confirms (never during hashing, since neither
+    // copypartyConfirmed nor immichConfirmed flips while hashing).
+    int opsTotal = 0;
+    int opsDone = 0;
+    for (final f in allFiles) {
+      if (f.needsCopyparty) {
+        opsTotal++;
+        if (f.copypartyConfirmed) {
+          opsDone++;
+        }
+      }
+      if (f.needsImmich) {
+        opsTotal++;
+        if (f.immichConfirmed) {
+          opsDone++;
+        }
+      }
+    }
+
     return Column(
       children: [
-        LinearProgressIndicator(
-          value: session.totalFiles > 0 ? session.completedFiles / session.totalFiles : null,
-          minHeight: 4,
-        ),
+        LinearProgressIndicator(value: opsTotal > 0 ? opsDone / opsTotal : null, minHeight: 4),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           child: Row(
@@ -1458,7 +1476,7 @@ class _UploadProgressStep extends ConsumerWidget {
               _SectionBadge(label: 'Uploading', count: activeCount, color: context.colorScheme.primary),
               const Spacer(),
               Text(
-                '${session.completedFiles} / ${session.totalFiles} files  '
+                '$opsDone / $opsTotal uploads  '
                 '${formatHumanReadableBytes(doneBytes, 1)} / '
                 '${formatHumanReadableBytes(totalBytes, 1)}',
                 style: context.textTheme.bodySmall?.copyWith(
@@ -1588,6 +1606,33 @@ class _ProgressSetSection extends StatelessWidget {
   }
 }
 
+/// "45s" under a minute, "m:ss" from a minute up.
+String _formatTransferDuration(Duration d) {
+  final total = d.inSeconds;
+  if (total < 60) {
+    return '${total}s';
+  }
+  return '${total ~/ 60}:${(total % 60).toString().padLeft(2, '0')}';
+}
+
+String _formatTransferSpeed(double bytesPerSec) {
+  final mib = bytesPerSec / (1024 * 1024);
+  return mib >= 1 ? '${mib.toStringAsFixed(1)} MiB/s' : '${(mib * 1024).round()} KiB/s';
+}
+
+/// "· 45s · avg 12.3 MiB/s" for a finished transfer, or null when the file never
+/// transferred (already on server) or timing wasn't captured. Read from the
+/// model so it's identical on the progress and completion screens. (item 2)
+String? _doneTimingSuffix(UploadFile f) {
+  final el = f.transferElapsed;
+  if (f.alreadyOnServer || el == null) {
+    return null;
+  }
+  final secs = el.inMilliseconds / 1000.0;
+  final avg = _formatTransferSpeed(secs > 0 ? f.sizeBytes / secs : 0);
+  return '${_formatTransferDuration(el)} · avg $avg';
+}
+
 class _ProgressFileCard extends StatefulWidget {
   final UploadFile file;
   const _ProgressFileCard({required this.file});
@@ -1601,9 +1646,6 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
   String _speed = '-- MiB/s';
   String _eta = '--:--';
   UploadFileStatus? _prevStatus;
-  DateTime? _transferStart; // first network-transfer tick (excludes hashing)
-  Duration? _finalElapsed; // frozen on completion
-  String? _finalAvg; // frozen average speed on completion
 
   // Copyparty chunk upload OR Immich upload — the network-transfer phases.
   static bool _isTransfer(UploadFileStatus? s) =>
@@ -1619,40 +1661,18 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
     // Reset the live speed meter at every phase boundary (hashing→copyparty,
     // copyparty→immich) because uploadedBytes restarts — otherwise the byte
     // counter going backwards produces a bogus reading. Hashing is never fed,
-    // so the speed reflects network transfer only (item 2).
+    // so the speed reflects network transfer only. The FROZEN elapsed/avg now
+    // live on the model (set in the upload loop), so they survive list
+    // recycling and no longer depend on this card observing every tick. (item 2)
     if (transferring && s != _prevStatus) {
       _speedCalc.reset();
     }
     if (transferring) {
-      _transferStart ??= DateTime.now();
       _speedCalc.update(f.uploadedBytes, f.sizeBytes);
       _speed = _speedCalc.speedAsString;
       _eta = _speedCalc.timeRemainingAsString;
     }
-
-    // Freeze the elapsed transfer time + average once the file is fully done
-    // (item 3). Files already on the server never transferred, so skip them.
-    final done = s == UploadFileStatus.receiptWritten || (s == UploadFileStatus.confirmed && !f.needsImmich);
-    if (done && _finalElapsed == null && _transferStart != null && !f.alreadyOnServer) {
-      _finalElapsed = DateTime.now().difference(_transferStart!);
-      final secs = _finalElapsed!.inMilliseconds / 1000.0;
-      _finalAvg = _formatSpeed(secs > 0 ? f.sizeBytes / secs : 0);
-    }
     _prevStatus = s;
-  }
-
-  /// "45s" under a minute, "m:ss" from a minute up.
-  static String _formatDuration(Duration d) {
-    final total = d.inSeconds;
-    if (total < 60) {
-      return '${total}s';
-    }
-    return '${total ~/ 60}:${(total % 60).toString().padLeft(2, '0')}';
-  }
-
-  static String _formatSpeed(double bytesPerSec) {
-    final mib = bytesPerSec / (1024 * 1024);
-    return mib >= 1 ? '${mib.toStringAsFixed(1)} MiB/s' : '${(mib * 1024).round()} KiB/s';
   }
 
   /// "22.3 / 27.9 MiB" (unit shown once when both share it), else "980 KiB / 27.9 MiB".
@@ -1763,14 +1783,16 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                         : isDone
                         ? (file.alreadyOnServer
                               ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · already on server (hash verified)'
-                              : _finalElapsed != null
-                              // total · elapsed · avg speed (item 3)
-                              ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · '
-                                    '${_formatDuration(_finalElapsed!)} · avg $_finalAvg'
+                              : _doneTimingSuffix(file) != null
+                              // total · elapsed · avg speed — read from the model (item 2)
+                              ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · ${_doneTimingSuffix(file)}'
                               : '${formatHumanReadableBytes(file.sizeBytes, 1)} · Done')
                         : isHashing
-                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · computing checksum…'
-                        // transferred / total · speed (item 1)
+                        // Hashing % on the full bar so progress is legible on
+                        // large files (item 3).
+                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · hashing '
+                              '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}%'
+                        // transferred / total · speed
                         : '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · $_speed',
                     style: context.textTheme.labelLarge?.copyWith(
                       color: isFailed
@@ -2409,14 +2431,18 @@ class _CompletionFileTile extends StatelessWidget {
                   builder: (_) {
                     final immichGood = !file.needsImmich || imOk;
                     final good = !failed && cpOk && immichGood;
+                    // item 2: every uploaded block shows time + average, read
+                    // from the model so it's present even after list recycling.
+                    final timing = _doneTimingSuffix(file);
+                    final timingSuffix = (good && timing != null) ? ' · $timing' : '';
                     final text = file.alreadyOnServer
                         ? 'already on server · hash verified'
                         : failed
                         ? 'not confirmed'
                         : cpOk
                         ? (file.needsImmich
-                              ? (imOk ? 'copyparty ✓ · Immich ✓' : 'copyparty ✓ · Immich missing')
-                              : 'copyparty ✓ (hash verified)')
+                              ? (imOk ? 'copyparty ✓ · Immich ✓$timingSuffix' : 'copyparty ✓ · Immich missing')
+                              : 'copyparty ✓ (hash verified)$timingSuffix')
                         : 'not confirmed';
                     final folder = _folderDisplay(file.uploadFolderUrl);
                     return Column(
