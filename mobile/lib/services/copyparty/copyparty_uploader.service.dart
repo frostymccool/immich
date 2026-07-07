@@ -145,7 +145,11 @@ class CopypartyUploaderService {
         onProgress?.call(bytesRead, fileSize);
       }
     } finally {
-      await handle.close();
+      // close() itself throws on a dead mount (USB unplugged mid-read) — never
+      // let that replace the real error or escape the finally.
+      try {
+        await handle.close();
+      } catch (_) {}
     }
 
     fileHasher.close();
@@ -978,8 +982,15 @@ class CopypartyUploaderService {
       await writeHandle.flush();
       ok = true;
     } finally {
-      await readHandle.close();
-      await writeHandle.close();
+      // A dead mount (USB unplugged mid-copy) makes readHandle.close() itself
+      // throw — guard both closes so the write handle still closes and the
+      // partial-file cleanup below still runs.
+      try {
+        await readHandle.close();
+      } catch (_) {}
+      try {
+        await writeHandle.close();
+      } catch (_) {}
       if (!ok) {
         // Leave nothing usable behind on failure/cancel — the caller treats a
         // missing marker as "not staged", but delete the bytes too to reclaim space.
@@ -1099,7 +1110,9 @@ class CopypartyUploaderService {
       }
       return buf.takeBytes();
     } finally {
-      await handle.close();
+      try {
+        await handle.close();
+      } catch (_) {}
     }
   }
 }

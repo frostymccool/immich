@@ -408,6 +408,24 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             // stops showing "Copying"/"Copied" regardless of which backend runs next.
             file.staging = false;
             file.stagedReady = false;
+
+            // Card removed? A file with a complete staged copy continues from the
+            // phone; a file WITHOUT one fails fast with a clear message instead of
+            // letting a dead-mount read throw deep inside the upload pipeline —
+            // and the loop moves on to the remaining (staged) files. (unmount bug)
+            if (staged == null) {
+              var sourceAvailable = false;
+              try {
+                sourceAvailable = await File(file.localPath).exists();
+              } catch (_) {}
+              if (!sourceAvailable) {
+                file.status = UploadFileStatus.failed;
+                file.errorMessage = 'Source unavailable (memory card removed?) — reconnect the card and retry';
+                _log.log('!! SOURCE GONE ${file.filename}: no staged copy, skipping');
+                _notify();
+                continue;
+              }
+            }
             final readPath = staged?.path ?? file.localPath;
 
             // Keep the read-ahead cache filler running so the following files
