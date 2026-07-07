@@ -932,6 +932,12 @@ class CopypartyUploaderService {
     final writeSw = Stopwatch();
     try {
       int bytesRead = 0;
+      // Force a real fsync periodically so a multi-GB copy doesn't leave GBs of
+      // dirty pages sitting in RAM waiting for the single flush at the end — on a
+      // big import that dirty-page backlog adds to system memory pressure (the
+      // crash also killed the VPN = system-wide OOM). (crash mitigation)
+      int sinceFlush = 0;
+      const flushEvery = 64 * 1024 * 1024;
       while (bytesRead < fileSize) {
         if (cancelToken?.isCompleted ?? false) {
           throw const CopypartyCancelledException();
@@ -957,6 +963,11 @@ class CopypartyUploaderService {
         }
         writeSw.start();
         await writeHandle.writeFrom(chunkBytes);
+        sinceFlush += chunkBytes.length;
+        if (sinceFlush >= flushEvery) {
+          await writeHandle.flush();
+          sinceFlush = 0;
+        }
         writeSw.stop();
         hashSw.start();
         chunkHashes.add(_chunkId(chunkBytes));

@@ -385,6 +385,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         // Mark it as the loop's current file so the read-ahead filler excludes
         // it (concurrency finding 2).
         _uploadingPath = file.localPath;
+        _logMemory('start ${file.filename}');
         {
           // FB9: when "create folders" is on, mirror the file's subfolder beneath
           // the upload path, rooted at the set's OWN picked folder (so added
@@ -659,6 +660,20 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     }
   }
 
+  /// Logs the app's resident memory (RSS). A silent crash that also kills other
+  /// apps (e.g. the VPN) is a system-wide OOM; this shows whether OUR process is
+  /// the one growing (a leak) or staying flat (pressure from elsewhere / disk
+  /// dirty pages). Cheap — safe to call per file. (crash instrumentation)
+  void _logMemory(String tag) {
+    try {
+      final rssMib = (ProcessInfo.currentRss / (1024 * 1024)).round();
+      final cacheMib = _lastCacheBytes ~/ (1024 * 1024);
+      _log.log('MEM $tag  rss=${rssMib}MiB  cacheOnDisk≈${cacheMib}MiB');
+    } catch (_) {}
+  }
+
+  int _lastCacheBytes = 0;
+
   /// Returns a local staged [HashedFile] for [file], or null to upload directly
   /// from the source (staging off / failed / out of space → fallback). Shares
   /// the in-flight-staging dedup so if the read-ahead filler is already copying
@@ -688,8 +703,33 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     return fut;
   }
 
-  Future<HashedFile?> _doStageLocked(UploadFile file, Completer<void> cancelToken) {
-    // Serialise the card: chain behind whatever copy is currently running.
+  Future<HashedFile?> _doStageLocked(UploadFile file, Completer<void> cancelToken) async {
+    if (cancelToken.isCompleted) {
+      return null;
+    }
+    // FAST PATH — reuse an existing valid cache copy WITHOUT taking the card
+    // lock. Reading the marker is a quick local check that never touches the
+    // card, so an already-staged file uploads immediately instead of queueing
+    // behind the read-ahead filler's in-flight copy. (fixes "uploads waiting for
+    // a copy to complete" — the card lock previously serialised even cache hits.)
+    try {
+      final existing = await _staging.findValidStaged(file.localPath);
+      if (existing != null) {
+        file.staging = false;
+        file.stagedReady = true;
+        _notify();
+        return existing;
+      }
+    } catch (_) {}
+    if (cancelToken.isCompleted) {
+      return null;
+    }
+    // SLOW PATH — an actual card read. Serialise it behind any other in-flight
+    // copy so only ONE card read happens at a time (the card is serial).
+    return _copyFromCardLocked(file, cancelToken);
+  }
+
+  Future<HashedFile?> _copyFromCardLocked(UploadFile file, Completer<void> cancelToken) {
     final prev = _stageLock;
     final done = Completer<void>();
     _stageLock = done.future;
@@ -702,16 +742,6 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       try {
         if (cancelToken.isCompleted) {
           return null;
-        }
-        // Reuse an existing valid cache copy (re-validated against the CURRENT
-        // source size+mtime) — this is what makes a copy survive an app restart
-        // and a stop/resume without re-reading the card. (review finding 1)
-        final existing = await _staging.findValidStaged(file.localPath);
-        if (existing != null) {
-          file.staging = false;
-          file.stagedReady = true;
-          _notify();
-          return existing;
         }
         final hashed = await _staging.stage(
           file.localPath,
@@ -813,6 +843,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       // bigger than the whole cache still stages one-at-a-time; otherwise stop
       // and wait for an upload to discard and free space (which restarts us).
       final used = await _staging.currentCacheBytes();
+      _lastCacheBytes = used;
       if (cancelToken.isCompleted) {
         return;
       }
