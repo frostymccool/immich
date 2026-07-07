@@ -45,6 +45,10 @@ class UploadFile {
   // phone storage before hashing/upload, so the card can show "Copying" instead
   // of "Hashing". (batch: item 4)
   bool staging;
+  // Transient: the copy-ahead finished and the file is fully staged (copied AND
+  // hashed — the hash is computed during the copy) and just waiting for its
+  // upload turn. Shown as "Copied", not a stuck "Copying 100%". (feedback)
+  bool stagedReady;
 
   UploadFile({
     required this.localPath,
@@ -66,6 +70,7 @@ class UploadFile {
     this.alreadyOnServer = false,
     this.verification,
     this.staging = false,
+    this.stagedReady = false,
   }) : destination = destination ?? (isNativeImmichFile ? UploadDestination.both : UploadDestination.copypartyOnly);
 
   double get progress => sizeBytes > 0 ? uploadedBytes / sizeBytes : 0.0;

@@ -1710,6 +1710,10 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
     if (file.staging) {
       return _chip(context, 'Copying', Icons.phone_android_rounded, context.colorScheme.secondary);
     }
+    // Copy-ahead finished (copied AND hashed) — waiting for its upload turn.
+    if (file.stagedReady) {
+      return _chip(context, 'Copied', Icons.phonelink_ring_rounded, context.colorScheme.tertiary);
+    }
     final (String label, IconData icon, Color color) = switch (file.status) {
       UploadFileStatus.hashing => ('Hashing', Icons.tag_rounded, context.colorScheme.onSurfaceVariant),
       UploadFileStatus.handshaking ||
@@ -1757,9 +1761,11 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
     // `pending` (a prefetched file copies ahead but must stay pickable by the
     // loop), so it's driven by the transient flag, not the status.
     final isCopying = file.staging;
+    // Copy-ahead finished (copied + hashed), waiting for its upload turn.
+    final isCopied = file.stagedReady && !isCopying;
     // Hashing is a LOCAL checksum pass, not a network transfer — don't show
     // "transferred / MiB/s" for it (item 1).
-    final isHashing = !isCopying && file.status == UploadFileStatus.hashing;
+    final isHashing = !isCopying && !isCopied && file.status == UploadFileStatus.hashing;
 
     final cardColor = isFailed
         ? context.colorScheme.errorContainer
@@ -1820,6 +1826,9 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                         // bar so a large file being staged isn't a frozen 0%.
                         ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · copying to phone '
                               '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}%'
+                        : isCopied
+                        // Fully staged, waiting for its upload turn.
+                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · copied to phone · waiting to upload'
                         : isHashing
                         // Hashing % on the full bar so progress is legible on
                         // large files (item 3).
@@ -1857,6 +1866,9 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                   ? Icon(Icons.error_rounded, color: context.colorScheme.error, size: 28)
                   : isDone
                   ? const Icon(Icons.check_circle_rounded, color: Colors.green, size: 28)
+                  : isCopied
+                  // Copied to phone, waiting its turn — a ready check, not "100%".
+                  ? Icon(Icons.phonelink_ring_rounded, color: context.colorScheme.tertiary, size: 26)
                   : Column(
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.end,

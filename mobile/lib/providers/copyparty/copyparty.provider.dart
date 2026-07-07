@@ -373,9 +373,10 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             if (useStaging && (file.needsCopyparty || file.needsImmich)) {
               staged = await _acquireStaged(file, cancelToken);
             }
-            // Copy phase is over for THIS file — clear the flag so the card
-            // stops showing "Copying" regardless of which backend runs next.
+            // Copy phase is over for THIS file — clear the flags so the card
+            // stops showing "Copying"/"Copied" regardless of which backend runs next.
             file.staging = false;
+            file.stagedReady = false;
             final readPath = staged?.path ?? file.localPath;
 
             // Now that the (foreground) copy of THIS file is done, start copying
@@ -687,9 +688,13 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       try {
         final existing = await _staging.findValidStaged(next.localPath);
         if (existing != null) {
+          // Already staged from a prior run — mark ready immediately.
+          next.staging = false;
+          next.stagedReady = true;
+          _notify();
           return existing;
         }
-        return await _staging.stage(
+        final hashed = await _staging.stage(
           next.localPath,
           cancelToken: cancelToken,
           // Surface the copy-ahead so the file being prefetched shows
@@ -699,12 +704,21 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
           // only the transient `staging` flag drives the card. (feedback)
           onProgress: (done, total) {
             next.staging = true;
+            next.stagedReady = false;
             next.uploadedBytes = done;
             _notify();
           },
         );
+        // Copy AND hash are done (hashing happens during the copy) — flip from
+        // "Copying" to "Copied" so it doesn't sit at a stuck "Copying 100%"
+        // until its upload turn arrives. (feedback)
+        next.staging = false;
+        next.stagedReady = true;
+        _notify();
+        return hashed;
       } catch (_) {
         next.staging = false;
+        next.stagedReady = false;
         next.uploadedBytes = 0;
         _notify();
         return null;
