@@ -225,6 +225,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   final Map<String, Future<HashedFile?>> _inFlightStaging = {};
   Future<void>? _stageLock;
   Future<void>? _cacheFillFuture;
+  // The file the upload loop is currently handling. Excluded from the read-ahead
+  // filler so it can't re-stage the exact file the loop is uploading (or reading
+  // direct on the staging-failed fallback) → no concurrent same-file card read.
+  // (concurrency finding 2)
+  String? _uploadingPath;
 
   /// Completed when the user cancels the in-progress upload. The uploader
   /// races its in-flight chunk POST against this, and the per-file loop checks
@@ -367,6 +372,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         }
         final set = candidates.first.set;
         final file = candidates.first.file;
+        // Mark it as the loop's current file so the read-ahead filler excludes
+        // it (concurrency finding 2).
+        _uploadingPath = file.localPath;
         {
           // FB9: when "create folders" is on, mirror the file's subfolder beneath
           // the upload path, rooted at the set's OWN picked folder (so added
@@ -592,6 +600,13 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       // with the app. Log it AND force it to disk so a crash leaves a trace.
       _log.log('!!!! UPLOAD LOOP CRASHED: $e\n$st');
       cancelled = true;
+      // Complete the token so the read-ahead filler and every in-flight copy
+      // (which loop on `!cancelToken.isCompleted`) stop promptly — otherwise
+      // teardown would block draining the whole cache and a filler could outlive
+      // this dead loop into the next resume. (concurrency finding 1)
+      if (!cancelToken.isCompleted) {
+        cancelToken.complete();
+      }
       try {
         await _log.flush();
       } catch (_) {}
@@ -618,6 +633,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       }
       _uploadCancelToken = null;
       _uploadRunning = false;
+      _uploadingPath = null;
       _log.log(
         'IMPORT SESSION ${cancelled ? 'cancelled' : 'complete'}: '
         '${state.completedFiles}/${state.totalFiles} files done',
@@ -748,21 +764,17 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       final budget = config.cacheSizeMb * 1024 * 1024;
       final sel = state.selectedPaths;
 
-      // Current cache usage (in-memory): files already copied but not yet
-      // uploaded+discarded. Also pick the next file to read ahead, in upload
-      // order (smallest-first honoured), skipping ones already staged/in-flight.
-      int used = 0;
+      // Pick the next file to read ahead, in upload order (smallest-first
+      // honoured), skipping ones already staged/in-flight and the file the
+      // upload loop is currently handling (concurrency finding 2).
       final candidates = <UploadFile>[];
       final owner = <UploadFile, UploadSet>{};
       for (final s in state.uploadSets) {
         for (final f in s.files) {
-          if (f.stagedReady) {
-            used += f.sizeBytes;
-          }
           if (f.status != UploadFileStatus.pending || f.stagedReady) {
             continue;
           }
-          if (_inFlightStaging.containsKey(f.localPath)) {
+          if (f.localPath == _uploadingPath || _inFlightStaging.containsKey(f.localPath)) {
             continue;
           }
           if (sel != null && !sel.contains(f.localPath)) {
@@ -780,9 +792,17 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       }
       final next = candidates.first;
 
-      // Budget: always allow at least one file (used==0) so a single file bigger
-      // than the whole cache still gets staged one-at-a-time; otherwise stop and
-      // wait for an upload to free space (a later discard restarts the filler).
+      // Budget against the ACTUAL bytes on disk (data-integrity + concurrency
+      // finding 3): the in-memory stagedReady tally under-counted the file
+      // currently uploading (its copy is still on disk) and in-flight partials,
+      // letting the cache overshoot the cap. currentCacheBytes() sums the real
+      // staging dir. Always allow at least one file (used==0) so a single file
+      // bigger than the whole cache still stages one-at-a-time; otherwise stop
+      // and wait for an upload to discard and free space (which restarts us).
+      final used = await _staging.currentCacheBytes();
+      if (cancelToken.isCompleted) {
+        return;
+      }
       if (used > 0 && used + next.sizeBytes > budget) {
         return;
       }

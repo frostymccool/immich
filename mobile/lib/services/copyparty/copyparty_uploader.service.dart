@@ -591,8 +591,22 @@ class CopypartyUploaderService {
       '(parallelism=$parallelism)',
     );
 
+    // Cap concurrency by a MEMORY budget, not just the configured count. Each
+    // in-flight chunk is held ~twice (read buffer + the http bodyBytes copy),
+    // and chunk size grows with file size (up to ~32 MiB for multi-GB files), so
+    // `parallelism × 2 × chunkSize` can hit ~256 MiB and get the app OOM-killed
+    // on a large import. Bound the concurrent chunk bytes to ~128 MiB. (crash A1)
+    const memBudgetBytes = 128 * 1024 * 1024;
+    final memCap = (memBudgetBytes ~/ (2 * file.chunkSizeBytes)).clamp(1, parallelism);
+    final effParallelism = memCap < parallelism ? memCap : parallelism;
+    if (effParallelism != parallelism) {
+      _log?.log(
+        '    capping parallelism $parallelism → $effParallelism (chunk ${file.chunkSizeBytes ~/ (1024 * 1024)} MiB, mem budget)',
+      );
+    }
+
     int done = 0;
-    final semaphore = _Semaphore(parallelism);
+    final semaphore = _Semaphore(effParallelism);
 
     final futures = neededChunkIndices.map((chunkIdx) async {
       await semaphore.acquire();

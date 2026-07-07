@@ -29,6 +29,8 @@ class CopypartyLogger {
   // diagnose from. Without this the buffered tail is lost on a hard kill.
   int _sinceFlush = 0;
   static const int _flushEvery = 50;
+  // Cap the on-disk log; past this it's rewritten from the in-memory tail.
+  static const int _maxFileBytes = 4 * 1024 * 1024;
 
   /// In-memory copy of the log (most recent session(s)). Useful for showing
   /// the tail in the UI without reading the file back.
@@ -73,6 +75,14 @@ class CopypartyLogger {
     _writeChain = _writeChain.then((_) async {
       try {
         final f = await _resolveFile();
+        // Rotate: the log is append-only, and a huge import (10⁴–10⁵ chunks × a
+        // few lines each) would otherwise grow the file to hundreds of MB and
+        // add to disk pressure. When it exceeds the cap, rewrite it from the
+        // bounded in-memory tail (≤5000 lines) instead of appending. (crash A3)
+        if (doFlush && await f.exists() && await f.length() > _maxFileBytes) {
+          await f.writeAsString('${_memory.join('\n')}\n', flush: true);
+          return;
+        }
         await f.writeAsString('$line\n', mode: FileMode.append, flush: doFlush);
       } catch (_) {
         // Never let logging failures break an upload.
