@@ -22,6 +22,7 @@ import 'package:immich_mobile/services/copyparty/copyparty_staging.service.dart'
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 const _copypartyPasswordKey = 'copyparty_password';
 
@@ -309,6 +310,15 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       return;
     }
     _uploadRunning = true;
+
+    // Keep the device awake for the whole upload. Without this, a long import
+    // (multi-GB files over slow links = many minutes) gets the screen-off doze /
+    // low-memory killer, and Android silently kills the in-app upload loop
+    // mid-transfer — the exact "crashed, no error" the diagnostic log showed
+    // (log ends mid-chunk, no Dart error). Mirrors the standard backup page.
+    try {
+      await WakelockPlus.enable();
+    } catch (_) {}
 
     final config = _ref.read(appConfigProvider).copyparty;
     // Q3: folder recreation is now a persistent setting, not a per-import flag.
@@ -634,6 +644,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       _uploadCancelToken = null;
       _uploadRunning = false;
       _uploadingPath = null;
+      try {
+        await WakelockPlus.disable();
+      } catch (_) {}
       _log.log(
         'IMPORT SESSION ${cancelled ? 'cancelled' : 'complete'}: '
         '${state.completedFiles}/${state.totalFiles} files done',
