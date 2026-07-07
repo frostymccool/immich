@@ -909,6 +909,13 @@ class CopypartyUploaderService {
     await dest.parent.create(recursive: true);
     final writeHandle = await dest.open(mode: FileMode.writeOnly);
     var ok = false;
+    // Measure where the copy wall-clock actually goes: USB read vs hashing vs
+    // local write. These run in series per chunk, so the sum ≈ total copy time,
+    // and the split tells us whether hashing is throttling the USB drain (→ worth
+    // decoupling to a pure copy) or the USB read itself is the floor. (feedback)
+    final readSw = Stopwatch();
+    final hashSw = Stopwatch();
+    final writeSw = Stopwatch();
     try {
       int bytesRead = 0;
       while (bytesRead < fileSize) {
@@ -919,19 +926,27 @@ class CopypartyUploaderService {
         final chunkBuf = BytesBuilder(copy: false);
         while (chunkBuf.length < chunkExpected) {
           final toRead = chunkExpected - chunkBuf.length;
+          readSw.start();
           final slice = await readHandle.read(toRead);
+          readSw.stop();
           if (slice.isEmpty) {
             break;
           }
           chunkBuf.add(slice);
+          hashSw.start();
           fileHasher.add(slice);
+          hashSw.stop();
         }
         final chunkBytes = chunkBuf.takeBytes();
         if (chunkBytes.isEmpty) {
           break;
         }
+        writeSw.start();
         await writeHandle.writeFrom(chunkBytes);
+        writeSw.stop();
+        hashSw.start();
         chunkHashes.add(_chunkId(chunkBytes));
+        hashSw.stop();
         bytesRead += chunkBytes.length;
         onProgress?.call(bytesRead, fileSize);
       }
@@ -965,9 +980,16 @@ class CopypartyUploaderService {
     final fileHash = fileSink.value!.toString();
     final stat = await source.stat();
 
+    String mbps(int bytes, int ms) => ms <= 0 ? '∞' : (bytes / (ms / 1000) / (1024 * 1024)).toStringAsFixed(1);
+    final rd = readSw.elapsedMilliseconds;
+    final hs = hashSw.elapsedMilliseconds;
+    final wr = writeSw.elapsedMilliseconds;
     _log?.log(
       'staged: ${sourcePath.split('/').last}  size=$fileSize  '
-      'chunkSize=$chunkSize  chunks=${chunkHashes.length}  → ${stagedPath.split('/').last}',
+      'chunks=${chunkHashes.length}  → ${stagedPath.split('/').last}\n'
+      '    usbRead ${mbps(fileSize, rd)} MB/s (${rd}ms) · '
+      'hash ${mbps(fileSize, hs)} MB/s (${hs}ms) · '
+      'write ${mbps(fileSize, wr)} MB/s (${wr}ms) · total ${rd + hs + wr}ms',
     );
 
     return HashedFile(
