@@ -164,6 +164,34 @@ class CopypartyStagingService {
     return hashed;
   }
 
+  /// Total bytes the cache currently holds — the sum of staged copy sizes
+  /// (markers/temp files excluded). Used to bound read-ahead to the configured
+  /// cache budget. (cache-size feature)
+  Future<int> currentCacheBytes() async {
+    try {
+      final dir = await _dir();
+      if (!await dir.exists()) {
+        return 0;
+      }
+      int total = 0;
+      await for (final entity in dir.list()) {
+        if (entity is! File) {
+          continue;
+        }
+        final path = entity.path;
+        if (path.endsWith('.stagemeta') || path.endsWith('.stagemeta.tmp')) {
+          continue;
+        }
+        try {
+          total += await entity.length();
+        } catch (_) {}
+      }
+      return total;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   /// Deletes the staged copy + marker for a source path (after it is fully
   /// confirmed on all backends, or when discarding a stale copy).
   Future<void> discard(String sourcePath) async {

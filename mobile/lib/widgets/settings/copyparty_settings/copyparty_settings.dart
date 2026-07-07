@@ -41,6 +41,7 @@ class CopypartySettings extends ConsumerWidget {
           const _SortSmallestFirstTile(),
           const _RecreateFolderStructureTile(),
           const _StageToLocalTile(),
+          const _CacheSizeSlider(),
           const _AutoDeleteTile(),
           const Divider(),
           const SettingGroupTitle(title: 'File Matching', icon: Icons.link_rounded),
@@ -394,6 +395,55 @@ class _StageToLocalTile extends ConsumerWidget {
           value: value,
           onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyStageToLocalBeforeUpload, v),
         ),
+      ),
+    );
+  }
+}
+
+class _CacheSizeSlider extends ConsumerWidget {
+  const _CacheSizeSlider();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final stagingOn = ref.watch(appConfigProvider.select((c) => c.copyparty.stageToLocalBeforeUpload));
+    if (!stagingOn) {
+      return const SizedBox.shrink();
+    }
+    final mb = ref.watch(appConfigProvider.select((c) => c.copyparty.cacheSizeMb));
+    // Slider works in whole GiB (1–32); stored as MiB.
+    final gib = (mb / 1024).clamp(1, 32).round();
+    return Padding(
+      padding: const EdgeInsets.only(left: 8.0, right: 8.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Phone cache size', style: context.textTheme.bodyLarge),
+                Text('$gib GiB', style: context.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Text(
+              'How much phone storage the card-copy cache may use to read ahead. '
+              'Bigger = more files copied in advance so uploads never wait on the card.',
+              style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.onSurfaceVariant),
+            ),
+          ),
+          Slider(
+            value: gib.toDouble(),
+            min: 1,
+            max: 32,
+            divisions: 31,
+            label: '$gib GiB',
+            onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyCacheSizeMb, (v.round() * 1024)),
+          ),
+        ],
       ),
     );
   }

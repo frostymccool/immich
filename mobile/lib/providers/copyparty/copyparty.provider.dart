@@ -212,12 +212,19 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   ImportSessionNotifier(this._uploader, this._receiptRepo, this._immichUploadRepo, this._ref)
     : super(const ImportSessionState());
 
-  /// Prefetch of the NEXT file's local staged copy, kicked off while the current
-  /// file uploads (decision: stage one ahead). Keyed by source path so the loop
-  /// can await it if it turns out to be the file it picks next, or discard it if
-  /// the queue changed. (batch: item 4)
-  String? _prefetchPath;
-  Future<HashedFile?>? _prefetchFuture;
+  /// Cache read-ahead (cache-size feature). Files are copied from the card into
+  /// the phone cache ahead of the upload loop, up to the configured cache
+  /// budget, so uploads never wait on the slow card.
+  ///
+  /// - `_inFlightStaging` dedups by source path so the upload loop and the
+  ///   read-ahead filler never copy the same file twice (they share one future).
+  /// - `_stageLock` serialises the card so only ONE file is ever copied at a
+  ///   time (the card is a serial device — two concurrent reads would thrash it).
+  /// - `_cacheFillFuture` is the single read-ahead loop; it exits when the cache
+  ///   is full or nothing is left to stage, and is restarted after a discard.
+  final Map<String, Future<HashedFile?>> _inFlightStaging = {};
+  Future<void>? _stageLock;
+  Future<void>? _cacheFillFuture;
 
   /// Completed when the user cancels the in-progress upload. The uploader
   /// races its in-flight chunk POST against this, and the per-file loop checks
@@ -270,6 +277,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
           file.existingReceipt = await _receiptRepo.findByLocalPath(file.localPath);
         }
       }
+
+      // A file already copied into the cache (from before the app was closed, or
+      // a prior/aborted run) is marked "Copied" so a reopened import reflects the
+      // cache instead of showing 0%. (cache-detect feature)
+      await _detectCachedFiles(sets);
 
       // FB3: do NOT block the picker on a server listing here — show the file
       // list immediately and let the options step verify status lazily.
@@ -379,11 +391,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             file.stagedReady = false;
             final readPath = staged?.path ?? file.localPath;
 
-            // Now that the (foreground) copy of THIS file is done, start copying
-            // the NEXT file ahead in the background while this one uploads over
-            // the network — the USB is otherwise idle during the transfer.
+            // Keep the read-ahead cache filler running so the following files
+            // copy from the card into the cache (up to the cache budget) while
+            // this one uploads over the network. (cache-size feature)
             if (useStaging) {
-              _maybePrefetchNext(cancelToken, file.localPath);
+              _startCacheFiller(cancelToken);
             }
 
             // ---- Copyparty upload ----
@@ -546,6 +558,12 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             // the source.) (batch: item 4)
             if (staged != null) {
               await _staging.discard(file.localPath);
+              file.stagedReady = false;
+              // Space freed → let the read-ahead filler resume if it had paused
+              // because the cache was full. (cache-size feature)
+              if (useStaging) {
+                _startCacheFiller(cancelToken);
+              }
             }
             state = state.copyWith(completedFiles: state.completedFiles + 1);
           } on CopypartyCancelledException {
@@ -573,15 +591,20 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       // the cancel token can't get stuck true → a wedged, unrestartable session.
       // Because _uploadRunning gated entry, this invocation is the sole owner of
       // the shared state here; no second loop can have started. (concurrency finding 1)
-      final pendingPrefetch = _prefetchFuture;
-      _prefetchPath = null;
-      _prefetchFuture = null;
-      if (pendingPrefetch != null) {
-        // On cancel the prefetch holds the now-completed token, so it aborts
-        // within a chunk and self-deletes its partial; awaiting it guarantees no
-        // detached writer survives into a later resume. (review finding 2)
+      //
+      // Settle the read-ahead cache filler and every in-flight card copy before
+      // returning. On cancel each copy holds the now-completed token, aborts
+      // within a chunk and self-deletes its partial, so awaiting them guarantees
+      // no detached writer survives into a later resume. (review finding 2)
+      final filler = _cacheFillFuture;
+      if (filler != null) {
         try {
-          await pendingPrefetch;
+          await filler;
+        } catch (_) {}
+      }
+      for (final copy in List<Future<HashedFile?>>.of(_inFlightStaging.values)) {
+        try {
+          await copy;
         } catch (_) {}
       }
       _uploadCancelToken = null;
@@ -599,131 +622,184 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   }
 
   /// Returns a local staged [HashedFile] for [file], or null to upload directly
-  /// from the source (staging off / failed / out of space → fallback). Order:
-  /// consume a matching prefetch → reuse an existing valid staged copy (resume)
-  /// → stage now with on-card progress. (batch: item 4)
-  Future<HashedFile?> _acquireStaged(UploadFile file, Completer<void> cancelToken) async {
-    // If a prefetch for this file is in flight, await it so its staged copy +
-    // marker are fully written — but do NOT trust its result directly. We fall
-    // through to findValidStaged, which RE-VALIDATES the staged copy against the
-    // CURRENT source (size + mtime). The prefetch copied the bytes minutes ago
-    // (during the previous file's upload); the source could have changed since,
-    // and only findValidStaged's guard catches that. (review finding 1)
-    if (_prefetchPath == file.localPath && _prefetchFuture != null) {
-      final fut = _prefetchFuture!;
-      _prefetchPath = null;
-      _prefetchFuture = null;
-      try {
-        await fut;
-      } catch (_) {}
-    }
-    try {
-      final existing = await _staging.findValidStaged(file.localPath);
-      if (existing != null) {
-        return existing;
-      }
-    } catch (_) {}
-    return _stageNow(file, cancelToken);
+  /// from the source (staging off / failed / out of space → fallback). Shares
+  /// the in-flight-staging dedup so if the read-ahead filler is already copying
+  /// this file, the loop awaits the SAME copy instead of starting a second one.
+  Future<HashedFile?> _acquireStaged(UploadFile file, Completer<void> cancelToken) {
+    return _ensureStaged(file, cancelToken);
   }
 
-  Future<HashedFile?> _stageNow(UploadFile file, Completer<void> cancelToken) async {
-    try {
-      file.staging = true;
-      file.status = UploadFileStatus.hashing;
-      file.uploadedBytes = 0;
-      _notify();
-      return await _staging.stage(
-        file.localPath,
-        cancelToken: cancelToken,
-        onProgress: (done, total) {
-          file.staging = true;
-          file.status = UploadFileStatus.hashing;
-          file.uploadedBytes = done;
-          _notify();
-        },
-      );
-    } on CopypartyCancelledException {
-      rethrow;
-    } catch (e) {
-      // Out of space / IO error → automatic fallback to reading from source.
-      _log.log('staging failed for ${file.filename}: $e — reading direct from source');
-      return null;
-    } finally {
-      file.staging = false;
+  /// Copies [file] into the cache exactly once: if a copy for this source path
+  /// is already in flight (started by the loop or the filler) return that same
+  /// future; otherwise start one. The actual copy runs under [_stageLock] so
+  /// only one card read happens at a time.
+  Future<HashedFile?> _ensureStaged(UploadFile file, Completer<void> cancelToken) {
+    final existing = _inFlightStaging[file.localPath];
+    if (existing != null) {
+      return existing;
     }
+    final fut = _doStageLocked(file, cancelToken);
+    _inFlightStaging[file.localPath] = fut;
+    unawaited(
+      fut.whenComplete(() {
+        if (identical(_inFlightStaging[file.localPath], fut)) {
+          _inFlightStaging.remove(file.localPath);
+        }
+      }),
+    );
+    return fut;
   }
 
-  /// Starts copying the next queued file to local storage in the background
-  /// (decision: stage one ahead), so its copy overlaps the current file's
-  /// network upload. At most one prefetch runs at a time. (batch: item 4)
-  void _maybePrefetchNext(Completer<void> cancelToken, String excludePath) {
-    if (_prefetchFuture != null || cancelToken.isCompleted) {
-      return;
-    }
-    final config = _ref.read(appConfigProvider).copyparty;
-    final sel = state.selectedPaths;
-    final candidates = <UploadFile>[];
-    final owner = <UploadFile, UploadSet>{};
-    for (final s in state.uploadSets) {
-      for (final f in s.files) {
-        if (f.localPath == excludePath || f.status != UploadFileStatus.pending) {
-          continue;
-        }
-        if (sel != null && !sel.contains(f.localPath)) {
-          continue;
-        }
-        candidates.add(f);
-        owner[f] = s;
+  Future<HashedFile?> _doStageLocked(UploadFile file, Completer<void> cancelToken) {
+    // Serialise the card: chain behind whatever copy is currently running.
+    final prev = _stageLock;
+    final done = Completer<void>();
+    _stageLock = done.future;
+    return () async {
+      if (prev != null) {
+        try {
+          await prev;
+        } catch (_) {}
       }
-    }
-    if (candidates.isEmpty) {
-      return;
-    }
-    if (config.sortSmallestFirst) {
-      candidates.sort((a, b) => owner[a]!.totalBytes.compareTo(owner[b]!.totalBytes));
-    }
-    final next = candidates.first;
-    _prefetchPath = next.localPath;
-    _prefetchFuture = () async {
       try {
-        final existing = await _staging.findValidStaged(next.localPath);
+        if (cancelToken.isCompleted) {
+          return null;
+        }
+        // Reuse an existing valid cache copy (re-validated against the CURRENT
+        // source size+mtime) — this is what makes a copy survive an app restart
+        // and a stop/resume without re-reading the card. (review finding 1)
+        final existing = await _staging.findValidStaged(file.localPath);
         if (existing != null) {
-          // Already staged from a prior run — mark ready immediately.
-          next.staging = false;
-          next.stagedReady = true;
+          file.staging = false;
+          file.stagedReady = true;
           _notify();
           return existing;
         }
         final hashed = await _staging.stage(
-          next.localPath,
+          file.localPath,
           cancelToken: cancelToken,
-          // Surface the copy-ahead so the file being prefetched shows
-          // "Copying to phone N%" while the current file uploads — otherwise a
-          // large file being staged looks frozen at 0%. We deliberately do NOT
-          // touch `status` (it must stay `pending` so the loop still picks it);
-          // only the transient `staging` flag drives the card. (feedback)
-          onProgress: (done, total) {
-            next.staging = true;
-            next.stagedReady = false;
-            next.uploadedBytes = done;
+          onProgress: (bytesCopied, total) {
+            // Drive the card's "Copying to phone N%" WITHOUT changing status —
+            // the file must stay `pending` so the upload loop still picks it.
+            file.staging = true;
+            file.stagedReady = false;
+            file.uploadedBytes = bytesCopied;
             _notify();
           },
         );
-        // Copy AND hash are done (hashing happens during the copy) — flip from
-        // "Copying" to "Copied" so it doesn't sit at a stuck "Copying 100%"
-        // until its upload turn arrives. (feedback)
-        next.staging = false;
-        next.stagedReady = true;
+        // Copy AND hash are done (hashing happens during the copy) → "Copied".
+        file.staging = false;
+        file.stagedReady = true;
         _notify();
         return hashed;
-      } catch (_) {
-        next.staging = false;
-        next.stagedReady = false;
-        next.uploadedBytes = 0;
+      } on CopypartyCancelledException {
+        file.staging = false;
+        file.stagedReady = false;
+        file.uploadedBytes = 0;
         _notify();
         return null;
+      } catch (e) {
+        // Out of space / IO error → fall back to reading direct from the card.
+        _log.log('staging failed for ${file.filename}: $e — reading direct from source');
+        file.staging = false;
+        file.stagedReady = false;
+        file.uploadedBytes = 0;
+        _notify();
+        return null;
+      } finally {
+        done.complete();
+        if (identical(_stageLock, done.future)) {
+          _stageLock = null;
+        }
       }
     }();
+  }
+
+  /// Starts the read-ahead cache filler if it isn't already running. The filler
+  /// copies pending files into the cache ahead of the upload loop, in upload
+  /// order, until the cache budget (config.cacheSizeMb) is full or nothing is
+  /// left to stage — then it exits and is restarted after a discard frees space.
+  /// (cache-size feature)
+  void _startCacheFiller(Completer<void> cancelToken) {
+    if (_cacheFillFuture != null) {
+      return;
+    }
+    if (!_ref.read(appConfigProvider).copyparty.stageToLocalBeforeUpload) {
+      return;
+    }
+    _cacheFillFuture = _fillCache(cancelToken).whenComplete(() => _cacheFillFuture = null);
+  }
+
+  Future<void> _fillCache(Completer<void> cancelToken) async {
+    while (!cancelToken.isCompleted) {
+      final config = _ref.read(appConfigProvider).copyparty;
+      if (!config.stageToLocalBeforeUpload) {
+        return;
+      }
+      final budget = config.cacheSizeMb * 1024 * 1024;
+      final sel = state.selectedPaths;
+
+      // Current cache usage (in-memory): files already copied but not yet
+      // uploaded+discarded. Also pick the next file to read ahead, in upload
+      // order (smallest-first honoured), skipping ones already staged/in-flight.
+      int used = 0;
+      final candidates = <UploadFile>[];
+      final owner = <UploadFile, UploadSet>{};
+      for (final s in state.uploadSets) {
+        for (final f in s.files) {
+          if (f.stagedReady) {
+            used += f.sizeBytes;
+          }
+          if (f.status != UploadFileStatus.pending || f.stagedReady) {
+            continue;
+          }
+          if (_inFlightStaging.containsKey(f.localPath)) {
+            continue;
+          }
+          if (sel != null && !sel.contains(f.localPath)) {
+            continue;
+          }
+          candidates.add(f);
+          owner[f] = s;
+        }
+      }
+      if (candidates.isEmpty) {
+        return;
+      }
+      if (config.sortSmallestFirst) {
+        candidates.sort((a, b) => owner[a]!.totalBytes.compareTo(owner[b]!.totalBytes));
+      }
+      final next = candidates.first;
+
+      // Budget: always allow at least one file (used==0) so a single file bigger
+      // than the whole cache still gets staged one-at-a-time; otherwise stop and
+      // wait for an upload to free space (a later discard restarts the filler).
+      if (used > 0 && used + next.sizeBytes > budget) {
+        return;
+      }
+      final result = await _ensureStaged(next, cancelToken);
+      // A staging failure (out of space / IO) resolves to null — stop filling so
+      // we don't spin in a tight fail loop; the loop will fall back per-file.
+      if (result == null && !next.stagedReady) {
+        return;
+      }
+    }
+  }
+
+  /// Marks files that already have a valid cache copy as "Copied" so a reopened
+  /// import reflects the cache instead of showing 0%. (cache-detect feature)
+  Future<void> _detectCachedFiles(List<UploadSet> sets) async {
+    for (final set in sets) {
+      for (final file in set.files) {
+        try {
+          final existing = await _staging.findValidStaged(file.localPath);
+          if (existing != null) {
+            file.stagedReady = true;
+            file.uploadedBytes = file.sizeBytes;
+          }
+        } catch (_) {}
+      }
+    }
   }
 
   /// Resume a stopped run (item 3): re-runs the upload loop for the files still
@@ -769,6 +845,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     }
 
     _log.log('ADD FOLDERS: +${keptSets.length} set(s), +${addedPaths.length} selected file(s)');
+    // Reflect any already-cached copies among the added files as "Copied".
+    await _detectCachedFiles(keptSets);
     state = state.copyWith(
       uploadSets: [...state.uploadSets, ...keptSets],
       selectedPaths: {...?state.selectedPaths, ...addedPaths},
@@ -782,6 +860,13 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     // it can't spawn a second loop during a teardown window. (concurrency finding 1)
     if (!_uploadRunning) {
       await startUpload(selectedFilePaths: state.selectedPaths);
+    } else {
+      // Loop already running — nudge the read-ahead filler in case it had exited
+      // (cache full / nothing left) before these files were added. (cache-size)
+      final token = _uploadCancelToken;
+      if (token != null && !token.isCompleted) {
+        _startCacheFiller(token);
+      }
     }
   }
 

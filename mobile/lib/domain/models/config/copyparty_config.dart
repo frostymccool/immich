@@ -28,6 +28,13 @@ class CopypartyConfig {
   /// phone storage is too low. Default ON. (batch: item 4)
   final bool stageToLocalBeforeUpload;
 
+  /// Maximum phone storage (in MiB) the staging cache may use for USB copies.
+  /// Files are read ahead from the card into the cache up to this budget so
+  /// uploads never wait on the slow card; once the budget is full, copying
+  /// pauses until an uploaded file is discarded to free space. A single file
+  /// larger than the budget is still staged one-at-a-time. Default 4096 MiB.
+  final int cacheSizeMb;
+
   const CopypartyConfig({
     this.hostUrl = '',
     this.uploadPath = '/uploads',
@@ -40,6 +47,7 @@ class CopypartyConfig {
     this.sortSmallestFirst = false,
     this.debugMode = false,
     this.stageToLocalBeforeUpload = true,
+    this.cacheSizeMb = 4096,
   });
 
   CopypartyConfig copyWith({
@@ -54,6 +62,7 @@ class CopypartyConfig {
     bool? sortSmallestFirst,
     bool? debugMode,
     bool? stageToLocalBeforeUpload,
+    int? cacheSizeMb,
   }) => CopypartyConfig(
     hostUrl: hostUrl ?? this.hostUrl,
     uploadPath: uploadPath ?? this.uploadPath,
@@ -66,6 +75,7 @@ class CopypartyConfig {
     sortSmallestFirst: sortSmallestFirst ?? this.sortSmallestFirst,
     debugMode: debugMode ?? this.debugMode,
     stageToLocalBeforeUpload: stageToLocalBeforeUpload ?? this.stageToLocalBeforeUpload,
+    cacheSizeMb: cacheSizeMb ?? this.cacheSizeMb,
   );
 
   @override
@@ -82,7 +92,8 @@ class CopypartyConfig {
           other.recreateFolderStructure == recreateFolderStructure &&
           other.sortSmallestFirst == sortSmallestFirst &&
           other.debugMode == debugMode &&
-          other.stageToLocalBeforeUpload == stageToLocalBeforeUpload);
+          other.stageToLocalBeforeUpload == stageToLocalBeforeUpload &&
+          other.cacheSizeMb == cacheSizeMb);
 
   @override
   int get hashCode => Object.hash(
@@ -97,6 +108,7 @@ class CopypartyConfig {
     sortSmallestFirst,
     debugMode,
     stageToLocalBeforeUpload,
+    cacheSizeMb,
   );
 
   @override
@@ -107,7 +119,7 @@ class CopypartyConfig {
       'allowSelfSignedCert: $allowSelfSignedCert, '
       'recreateFolderStructure: $recreateFolderStructure, '
       'sortSmallestFirst: $sortSmallestFirst, debugMode: $debugMode, '
-      'stageToLocalBeforeUpload: $stageToLocalBeforeUpload)';
+      'stageToLocalBeforeUpload: $stageToLocalBeforeUpload, cacheSizeMb: $cacheSizeMb)';
 
   static bool _listEquals(List<String> a, List<String> b) {
     if (a.length != b.length) {

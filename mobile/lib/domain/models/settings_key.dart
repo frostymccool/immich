@@ -84,6 +84,7 @@ enum SettingsKey<T> {
   copypartySortSmallestFirst<bool>(),
   copypartyDebugMode<bool>(),
   copypartyStageToLocalBeforeUpload<bool>(),
+  copypartyCacheSizeMb<int>(),
 
   // Slideshow
   slideshowTransition<bool>(),
