@@ -23,6 +23,12 @@ class CopypartyLogger {
   File? _file;
   Future<void> _writeChain = Future.value();
   final List<String> _memory = [];
+  // Lines appended since the last fsync. Writes normally use flush:false (fast),
+  // but we force a real flush every [_flushEvery] lines so an app kill (OOM /
+  // native crash → "no error message") still leaves the log tail on disk to
+  // diagnose from. Without this the buffered tail is lost on a hard kill.
+  int _sinceFlush = 0;
+  static const int _flushEvery = 50;
 
   /// In-memory copy of the log (most recent session(s)). Useful for showing
   /// the tail in the UI without reading the file back.
@@ -60,10 +66,14 @@ class CopypartyLogger {
     }
     // ignore: avoid_print
     print('[copyparty] $line');
+    final doFlush = (++_sinceFlush >= _flushEvery);
+    if (doFlush) {
+      _sinceFlush = 0;
+    }
     _writeChain = _writeChain.then((_) async {
       try {
         final f = await _resolveFile();
-        await f.writeAsString('$line\n', mode: FileMode.append, flush: false);
+        await f.writeAsString('$line\n', mode: FileMode.append, flush: doFlush);
       } catch (_) {
         // Never let logging failures break an upload.
       }

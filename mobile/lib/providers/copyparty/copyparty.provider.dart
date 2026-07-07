@@ -586,6 +586,15 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
           }
         }
       }
+    } catch (e, st) {
+      // Any error that escapes the per-file handler (candidate selection,
+      // discard, a notify, an unexpected state error) would otherwise vanish
+      // with the app. Log it AND force it to disk so a crash leaves a trace.
+      _log.log('!!!! UPLOAD LOOP CRASHED: $e\n$st');
+      cancelled = true;
+      try {
+        await _log.flush();
+      } catch (_) {}
     } finally {
       // Teardown ALWAYS runs (even on an unexpected throw) so _uploadRunning and
       // the cancel token can't get stuck true → a wedged, unrestartable session.
