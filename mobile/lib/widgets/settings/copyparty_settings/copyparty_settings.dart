@@ -3,6 +3,7 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/settings_key.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
+import 'package:immich_mobile/pages/copyparty/copyparty_cache.page.dart';
 import 'package:immich_mobile/pages/copyparty/copyparty_cleanup.page.dart';
 import 'package:immich_mobile/pages/copyparty/copyparty_import.page.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
@@ -42,6 +43,8 @@ class CopypartySettings extends ConsumerWidget {
           const _RecreateFolderStructureTile(),
           const _StageToLocalTile(),
           const _CacheSizeSlider(),
+          const _ManageCacheTile(),
+          const _DefaultDestinationTile(),
           const _AutoDeleteTile(),
           const Divider(),
           // File Matching is a set-once setting — it lives on the GLOBAL settings
@@ -452,6 +455,55 @@ class _CacheSizeSlider extends ConsumerWidget {
             onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyCacheSizeMb, (v.round() * 1024)),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ManageCacheTile extends ConsumerWidget {
+  const _ManageCacheTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 8.0),
+      child: SettingListTile(
+        title: 'Manage phone cache',
+        subtitle: 'See what is copied to the phone; delete or upload cached files',
+        leading: const Icon(Icons.sd_storage_outlined),
+        onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CopypartyCachePage())),
+      ),
+    );
+  }
+}
+
+class _DefaultDestinationTile extends ConsumerWidget {
+  const _DefaultDestinationTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final value = ref.watch(appConfigProvider.select((c) => c.copyparty.defaultDestination));
+    return Padding(
+      padding: const EdgeInsets.only(left: 8.0),
+      child: SettingListTile(
+        title: 'Default destination',
+        subtitle:
+            'Where Immich-compatible files (photos/videos) go by default. '
+            'Sidecar files (.lrv/.osv…) always default to copyparty only.',
+        trailing: DropdownButton<String>(
+          value: const ['cpOnly', 'both', 'immichOnly'].contains(value) ? value : 'both',
+          underline: const SizedBox.shrink(),
+          items: const [
+            DropdownMenuItem(value: 'cpOnly', child: Text('CP only')),
+            DropdownMenuItem(value: 'both', child: Text('Both')),
+            DropdownMenuItem(value: 'immichOnly', child: Text('Immich only')),
+          ],
+          onChanged: (v) {
+            if (v != null) {
+              ref.read(settingsProvider).write(SettingsKey.copypartyDefaultDestination, v);
+            }
+          },
+        ),
       ),
     );
   }

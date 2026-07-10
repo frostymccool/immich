@@ -2,7 +2,20 @@ import 'package:uuid/uuid.dart';
 
 enum UploadSetStatus { pending, hashing, uploading, verified, failed, deleted }
 
-enum UploadFileStatus { pending, hashing, handshaking, uploading, confirmed, immichUploading, receiptWritten, failed }
+enum UploadFileStatus {
+  pending,
+  hashing,
+  handshaking,
+  uploading,
+  confirmed,
+  immichUploading,
+  receiptWritten,
+  failed,
+
+  /// User chose to skip this file mid-run (batch3 item 6). Not an error and not
+  /// pending — the queue moves on and it is not auto-retried.
+  skipped,
+}
 
 /// Where the file should be sent during import.
 enum UploadDestination { copypartyOnly, immichNative, both }
@@ -41,6 +54,12 @@ class UploadFile {
   // live in ephemeral card state and vanished when the list scrolled. (Batch: item 2)
   int? transferStartMs;
   int? transferEndMs;
+  // When set, the upload loop sends this file to EXACTLY this server folder
+  // instead of deriving one from config/mirroring — used when re-uploading a
+  // receipt from the cleanup page, whose original folder must be preserved
+  // (review L1). (batch3 item 18)
+  String? uploadPathOverride;
+
   // Transient (not persisted): true while the file is being COPIED to local
   // phone storage before hashing/upload, so the card can show "Copying" instead
   // of "Hashing". (batch: item 4)

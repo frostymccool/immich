@@ -7,6 +7,9 @@ import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 
+/// One complete (marker-verified) staged copy in the phone cache. (batch3 item 20)
+typedef StagedCacheEntry = ({String sourcePath, String filename, int sizeBytes, String stagedPath, DateTime modified});
+
 /// Local staging for copyparty imports (batch: item 4).
 ///
 /// Copies each source file (typically on a slow/removable USB volume) to local
@@ -162,6 +165,44 @@ class CopypartyStagingService {
     await tmp.writeAsString(jsonEncode(marker), flush: true);
     await tmp.rename(paths.marker.path);
     return hashed;
+  }
+
+  /// Everything currently in the cache, one entry per completion marker.
+  /// Incomplete copies (no marker) are not listed — they are transient and
+  /// cleaned by the copy machinery itself. (batch3 item 20)
+  Future<List<StagedCacheEntry>> listEntries() async {
+    final entries = <StagedCacheEntry>[];
+    try {
+      final dir = await _dir();
+      if (!await dir.exists()) {
+        return entries;
+      }
+      await for (final entity in dir.list()) {
+        if (entity is! File || !entity.path.endsWith('.stagemeta')) {
+          continue;
+        }
+        try {
+          final meta = jsonDecode(await entity.readAsString()) as Map<String, dynamic>;
+          if (meta['v'] != _markerVersion) {
+            continue;
+          }
+          final stagedPath = entity.path.substring(0, entity.path.length - '.stagemeta'.length);
+          if (!await File(stagedPath).exists()) {
+            continue;
+          }
+          final stat = await entity.stat();
+          entries.add((
+            sourcePath: meta['sourcePath'] as String,
+            filename: meta['filename'] as String,
+            sizeBytes: meta['sourceSize'] as int,
+            stagedPath: stagedPath,
+            modified: stat.modified,
+          ));
+        } catch (_) {}
+      }
+    } catch (_) {}
+    entries.sort((a, b) => b.modified.compareTo(a.modified));
+    return entries;
   }
 
   /// Total bytes the cache currently holds — the sum of staged copy sizes

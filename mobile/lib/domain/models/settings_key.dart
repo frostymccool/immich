@@ -85,6 +85,7 @@ enum SettingsKey<T> {
   copypartyDebugMode<bool>(),
   copypartyStageToLocalBeforeUpload<bool>(),
   copypartyCacheSizeMb<int>(),
+  copypartyDefaultDestination<String>(),
 
   // Slideshow
   slideshowTransition<bool>(),

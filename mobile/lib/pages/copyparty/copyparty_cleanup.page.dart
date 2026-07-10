@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
+import 'package:immich_mobile/pages/copyparty/copyparty_import.page.dart';
 import 'package:immich_mobile/providers/api.provider.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
@@ -370,68 +371,24 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     }
   }
 
-  /// Recovery (Issue 8): re-upload a file whose verification failed, then verify.
+  /// Recovery (Issue 8, reworked batch3 item 18): re-upload now goes through
+  /// the MAIN import queue, so it shows on the active-uploads pages with the
+  /// full progress card. The file's ORIGINAL server folder is preserved via
+  /// uploadPathOverride (review L1), and the fresh receipt supersedes this one.
   Future<void> _uploadNow(CopypartyReceipt r) async {
-    if (_uploading.contains(r.id)) {
-      return;
-    }
-    setState(() {
-      _uploading.add(r.id!);
-      _progress[r.id!] = 0;
-    });
-    final config = ref.read(appConfigProvider).copyparty;
-    final uploader = ref.read(copypartyUploaderProvider);
-    final notifier = ref.read(importSessionProvider.notifier);
-    final repo = ref.read(copypartyReceiptRepositoryProvider);
-    // Re-upload to the file's ORIGINAL folder (its receipt URL minus the
-    // filename), not the base upload path — otherwise an FB9 mirrored-folder
-    // file gets re-uploaded to the wrong place and stays unverifiable. (L1)
-    final fileUri = Uri.parse(r.copypartyUrl);
-    final segs = List<String>.from(fileUri.pathSegments)..removeLast();
-    final uploadPath = '/${segs.join('/')}';
-    String? error;
-    try {
-      // Repair the copyparty side (hash 0-20%, chunk upload 20-100%).
-      await uploader.uploadFile(
-        r.localPath,
-        config.hostUrl,
-        uploadPath,
-        _password,
-        parallelism: config.parallelConnections,
-        onHashProgress: (done, total) {
-          if (total > 0 && mounted) {
-            setState(() => _progress[r.id!] = 0.2 * done / total);
-          }
-        },
-        onUploadProgress: (done, total) {
-          if (total > 0 && mounted) {
-            setState(() => _progress[r.id!] = 0.2 + 0.8 * done / total);
-          }
-        },
-      );
-      // Also repair the Immich side if this file belongs in Immich and isn't
-      // there yet — otherwise "Upload now" would leave it permanently unsafe.
-      if (_immichApplies(r) && (_verify[r.id]?.immich != VerifyState.yes)) {
-        final assetId = await notifier.uploadPathToImmich(r.localPath, r.filename);
-        if (assetId != null && r.id != null) {
-          await repo.markImmichUploaded(r.id!, assetId);
-        }
-      }
-    } catch (e) {
-      error = e.toString();
-    }
+    await ref.read(importSessionProvider.notifier).queueReceiptUploads([r]);
     if (!mounted) {
       return;
     }
-    setState(() {
-      _uploading.remove(r.id);
-      _progress.remove(r.id);
-    });
-    if (error != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed: $error')));
-      return;
-    }
-    await _verifyFile(r);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Queued ${r.filename} for upload'),
+        action: SnackBarAction(
+          label: 'View',
+          onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CopypartyImportPage())),
+        ),
+      ),
+    );
   }
 
   Future<void> _deleteSelected() async {

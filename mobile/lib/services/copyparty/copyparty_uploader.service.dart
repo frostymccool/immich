@@ -621,7 +621,35 @@ class CopypartyUploaderService {
         final start = chunkIdx * file.chunkSizeBytes;
         final end = (start + file.chunkSizeBytes).clamp(0, file.totalBytes);
         final chunkBytes = await _readChunk(file.path, start, end - start);
-        await _uploadChunk(chunkUri, wark, file.chunkHashes[chunkIdx], chunkBytes, chunkIdx, cancelToken: cancelToken);
+        // Retry transient chunk failures (stall timeout, dropped socket, 5xx)
+        // with a short backoff before failing the whole file — the reference
+        // u2c.py client retries chunks rather than aborting. A user cancel is
+        // never retried. (batch3 item 9)
+        const maxAttempts = 3;
+        for (var attempt = 1; ; attempt++) {
+          try {
+            await _uploadChunk(
+              chunkUri,
+              wark,
+              file.chunkHashes[chunkIdx],
+              chunkBytes,
+              chunkIdx,
+              cancelToken: cancelToken,
+            );
+            break;
+          } on CopypartyCancelledException {
+            rethrow;
+          } catch (e) {
+            if (attempt >= maxAttempts || (cancelToken?.isCompleted ?? false)) {
+              rethrow;
+            }
+            _log?.log('    chunk #$chunkIdx attempt $attempt failed ($e) — retrying in ${2 * attempt}s');
+            await Future<void>.delayed(Duration(seconds: 2 * attempt));
+            if (cancelToken?.isCompleted ?? false) {
+              throw const CopypartyCancelledException();
+            }
+          }
+        }
         done++;
         onProgress?.call(done, neededChunkIndices.length);
       } finally {

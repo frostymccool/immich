@@ -7,6 +7,7 @@ import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/extensions/translate_extensions.dart';
 import 'package:immich_mobile/presentation/widgets/images/thumbnail.widget.dart';
 import 'package:immich_mobile/providers/backup/drift_backup.provider.dart';
+import 'package:immich_mobile/pages/copyparty/copyparty_import.page.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/asset.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
@@ -85,17 +86,20 @@ class _DriftUploadDetailPageState extends ConsumerState<DriftUploadDetailPage> {
     // Copyparty (memory-card import) active uploads — surfaced here in the
     // shared Upload Details view rather than on the backup settings page.
     final cpSession = ref.watch(importSessionProvider);
+    // batch3 item 12: EVERY active copyparty file — copying to phone, copied
+    // (waiting), hashing, handshaking, uploading, Immich — not just the one
+    // currently transferring.
     final copypartyItems = cpSession.step == ImportSessionStep.uploading
-        ? cpSession.uploadSets
-              .expand((s) => s.files)
-              .where(
-                (f) =>
-                    f.needsCopyparty &&
-                    f.status != UploadFileStatus.pending &&
-                    f.status != UploadFileStatus.receiptWritten &&
-                    f.status != UploadFileStatus.failed,
-              )
-              .toList()
+        ? cpSession.uploadSets.expand((s) => s.files).where((f) {
+            if (f.staging || f.stagedReady) {
+              return true;
+            }
+            return f.status != UploadFileStatus.pending &&
+                f.status != UploadFileStatus.receiptWritten &&
+                f.status != UploadFileStatus.failed &&
+                f.status != UploadFileStatus.skipped &&
+                !(f.status == UploadFileStatus.confirmed && !f.needsImmich);
+          }).toList()
         : <UploadFile>[];
 
     return Scaffold(
@@ -592,67 +596,11 @@ class _DriftUploadDetailPageState extends ConsumerState<DriftUploadDetailPage> {
   }
 
   Widget _buildCopypartyCard(BuildContext context, UploadFile f) {
-    final progressPercentage = (f.progress * 100).clamp(0, 100);
-    return Card(
-      elevation: 0,
-      color: context.colorScheme.primaryContainer.withValues(alpha: 0.5),
-      shape: RoundedRectangleBorder(
-        borderRadius: const BorderRadius.all(Radius.circular(12)),
-        side: BorderSide(color: context.colorScheme.primary.withValues(alpha: 0.3), width: 1),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: context.colorScheme.primary.withValues(alpha: 0.2),
-                borderRadius: const BorderRadius.all(Radius.circular(8)),
-              ),
-              child: Icon(Icons.sd_card_rounded, size: 22, color: context.colorScheme.primary),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    f.filename,
-                    style: context.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 8),
-                  ClipRRect(
-                    borderRadius: const BorderRadius.all(Radius.circular(4)),
-                    child: LinearProgressIndicator(
-                      value: f.progress,
-                      backgroundColor: context.colorScheme.primary.withValues(alpha: 0.2),
-                      valueColor: AlwaysStoppedAnimation(context.colorScheme.primary),
-                      minHeight: 4,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: 48,
-              child: Text(
-                "${progressPercentage.toStringAsFixed(0)}%",
-                textAlign: TextAlign.right,
-                style: context.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: context.colorScheme.primary,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+    // batch3 item 11: identical card to the import page (phase chip, bytes ·
+    // speed, est time, skip) instead of a bare name+bar.
+    return CopypartyProgressFileCard(
+      file: f,
+      onSkip: () => ref.read(importSessionProvider.notifier).skipCurrentFile(f.localPath),
     );
   }
 

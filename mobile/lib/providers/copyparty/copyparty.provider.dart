@@ -164,6 +164,10 @@ class ImportSessionState {
   /// and the Resume option. (items 2/3)
   final bool cancelled;
 
+  /// True when the user PAUSED the run: the loop has exited but the session
+  /// stays on the progress page with a Resume control. (batch3 item 6)
+  final bool paused;
+
   const ImportSessionState({
     this.step = ImportSessionStep.idle,
     this.directoryPath,
@@ -174,6 +178,7 @@ class ImportSessionState {
     this.errorMessage,
     this.selectedPaths,
     this.cancelled = false,
+    this.paused = false,
   });
 
   ImportSessionState copyWith({
@@ -186,6 +191,7 @@ class ImportSessionState {
     String? errorMessage,
     Set<String>? selectedPaths,
     bool? cancelled,
+    bool? paused,
   }) => ImportSessionState(
     step: step ?? this.step,
     directoryPath: directoryPath ?? this.directoryPath,
@@ -196,6 +202,7 @@ class ImportSessionState {
     errorMessage: errorMessage,
     selectedPaths: selectedPaths ?? this.selectedPaths,
     cancelled: cancelled ?? this.cancelled,
+    paused: paused ?? this.paused,
   );
 
   int get totalBytes => uploadSets.fold(0, (s, u) => s + u.totalBytes);
@@ -257,6 +264,33 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     }
   }
 
+  /// batch3 item 6: pause. Halts the queue exactly like Stop (the current file
+  /// returns to pending; already-sent chunks are remembered by the server, so
+  /// Resume's re-handshake never re-uploads them) but the session STAYS on the
+  /// progress page in a paused state instead of going to the completion screen.
+  bool _pauseRequested = false;
+
+  void pauseUpload() {
+    if (_uploadRunning && !_pauseRequested) {
+      _pauseRequested = true;
+      _log.log('UPLOAD PAUSE requested by user');
+      cancelUpload();
+    }
+  }
+
+  /// batch3 item 6: skip the file the loop is CURRENTLY working on (copy, hash
+  /// or transfer). It is marked `skipped` (not failed, not pending) and the
+  /// queue moves straight on to the next file.
+  Completer<void>? _skipToken;
+
+  void skipCurrentFile(String localPath) {
+    if (_uploadingPath == localPath && !(_skipToken?.isCompleted ?? true)) {
+      _log.log('SKIP requested for ${localPath.split('/').last}');
+      _skipToken!.complete();
+      _notify();
+    }
+  }
+
   void reset() {
     cancelUpload();
     state = const ImportSessionState();
@@ -272,7 +306,10 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
 
     try {
       final config = _ref.read(appConfigProvider).copyparty;
-      final pairer = CopypartyFilePairer(triggerExtensions: config.triggerExtensions);
+      final pairer = CopypartyFilePairer(
+        triggerExtensions: config.triggerExtensions,
+        defaultNativeDestination: CopypartyFilePairer.parseDefaultDestination(config.defaultDestination),
+      );
       final sets = await pairer.scanDirectory(
         directoryPath,
         onFileFound: (count) => state = state.copyWith(scannedFiles: count),
@@ -348,7 +385,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       totalFiles: effectiveTotal,
       selectedPaths: selectedFilePaths,
       cancelled: false,
+      paused: false,
     );
+    _pauseRequested = false;
 
     // Dynamic queue loop: on each iteration pick the next SELECTED + PENDING
     // file from the LIVE state, so folders added mid-run via addFolders() are
@@ -386,13 +425,28 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         // it (concurrency finding 2).
         _uploadingPath = file.localPath;
         _logMemory('start ${file.filename}');
+        // batch3 item 6: per-file token that fires on session-cancel OR skip.
+        // The network/hash calls for THIS file abort on it; the catch below
+        // tells the two apart (skip → mark skipped + continue; cancel → break).
+        final skip = _skipToken = Completer<void>();
+        final fileToken = Completer<void>();
+        void completeFileToken(void _) {
+          if (!fileToken.isCompleted) {
+            fileToken.complete();
+          }
+        }
+
+        unawaited(cancelToken.future.then(completeFileToken));
+        unawaited(skip.future.then(completeFileToken));
         {
           // FB9: when "create folders" is on, mirror the file's subfolder beneath
           // the upload path, rooted at the set's OWN picked folder (so added
           // folders mirror correctly, not against the first pick's root).
-          final uploadPath = createFolders
-              ? mirroredUploadPath(config.uploadPath, set.rootPath ?? state.directoryPath, file.localPath)
-              : config.uploadPath;
+          final uploadPath =
+              file.uploadPathOverride ??
+              (createFolders
+                  ? mirroredUploadPath(config.uploadPath, set.rootPath ?? state.directoryPath, file.localPath)
+                  : config.uploadPath);
           int? receiptId;
           final fileSizeBytes = file.sizeBytes;
           // Stage the file to local phone storage first (copy + hash in one USB
@@ -402,7 +456,17 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
           HashedFile? staged;
           try {
             if (useStaging && (file.needsCopyparty || file.needsImmich)) {
-              staged = await _acquireStaged(file, cancelToken);
+              // Race the (possibly long) card copy against skip so Skip works
+              // during the copy phase too. On skip the underlying copy carries
+              // on in the background exactly like a filler prefetch — its result
+              // stays in the cache for a later retry. (batch3 item 6)
+              staged = await Future.any<HashedFile?>([
+                _acquireStaged(file, cancelToken),
+                skip.future.then<HashedFile?>((_) => null),
+              ]);
+              if (skip.isCompleted && !cancelToken.isCompleted) {
+                throw const CopypartyCancelledException();
+              }
             }
             // Copy phase is over for THIS file — clear the flags so the card
             // stops showing "Copying"/"Copied" regardless of which backend runs next.
@@ -467,7 +531,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                   password,
                   parallelism: config.parallelConnections,
                   onUploadProgress: onUp,
-                  cancelToken: cancelToken,
+                  cancelToken: fileToken,
                 );
                 confirmed = res;
                 alreadyOnServer = already;
@@ -485,7 +549,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                     _notify();
                   },
                   onUploadProgress: onUp,
-                  cancelToken: cancelToken,
+                  cancelToken: fileToken,
                 );
                 hashed = h;
                 confirmed = res;
@@ -520,6 +584,14 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                 ),
               );
               file.dbRecordWritten = true;
+              // Re-upload of a tracked file: the fresh receipt supersedes the
+              // old row so Pending Cleanup doesn't show duplicates. (item 18)
+              final oldReceiptId = file.existingReceipt?.id;
+              if (oldReceiptId != null && oldReceiptId != receiptId) {
+                try {
+                  await _receiptRepo.markSourceDeleted(oldReceiptId);
+                } catch (_) {}
+              }
 
               // FB11: the .cpreceipt sidecar file is redundant now that presence
               // is verified live against the server; we no longer write it. The
@@ -533,13 +605,13 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
               file.transferStartMs ??= DateTime.now().millisecondsSinceEpoch;
               _notify();
 
-              final result = await _uploadToImmich(file, cancelToken, staged?.path);
+              final result = await _uploadToImmich(file, fileToken, staged?.path);
               if (result.isSuccess) {
                 file.immichAssetId = result.remoteAssetId;
                 if (receiptId != null && result.remoteAssetId != null) {
                   await _receiptRepo.markImmichUploaded(receiptId, result.remoteAssetId!);
                 }
-              } else if (result.isCancelled || cancelToken.isCompleted) {
+              } else if (result.isCancelled || fileToken.isCompleted) {
                 // Cancelled during the Immich upload → stop like a copyparty cancel.
                 throw const CopypartyCancelledException();
               } else {
@@ -604,6 +676,17 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             }
             state = state.copyWith(completedFiles: state.completedFiles + 1);
           } on CopypartyCancelledException {
+            if (!cancelToken.isCompleted && skip.isCompleted) {
+              // SKIP (batch3 item 6): mark this file skipped — not failed, not
+              // pending — and move straight on to the next file. Any staged copy
+              // stays cached for a later retry.
+              file.staging = false;
+              file.status = UploadFileStatus.skipped;
+              file.uploadedBytes = 0;
+              _log.log('-- SKIPPED ${file.filename}');
+              _notify();
+              continue;
+            }
             // User cancelled mid-file: leave it pending (not failed) so it can be
             // resumed cleanly next run, and stop the loop. The staged copy (if any)
             // is intentionally KEPT for a fast resume.
@@ -663,17 +746,26 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       _uploadCancelToken = null;
       _uploadRunning = false;
       _uploadingPath = null;
+      _skipToken = null;
+      final wasPaused = _pauseRequested;
+      _pauseRequested = false;
       try {
         await WakelockPlus.disable();
       } catch (_) {}
       _log.log(
-        'IMPORT SESSION ${cancelled ? 'cancelled' : 'complete'}: '
+        'IMPORT SESSION ${wasPaused ? 'paused' : (cancelled ? 'cancelled' : 'complete')}: '
         '${state.completedFiles}/${state.totalFiles} files done',
       );
       // Only advance to the completion screen if we're still uploading — a
       // concurrent reset() (e.g. the user left the page) must not be clobbered.
       if (state.step == ImportSessionStep.uploading) {
-        state = state.copyWith(step: ImportSessionStep.complete, cancelled: cancelled);
+        if (wasPaused) {
+          // batch3 item 6: PAUSE keeps the session on the progress page with a
+          // Resume control instead of jumping to the completion screen.
+          state = state.copyWith(paused: true);
+        } else {
+          state = state.copyWith(step: ImportSessionStep.complete, cancelled: cancelled);
+        }
       }
     }
   }
@@ -949,7 +1041,10 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   /// user pick before anything is appended to the ongoing task.
   Future<List<UploadSet>> scanFolders(List<String> directoryPaths) async {
     final config = _ref.read(appConfigProvider).copyparty;
-    final pairer = CopypartyFilePairer(triggerExtensions: config.triggerExtensions);
+    final pairer = CopypartyFilePairer(
+      triggerExtensions: config.triggerExtensions,
+      defaultNativeDestination: CopypartyFilePairer.parseDefaultDestination(config.defaultDestination),
+    );
     final newSets = <UploadSet>[];
     // De-dup against files already queued so re-picking a folder can't double it.
     final existing = state.uploadSets.expand((s) => s.files).map((f) => f.localPath).toSet();
@@ -1007,6 +1102,85 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         _startCacheFiller(token);
       }
     }
+  }
+
+  /// batch3 item 20: queue files straight from the phone cache into the live
+  /// upload (or start one). Sets are built from the cache markers' metadata, so
+  /// this works even when the original card is no longer attached — the bytes
+  /// come from the cache; the receipt still records the ORIGINAL source path.
+  Future<void> queueCachedFiles(List<StagedCacheEntry> entries) async {
+    final existing = state.uploadSets.expand((s) => s.files).map((f) => f.localPath).toSet();
+    final config = _ref.read(appConfigProvider).copyparty;
+    final defaultDest = CopypartyFilePairer.parseDefaultDestination(config.defaultDestination);
+    final newSets = <UploadSet>[];
+    final paths = <String>{};
+    for (final e in entries) {
+      if (existing.contains(e.sourcePath)) {
+        continue;
+      }
+      final native = CopypartyFilePairer.isNativeImmichFilename(e.filename);
+      final parent = e.sourcePath.substring(0, e.sourcePath.lastIndexOf('/') < 0 ? 0 : e.sourcePath.lastIndexOf('/'));
+      final file = UploadFile(
+        localPath: e.sourcePath,
+        filename: e.filename,
+        sizeBytes: e.sizeBytes,
+        lastModifiedMs: e.modified.millisecondsSinceEpoch,
+        isNativeImmichFile: native,
+        destination: native ? defaultDest : UploadDestination.copypartyOnly,
+      );
+      file.existingReceipt = await _receiptRepo.findByLocalPath(e.sourcePath);
+      newSets.add(UploadSet(files: [file], directoryPath: parent, rootPath: parent));
+      paths.add(e.sourcePath);
+    }
+    if (paths.isEmpty) {
+      return;
+    }
+    _log.log('QUEUE FROM CACHE: +${paths.length} file(s)');
+    await appendSelectedSets(newSets, paths);
+  }
+
+  /// batch3 item 18: queue receipt re-uploads (cleanup "Upload now") into the
+  /// live import so they show on the active-uploads pages, preserving each
+  /// receipt's ORIGINAL server folder via uploadPathOverride (review L1).
+  Future<void> queueReceiptUploads(List<CopypartyReceipt> receipts) async {
+    final existing = state.uploadSets.expand((s) => s.files).map((f) => f.localPath).toSet();
+    final newSets = <UploadSet>[];
+    final paths = <String>{};
+    for (final r in receipts) {
+      if (existing.contains(r.localPath)) {
+        continue;
+      }
+      String uploadPath;
+      try {
+        final uri = Uri.parse(r.copypartyUrl);
+        final segs = List<String>.from(uri.pathSegments)..removeWhere((seg) => seg.isEmpty);
+        if (segs.isNotEmpty) {
+          segs.removeLast(); // drop the filename
+        }
+        uploadPath = '/${segs.join('/')}';
+      } catch (_) {
+        uploadPath = _ref.read(appConfigProvider).copyparty.uploadPath;
+      }
+      final native = CopypartyFilePairer.isNativeImmichFilename(r.filename);
+      final parent = r.localPath.substring(0, r.localPath.lastIndexOf('/') < 0 ? 0 : r.localPath.lastIndexOf('/'));
+      final file = UploadFile(
+        localPath: r.localPath,
+        filename: r.filename,
+        sizeBytes: r.sizeBytes,
+        lastModifiedMs: r.uploadTimestamp.millisecondsSinceEpoch,
+        isNativeImmichFile: native,
+        destination: native ? UploadDestination.both : UploadDestination.copypartyOnly,
+      );
+      file.uploadPathOverride = uploadPath;
+      file.existingReceipt = r;
+      newSets.add(UploadSet(files: [file], directoryPath: parent, rootPath: parent));
+      paths.add(r.localPath);
+    }
+    if (paths.isEmpty) {
+      return;
+    }
+    _log.log('QUEUE RECEIPT RE-UPLOAD: +${paths.length} file(s)');
+    await appendSelectedSets(newSets, paths);
   }
 
   /// Retry just the files that failed in the last run (item 3): reset them to
@@ -1248,6 +1422,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       errorMessage: state.errorMessage,
       selectedPaths: state.selectedPaths,
       cancelled: state.cancelled,
+      paused: state.paused,
     );
   }
 }

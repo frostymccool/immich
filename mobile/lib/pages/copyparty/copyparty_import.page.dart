@@ -1534,6 +1534,7 @@ class _UploadProgressStep extends ConsumerWidget {
             (f.status != UploadFileStatus.pending &&
                 f.status != UploadFileStatus.receiptWritten &&
                 f.status != UploadFileStatus.failed &&
+                f.status != UploadFileStatus.skipped &&
                 !(f.status == UploadFileStatus.confirmed && !f.needsImmich));
         if (active) {
           return 0;
@@ -1628,6 +1629,7 @@ class _UploadProgressStep extends ConsumerWidget {
               set: orderedSets[i],
               selectedPaths: selected,
               rootPath: orderedSets[i].rootPath ?? session.directoryPath,
+              onSkipFile: (f) => ref.read(importSessionProvider.notifier).skipCurrentFile(f.localPath),
             ),
           ),
         ),
@@ -1645,6 +1647,24 @@ class _UploadProgressStep extends ConsumerWidget {
                     label: const Text('Add folders'),
                     style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
                   ),
+                ),
+                const SizedBox(width: 12),
+                // batch3 item 6: Pause halts the queue in place (this page stays;
+                // Resume re-handshakes so sent chunks aren't re-uploaded).
+                Expanded(
+                  child: session.paused
+                      ? FilledButton.icon(
+                          onPressed: () => ref.read(importSessionProvider.notifier).resumeUpload(),
+                          icon: const Icon(Icons.play_arrow_rounded),
+                          label: const Text('Resume'),
+                          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                        )
+                      : OutlinedButton.icon(
+                          onPressed: () => ref.read(importSessionProvider.notifier).pauseUpload(),
+                          icon: const Icon(Icons.pause_rounded),
+                          label: const Text('Pause'),
+                          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                        ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -1701,7 +1721,8 @@ class _ProgressSetSection extends StatelessWidget {
   final UploadSet set;
   final Set<String>? selectedPaths;
   final String? rootPath;
-  const _ProgressSetSection({required this.set, this.selectedPaths, this.rootPath});
+  final void Function(UploadFile)? onSkipFile;
+  const _ProgressSetSection({required this.set, this.selectedPaths, this.rootPath, this.onSkipFile});
 
   @override
   Widget build(BuildContext context) {
@@ -1751,7 +1772,7 @@ class _ProgressSetSection extends StatelessWidget {
         ...files.map(
           (f) => Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: _ProgressFileCard(file: f),
+            child: CopypartyProgressFileCard(file: f, onSkip: onSkipFile == null ? null : () => onSkipFile!(f)),
           ),
         ),
         const SizedBox(height: 4),
@@ -1787,15 +1808,17 @@ String? _doneTimingSuffix(UploadFile f) {
   return '${_formatTransferDuration(el)} · avg $avg';
 }
 
-class _ProgressFileCard extends StatefulWidget {
+class CopypartyProgressFileCard extends StatefulWidget {
   final UploadFile file;
-  const _ProgressFileCard({required this.file});
+  // batch3 item 6: invoked to skip this file while it's the one being worked on.
+  final VoidCallback? onSkip;
+  const CopypartyProgressFileCard({super.key, required this.file, this.onSkip});
 
   @override
-  State<_ProgressFileCard> createState() => _ProgressFileCardState();
+  State<CopypartyProgressFileCard> createState() => _ProgressFileCardState();
 }
 
-class _ProgressFileCardState extends State<_ProgressFileCard> {
+class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
   final _speedCalc = UploadSpeedCalculator();
   String _speed = '-- MiB/s';
   String _eta = '--:--';
@@ -1817,7 +1840,7 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
   }
 
   @override
-  void didUpdateWidget(_ProgressFileCard old) {
+  void didUpdateWidget(CopypartyProgressFileCard old) {
     super.didUpdateWidget(old);
     final f = widget.file;
     final phase = _phaseKey(f);
@@ -1901,7 +1924,9 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
         file.status == UploadFileStatus.receiptWritten ||
         (file.status == UploadFileStatus.confirmed && !file.needsImmich);
     final isFailed = file.status == UploadFileStatus.failed;
-    final isActive = !isDone && !isFailed;
+    // User-skipped (batch3 item 6) is terminal on this card too.
+    final isSkipped = file.status == UploadFileStatus.skipped;
+    final isActive = !isDone && !isFailed && !isSkipped;
     // Copying to phone (staging, batch item 4) can happen while status is still
     // `pending` (a prefetched file copies ahead but must stay pickable by the
     // loop), so it's driven by the transient flag, not the status.
@@ -1953,12 +1978,26 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                         ),
                       ),
                       if (isActive) ...[const SizedBox(width: 8), _phaseChip(context, file)],
+                      if (widget.onSkip != null && isActive && file.status != UploadFileStatus.pending) ...[
+                        const SizedBox(width: 4),
+                        // batch3 item 6: skip THIS file and move on to the next.
+                        InkWell(
+                          onTap: widget.onSkip,
+                          borderRadius: BorderRadius.circular(10),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                            child: Icon(Icons.skip_next_rounded, size: 18, color: context.colorScheme.onSurfaceVariant),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 2),
                   Text(
                     isFailed
                         ? file.errorMessage ?? 'Upload failed'
+                        : isSkipped
+                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · skipped'
                         : isDone
                         ? (file.alreadyOnServer
                               ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · already on server (hash verified)'
@@ -2009,6 +2048,8 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
               width: 56,
               child: isFailed
                   ? Icon(Icons.error_rounded, color: context.colorScheme.error, size: 28)
+                  : isSkipped
+                  ? Icon(Icons.skip_next_rounded, color: context.colorScheme.onSurfaceVariant, size: 26)
                   : isDone
                   ? const Icon(Icons.check_circle_rounded, color: Colors.green, size: 28)
                   : isCopied
@@ -2108,8 +2149,12 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
 
     // Only files that were actually part of THIS upload count toward the
     // success/error tally. Files left as `pending` were skipped (unselected)
-    // and must not turn a clean run into "Completed with errors". (Issue 1)
-    final attempted = allFiles.where((f) => f.status != UploadFileStatus.pending).toList();
+    // and user-skipped files (batch3 item 6) are a deliberate choice — neither
+    // must turn a clean run into "Completed with errors". (Issue 1)
+    final attempted = allFiles
+        .where((f) => f.status != UploadFileStatus.pending && f.status != UploadFileStatus.skipped)
+        .toList();
+    final userSkipped = allFiles.where((f) => f.status == UploadFileStatus.skipped).length;
     final cpSucceeded = attempted.where((f) => f.copypartyConfirmed).length;
     final cpNeeded = attempted.where((f) => f.needsCopyparty).length;
     final imSucceeded = attempted.where((f) => f.immichConfirmed).length;
@@ -2182,6 +2227,7 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
                   ok: imSucceeded == imNeeded,
                 ),
               if (failed > 0) _StatChip(icon: Icons.error_outline_rounded, label: '$failed failed', ok: false),
+              if (userSkipped > 0) _StatChip(icon: Icons.skip_next_rounded, label: '$userSkipped skipped', ok: true),
               if (remaining > 0)
                 _StatChip(icon: Icons.pause_circle_outline_rounded, label: '$remaining remaining', ok: false),
             ],
@@ -2578,7 +2624,8 @@ class _CompletionFileTile extends StatelessWidget {
     final cpOk = file.copypartyConfirmed;
     final imOk = file.immichConfirmed;
     final failed = file.status == UploadFileStatus.failed;
-    final skipped = file.status == UploadFileStatus.pending;
+    // Not-attempted rows: unselected (pending) or user-skipped (batch3 item 6).
+    final skipped = file.status == UploadFileStatus.pending || file.status == UploadFileStatus.skipped;
 
     Widget cpIcon = const SizedBox.shrink();
     if (file.needsCopyparty) {
