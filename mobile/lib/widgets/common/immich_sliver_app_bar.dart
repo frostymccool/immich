@@ -183,16 +183,7 @@ class _CopypartyIndicator extends ConsumerStatefulWidget {
   ConsumerState<_CopypartyIndicator> createState() => _CopypartyIndicatorState();
 }
 
-class _CopypartyIndicatorState extends ConsumerState<_CopypartyIndicator> with SingleTickerProviderStateMixin {
-  late final AnimationController _spin = AnimationController(vsync: this, duration: const Duration(seconds: 2))
-    ..repeat();
-
-  @override
-  void dispose() {
-    _spin.dispose();
-    super.dispose();
-  }
-
+class _CopypartyIndicatorState extends ConsumerState<_CopypartyIndicator> {
   void _open(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -214,24 +205,37 @@ class _CopypartyIndicatorState extends ConsumerState<_CopypartyIndicator> with S
   @override
   Widget build(BuildContext context) {
     final uploading = ref.watch(importSessionProvider.select((s) => s.step == ImportSessionStep.uploading));
-    final icon = Icon(Icons.sd_card_rounded, size: _kBadgeWidgetSize, color: context.primaryColor);
+    final iconColor = context.isDarkTheme ? Colors.white : Colors.black;
+    // Match the backup indicator exactly: a small circular-progress badge at the
+    // bottom-right of the icon while uploads are active. (batch3 item 3)
     return IconButton(
       tooltip: 'Copyparty import',
       onPressed: () => _open(context),
-      icon: uploading
-          ? Stack(
-              alignment: Alignment.center,
-              children: [
-                icon,
-                // A rotating ring of arrows overlaid on the card to signal
-                // active uploads.
-                RotationTransition(
-                  turns: _spin,
-                  child: Icon(Icons.autorenew_rounded, size: _kBadgeWidgetSize + 8, color: context.primaryColor),
+      icon: Badge(
+        label: uploading
+            ? _BadgeLabel(
+                Container(
+                  padding: const EdgeInsets.all(3.5),
+                  child: Theme(
+                    data: context.themeData.copyWith(
+                      progressIndicatorTheme: context.themeData.progressIndicatorTheme.copyWith(year2023: true),
+                    ),
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      strokeCap: StrokeCap.round,
+                      valueColor: AlwaysStoppedAnimation<Color>(iconColor),
+                      semanticsLabel: 'Copyparty import',
+                    ),
+                  ),
                 ),
-              ],
-            )
-          : icon,
+              )
+            : null,
+        backgroundColor: Colors.transparent,
+        alignment: Alignment.bottomRight,
+        isLabelVisible: uploading,
+        offset: const Offset(-2, -12),
+        child: Icon(Icons.sd_card_rounded, size: _kBadgeWidgetSize, color: context.primaryColor),
+      ),
     );
   }
 }

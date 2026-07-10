@@ -44,9 +44,13 @@ class CopypartySettings extends ConsumerWidget {
           const _CacheSizeSlider(),
           const _AutoDeleteTile(),
           const Divider(),
-          const SettingGroupTitle(title: 'File Matching', icon: Icons.link_rounded),
-          const _TriggerExtensionsTile(),
-          const Divider(),
+          // File Matching is a set-once setting — it lives on the backup-entry
+          // page only, keeping the daily-use global page simpler. (batch3 item 4)
+          if (!showServerConfig) ...[
+            const SettingGroupTitle(title: 'File Matching', icon: Icons.link_rounded),
+            const _TriggerExtensionsTile(),
+            const Divider(),
+          ],
           const SettingGroupTitle(title: 'Import', icon: Icons.sd_card_rounded),
           const _ImportFromMemoryCardButton(),
           const _PendingCleanupTile(),
@@ -60,6 +64,9 @@ class CopypartySettings extends ConsumerWidget {
             // diagnostic tools appear only when debug mode is on.
             if (debug) const _DiagnosticLogTile() else const _DownloadLogButton(),
           ],
+          // Clear the Android gesture/nav bar so the last tile (e.g. "Free up
+          // space") is never partially hidden behind it. (batch3 item 5)
+          SizedBox(height: MediaQuery.paddingOf(context).bottom + 16),
         ],
       ),
     );

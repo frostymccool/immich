@@ -128,6 +128,15 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
           ..clear()
           ..addAll(sets.expand((s) => s.files).map((f) => f.localPath));
       });
+      // Resolve live server status for the scanned groups — without this the
+      // summaries sat on "checking server…" forever. (batch3 item 13)
+      unawaited(
+        ref.read(importSessionProvider.notifier).verifySetsAgainstServer(sets).then((_) {
+          if (mounted) {
+            setState(() {});
+          }
+        }),
+      );
     } catch (e) {
       if (!mounted) {
         return;
@@ -654,6 +663,44 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     setState(() => _destinationOverrides[path] = dest);
   }
 
+  // batch3 item 24: expand/collapse all groups. Bumping the generation renews
+  // each ExpansionTile's key so `initiallyExpanded` is re-applied.
+  bool _expandAll = false;
+  int _expandGen = 0;
+
+  void _setExpandAll(bool v) {
+    setState(() {
+      _expandAll = v;
+      _expandGen++;
+    });
+  }
+
+  /// batch3 item 21: set the destination for EVERY file at once. Non-Immich-
+  /// native files (e.g. .OSV/.LRV) can't go to Immich, so "Both"/"Immich"
+  /// applies to native files only and the rest stay CP-only.
+  void _setDestinationForAll(UploadDestination dest) {
+    setState(() {
+      for (final set in widget.session.uploadSets) {
+        for (final f in set.files) {
+          _destinationOverrides[f.localPath] = (dest != UploadDestination.copypartyOnly && !f.isNativeImmichFile)
+              ? UploadDestination.copypartyOnly
+              : dest;
+        }
+      }
+    });
+  }
+
+  Widget _destAllButton(BuildContext context, String label, UploadDestination dest) {
+    return TextButton(
+      style: TextButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+      ),
+      onPressed: () => _setDestinationForAll(dest),
+      child: Text(label),
+    );
+  }
+
   UploadDestination _destinationFor(UploadFile file) => _destinationOverrides[file.localPath] ?? file.destination;
 
   void _applyDestinations() {
@@ -900,6 +947,33 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
             ],
           ),
         ),
+        // batch3 items 21+24: destination-for-all quick actions + expand/collapse all.
+        Container(
+          color: context.colorScheme.surfaceContainer,
+          padding: const EdgeInsets.fromLTRB(16, 0, 8, 4),
+          child: Row(
+            children: [
+              Text('Send all to:', style: context.textTheme.labelMedium),
+              const SizedBox(width: 4),
+              _destAllButton(context, 'CP only', UploadDestination.copypartyOnly),
+              _destAllButton(context, 'Both', UploadDestination.both),
+              _destAllButton(context, 'Immich', UploadDestination.immichNative),
+              const Spacer(),
+              IconButton(
+                tooltip: 'Collapse all',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.unfold_less_rounded, size: 20),
+                onPressed: () => _setExpandAll(false),
+              ),
+              IconButton(
+                tooltip: 'Expand all',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.unfold_more_rounded, size: 20),
+                onPressed: () => _setExpandAll(true),
+              ),
+            ],
+          ),
+        ),
         // FB3/FB4: lazy verify status banner — checking / offline + Refresh.
         if (_verifying)
           Container(
@@ -974,6 +1048,8 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
               onToggleGroup: (select) => _toggleGroup(sets[i], select),
               onToggleFile: _toggleFile,
               onDestinationChange: _setDestination,
+              expansionKey: ValueKey('${sets[i].id}-$_expandGen'),
+              initiallyExpanded: _expandAll,
             ),
           ),
         ),
@@ -1038,6 +1114,9 @@ class _SelectableUploadSetTile extends StatelessWidget {
   final void Function(bool) onToggleGroup;
   final void Function(String, bool) onToggleFile;
   final void Function(String, UploadDestination) onDestinationChange;
+  // batch3 item 24: a renewed key re-applies initiallyExpanded (expand/collapse all).
+  final Key? expansionKey;
+  final bool initiallyExpanded;
 
   const _SelectableUploadSetTile({
     required this.set,
@@ -1047,6 +1126,8 @@ class _SelectableUploadSetTile extends StatelessWidget {
     required this.onToggleGroup,
     required this.onToggleFile,
     required this.onDestinationChange,
+    this.expansionKey,
+    this.initiallyExpanded = false,
   });
 
   Widget _relPathLine(BuildContext context, String relPath) => Text(
@@ -1087,6 +1168,8 @@ class _SelectableUploadSetTile extends StatelessWidget {
     final bool? groupChecked = filesSelected == 0 ? false : (filesSelected == total ? true : null);
 
     return ExpansionTile(
+      key: expansionKey,
+      initiallyExpanded: initiallyExpanded,
       leading: Checkbox(tristate: true, value: groupChecked, onChanged: (v) => onToggleGroup(v == true)),
       // Item 3: show the file count right in the group entry.
       title: Text('${set.displayName}  ·  $total files'),
@@ -1179,6 +1262,12 @@ class _GroupSummary extends StatelessWidget {
   ) {
     final known = pool.where((f) => f.verification != null && get(f.verification!) != VerifyState.unknown).toList();
     if (known.isEmpty) {
+      // Applicable files exist but none resolved yet (checksum pass pending or
+      // interrupted) — show a neutral pending chip instead of NOTHING, so a
+      // group with a valid Immich file always surfaces the axis. (item 23)
+      if (pool.isNotEmpty) {
+        return _rawChip(context, '$label ?', context.colorScheme.onSurfaceVariant, Icons.help_outline);
+      }
       return null;
     }
     final yes = known.where((f) => get(f.verification!) == VerifyState.yes).length;
@@ -1433,6 +1522,35 @@ class _UploadProgressStep extends ConsumerWidget {
     if (sortSmallest) {
       visibleSets.sort((a, b) => a.totalBytes.compareTo(b.totalBytes));
     }
+    // Pin groups with ACTIVE work (uploading/copying/hashing) to the top, then
+    // still-pending groups, done/failed groups last — so the current upload is
+    // always visible even after more folders are appended. Decorate-sort keeps
+    // the order stable within each band (List.sort is not stable). (item 10)
+    int setRank(UploadSet s) {
+      var rank = 2;
+      for (final f in s.files.where(keep)) {
+        final active =
+            f.staging ||
+            (f.status != UploadFileStatus.pending &&
+                f.status != UploadFileStatus.receiptWritten &&
+                f.status != UploadFileStatus.failed &&
+                !(f.status == UploadFileStatus.confirmed && !f.needsImmich));
+        if (active) {
+          return 0;
+        }
+        if (f.status == UploadFileStatus.pending) {
+          rank = 1;
+        }
+      }
+      return rank;
+    }
+
+    final decorated = [for (var i = 0; i < visibleSets.length; i++) (i: i, set: visibleSets[i])];
+    decorated.sort((a, b) {
+      final r = setRank(a.set).compareTo(setRank(b.set));
+      return r != 0 ? r : a.i.compareTo(b.i);
+    });
+    final orderedSets = decorated.map((d) => d.set).toList();
     final allFiles = session.uploadSets.expand((s) => s.files).where(keep).toList();
     final totalBytes = allFiles.fold<int>(0, (s, f) => s + f.sizeBytes);
     // Bytes actually UPLOADED to a backend. `uploadedBytes` doubles as the
@@ -1505,8 +1623,12 @@ class _UploadProgressStep extends ConsumerWidget {
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            itemCount: visibleSets.length,
-            itemBuilder: (ctx, i) => _ProgressSetSection(set: visibleSets[i], selectedPaths: selected),
+            itemCount: orderedSets.length,
+            itemBuilder: (ctx, i) => _ProgressSetSection(
+              set: orderedSets[i],
+              selectedPaths: selected,
+              rootPath: orderedSets[i].rootPath ?? session.directoryPath,
+            ),
           ),
         ),
         SafeArea(
@@ -1578,7 +1700,8 @@ class _SectionBadge extends StatelessWidget {
 class _ProgressSetSection extends StatelessWidget {
   final UploadSet set;
   final Set<String>? selectedPaths;
-  const _ProgressSetSection({required this.set, this.selectedPaths});
+  final String? rootPath;
+  const _ProgressSetSection({required this.set, this.selectedPaths, this.rootPath});
 
   @override
   Widget build(BuildContext context) {
@@ -1586,6 +1709,8 @@ class _ProgressSetSection extends StatelessWidget {
         ? set.files
         : set.files.where((f) => selectedPaths!.contains(f.localPath)).toList();
     final setBytes = files.fold<int>(0, (s, f) => s + f.sizeBytes);
+    // Show the subfolder the group came from, like the picker does. (item 14)
+    final relPath = _relPathUtil(rootPath, set.directoryPath);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1594,10 +1719,24 @@ class _ProgressSetSection extends StatelessWidget {
           child: Row(
             children: [
               Expanded(
-                child: Text(
-                  set.displayName,
-                  style: context.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600),
-                  overflow: TextOverflow.ellipsis,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      set.displayName,
+                      style: context.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (relPath.isNotEmpty)
+                      Text(
+                        relPath,
+                        style: context.textTheme.labelSmall?.copyWith(
+                          color: context.colorScheme.onSurface.withValues(alpha: 0.5),
+                          fontFamily: 'monospace',
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                  ],
                 ),
               ),
               Text(
@@ -1660,40 +1799,46 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
   final _speedCalc = UploadSpeedCalculator();
   String _speed = '-- MiB/s';
   String _eta = '--:--';
-  UploadFileStatus? _prevStatus;
+  String? _prevPhase;
 
-  // Copyparty chunk upload OR Immich upload — the network-transfer phases.
-  static bool _isTransfer(UploadFileStatus? s) =>
-      s == UploadFileStatus.uploading || s == UploadFileStatus.immichUploading;
+  // Every phase whose uploadedBytes ticks: copying-to-phone, hashing, chunk
+  // upload, Immich upload. The meter resets at each phase boundary because the
+  // byte counter restarts. (batch3 item 7 — speed/eta for copy+hash too)
+  String? _phaseKey(UploadFile f) {
+    if (f.staging) {
+      return 'copy';
+    }
+    return switch (f.status) {
+      UploadFileStatus.hashing => 'hash',
+      UploadFileStatus.uploading => 'up',
+      UploadFileStatus.immichUploading => 'immich',
+      _ => null,
+    };
+  }
 
   @override
   void didUpdateWidget(_ProgressFileCard old) {
     super.didUpdateWidget(old);
     final f = widget.file;
-    final s = f.status;
-    final transferring = _isTransfer(s);
+    final phase = _phaseKey(f);
 
-    // Reset the live speed meter at every phase boundary (hashing→copyparty,
-    // copyparty→immich) because uploadedBytes restarts — otherwise the byte
-    // counter going backwards produces a bogus reading. Hashing is never fed,
-    // so the speed reflects network transfer only. The FROZEN elapsed/avg now
-    // live on the model (set in the upload loop), so they survive list
-    // recycling and no longer depend on this card observing every tick. (item 2)
-    if (transferring && s != _prevStatus) {
+    if (phase != null && phase != _prevPhase) {
       _speedCalc.reset();
     }
-    if (transferring) {
+    if (phase != null) {
       _speedCalc.update(f.uploadedBytes, f.sizeBytes);
       _speed = _speedCalc.speedAsString;
       _eta = _speedCalc.timeRemainingAsString;
     }
-    _prevStatus = s;
+    _prevPhase = phase;
   }
 
   /// "22.3 / 27.9 MiB" (unit shown once when both share it), else "980 KiB / 27.9 MiB".
   static String _pairBytes(int done, int total) {
     final totalStr = formatHumanReadableBytes(total, 1);
-    final doneStr = formatHumanReadableBytes(done, 1);
+    // 3 decimals on the LIVE value once it reaches GiB — at slow speeds a
+    // 1-decimal GiB value doesn't visibly move between refreshes. (item 8)
+    final doneStr = formatHumanReadableBytes(done, done >= 1024 * 1024 * 1024 ? 3 : 1);
     final totalUnit = totalStr.split(' ').last;
     final doneParts = doneStr.split(' ');
     if (doneParts.length == 2 && doneParts.last == totalUnit) {
@@ -1824,16 +1969,16 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                         : isCopying
                         // Copying to phone (staging, batch item 4) % on the full
                         // bar so a large file being staged isn't a frozen 0%.
-                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · copying to phone '
-                              '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}%'
+                        // Copying/hashing now show bytes + speed like uploads,
+                        // with the est time in the right column. (items 7+8)
+                        ? '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · copying '
+                              '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}% · $_speed'
                         : isCopied
                         // Fully staged, waiting for its upload turn.
                         ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · copied to phone · waiting to upload'
                         : isHashing
-                        // Hashing % on the full bar so progress is legible on
-                        // large files (item 3).
-                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · hashing '
-                              '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}%'
+                        ? '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · hashing '
+                              '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}% · $_speed'
                         // transferred / total · speed
                         : '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · $_speed',
                     style: context.textTheme.labelLarge?.copyWith(
@@ -2049,7 +2194,12 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
           child: Builder(
             builder: (ctx) {
               final selected = session.selectedPaths;
-              bool keep(UploadFile f) => selected == null || selected.contains(f.localPath);
+              // Show every file that was ATTEMPTED this session, not just the
+              // current selection — after "Retry failed" narrows the selection
+              // to the failed files, the earlier-succeeded ones must still be
+              // listed (their checkboxes feed the delete count). (batch3 item 1)
+              bool keep(UploadFile f) =>
+                  f.status != UploadFileStatus.pending || selected == null || selected.contains(f.localPath);
               final visibleSets = session.uploadSets.where((s) => s.files.any(keep)).toList();
               return ListView.builder(
                 itemCount: visibleSets.length,
@@ -2375,9 +2525,13 @@ class _CompletionSetSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final relPath = _relPathUtil(rootPath, set.directoryPath);
-    final files = selectedPaths == null
-        ? set.files
-        : set.files.where((f) => selectedPaths!.contains(f.localPath)).toList();
+    // Keep every attempted file visible (matches the parent's keep()) so a
+    // retry-narrowed selection can't hide succeeded-but-checked rows. (item 1)
+    final files = set.files
+        .where(
+          (f) => f.status != UploadFileStatus.pending || selectedPaths == null || selectedPaths!.contains(f.localPath),
+        )
+        .toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

@@ -877,6 +877,51 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     }
   }
 
+  /// Live name/size verification for [sets] against their target server folders
+  /// (same listing logic as the options step, minus the heavy Immich-by-checksum
+  /// pass). Used by the add-folders selection page and after appending sets so
+  /// their group summaries resolve instead of sitting on "checking server…"
+  /// forever. Safe to call fire-and-forget; failures leave states unknown.
+  /// (batch3 item 13)
+  Future<void> verifySetsAgainstServer(List<UploadSet> sets) async {
+    try {
+      final config = _ref.read(appConfigProvider).copyparty;
+      final uploader = _ref.read(copypartyUploaderProvider);
+      String password = '';
+      try {
+        password = await _ref.read(copypartyPasswordProvider.future);
+      } catch (_) {}
+      final listings = <String, Map<String, int>>{};
+      for (final set in sets) {
+        for (final file in set.files) {
+          final folder = config.recreateFolderStructure
+              ? mirroredUploadPath(config.uploadPath, set.rootPath ?? state.directoryPath, file.localPath)
+              : config.uploadPath;
+          if (!listings.containsKey(folder)) {
+            try {
+              listings[folder] = await uploader.listUploadFolder(config.hostUrl, folder, password);
+            } on CopypartyUploadException {
+              // Folder doesn't exist yet on the server → nothing uploaded there.
+              listings[folder] = const <String, int>{};
+            }
+          }
+          file.verification = CopypartyUploaderService.verificationFromListing(
+            listings[folder] ?? const {},
+            file.filename,
+            file.sizeBytes,
+            immichApplicable: CopypartyFilePairer.isNativeImmichFilename(file.filename),
+          );
+        }
+      }
+      _notify();
+    } catch (e) {
+      // Genuine connection failure — leave verification unknown; the UI shows
+      // the unresolved state rather than a stale/false "checking…".
+      _log.log('verifySetsAgainstServer failed: $e');
+      _notify();
+    }
+  }
+
   /// Marks files that already have a valid cache copy as "Copied" so a reopened
   /// import reflects the cache instead of showing 0%. (cache-detect feature)
   Future<void> _detectCachedFiles(List<UploadSet> sets) async {
@@ -938,6 +983,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     _log.log('ADD FOLDERS: +${keptSets.length} set(s), +${addedPaths.length} selected file(s)');
     // Reflect any already-cached copies among the added files as "Copied".
     await _detectCachedFiles(keptSets);
+    // Resolve the appended groups' server status in the background so their
+    // summaries don't sit on "checking server…" forever. (batch3 item 13)
+    unawaited(verifySetsAgainstServer(keptSets));
     state = state.copyWith(
       uploadSets: [...state.uploadSets, ...keptSets],
       selectedPaths: {...?state.selectedPaths, ...addedPaths},

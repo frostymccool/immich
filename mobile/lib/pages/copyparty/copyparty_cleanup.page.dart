@@ -284,6 +284,35 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     ref.invalidate(pendingCleanupProvider);
   }
 
+  /// Bulk "Remove from list" for the current selection (batch3 item 19) — same
+  /// semantics as the per-file action: stops tracking, deletes nothing.
+  Future<void> _removeSelected() async {
+    final targets = _existing.where((r) => _selected.contains(r.id) && !_deleted.contains(r.id)).toList();
+    if (targets.isEmpty) {
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Remove ${targets.length} from list?'),
+        content: const Text(
+          'This only stops tracking these files for cleanup. '
+          'The local files and the server copies are NOT deleted.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) {
+      return;
+    }
+    for (final r in targets) {
+      await _removeFromList(r);
+    }
+  }
+
   void _setAllCollapsed(bool collapsed) {
     setState(() {
       _collapsed.clear();
@@ -513,6 +542,8 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     final allSelectedSafe =
         _selected.isNotEmpty &&
         _existing.where((r) => _selected.contains(r.id)).every((r) => _verify[r.id]?.safeToDeleteAt(now) ?? false);
+    // batch3 item 15: only offer "Select verified" when something IS verified.
+    final anyVerified = _existing.any((r) => !_deleted.contains(r.id) && (_verify[r.id]?.safeToDeleteAt(now) ?? false));
 
     return Scaffold(
       appBar: AppBar(
@@ -520,7 +551,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         centerTitle: false,
         actions: [
           if (!_loading && _existing.isNotEmpty) ...[
-            TextButton(onPressed: _selectAllVerified, child: const Text('Select verified')),
+            if (anyVerified) TextButton(onPressed: _selectAllVerified, child: const Text('Select verified')),
             TextButton(
               onPressed: (busy || _selected.isEmpty) ? null : _verifySelected,
               child: Text('Verify${_selected.isEmpty ? '' : ' (${_selected.length})'}'),
@@ -534,12 +565,17 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                     _setAllCollapsed(false);
                   case 'collapseAll':
                     _setAllCollapsed(true);
+                  case 'removeSelected':
+                    _removeSelected();
                 }
               },
               itemBuilder: (ctx) => [
                 PopupMenuItem(value: 'selectAll', child: Text(allSelected ? 'Deselect all' : 'Select all')),
                 const PopupMenuItem(value: 'expandAll', child: Text('Expand all')),
                 const PopupMenuItem(value: 'collapseAll', child: Text('Collapse all')),
+                // batch3 item 19: bulk variant of the per-file "Remove from list".
+                if (_selected.isNotEmpty)
+                  PopupMenuItem(value: 'removeSelected', child: Text('Remove ${_selected.length} from list')),
               ],
             ),
           ],
@@ -1014,21 +1050,25 @@ class _CleanupTile extends StatelessWidget {
                       const SizedBox(height: 4),
                       Row(
                         children: [
-                          TextButton.icon(
-                            onPressed: (verifying || uploading) ? null : onVerify,
-                            icon: verifying
-                                ? const SizedBox(
-                                    width: 12,
-                                    height: 12,
-                                    child: CircularProgressIndicator(strokeWidth: 1.5),
-                                  )
-                                : Icon(safe ? Icons.verified_rounded : Icons.fingerprint_rounded, size: 16),
-                            label: Text(verifying ? 'Verifying…' : (safe ? 'Verified' : 'Verify')),
-                            style: TextButton.styleFrom(
-                              visualDensity: VisualDensity.compact,
-                              padding: const EdgeInsets.symmetric(horizontal: 8),
+                          // batch3 item 16: a hash Verify is pointless when the file
+                          // is known absent (name missing) or a partial exists — the
+                          // recovery there is "Upload now", not a verify.
+                          if (v.filenamePresent != VerifyState.no && v.partialExists != VerifyState.yes)
+                            TextButton.icon(
+                              onPressed: (verifying || uploading) ? null : onVerify,
+                              icon: verifying
+                                  ? const SizedBox(
+                                      width: 12,
+                                      height: 12,
+                                      child: CircularProgressIndicator(strokeWidth: 1.5),
+                                    )
+                                  : Icon(safe ? Icons.verified_rounded : Icons.fingerprint_rounded, size: 16),
+                              label: Text(verifying ? 'Verifying…' : (safe ? 'Verified' : 'Verify')),
+                              style: TextButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                                padding: const EdgeInsets.symmetric(horizontal: 8),
+                              ),
                             ),
-                          ),
                           // Recovery (Issue 8): offer re-upload when verification failed.
                           if (cpFailed && !verifying)
                             TextButton.icon(
@@ -1039,7 +1079,19 @@ class _CleanupTile extends StatelessWidget {
                                       height: 12,
                                       child: CircularProgressIndicator(strokeWidth: 1.5),
                                     )
-                                  : const Icon(Icons.cloud_upload_outlined, size: 16),
+                                  // batch3 item 17: icons match the actual targets —
+                                  // copyparty (card) always, plus Immich when this file
+                                  // belongs there and isn't confirmed present yet.
+                                  : Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(Icons.sd_card_rounded, size: 16),
+                                        if (_immichApplies(receipt) && v.immich != VerifyState.yes) ...[
+                                          const SizedBox(width: 2),
+                                          const Icon(Icons.photo_library_rounded, size: 16),
+                                        ],
+                                      ],
+                                    ),
                               label: Text(uploading ? 'Uploading…' : 'Upload now'),
                               style: TextButton.styleFrom(
                                 visualDensity: VisualDensity.compact,
