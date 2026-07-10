@@ -44,9 +44,10 @@ class CopypartySettings extends ConsumerWidget {
           const _CacheSizeSlider(),
           const _AutoDeleteTile(),
           const Divider(),
-          // File Matching is a set-once setting — it lives on the backup-entry
-          // page only, keeping the daily-use global page simpler. (batch3 item 4)
-          if (!showServerConfig) ...[
+          // File Matching is a set-once setting — it lives on the GLOBAL settings
+          // page only; the backup-entry upload page stays simple. (batch3 item 4,
+          // direction corrected from build 96 feedback)
+          if (showServerConfig) ...[
             const SettingGroupTitle(title: 'File Matching', icon: Icons.link_rounded),
             const _TriggerExtensionsTile(),
             const Divider(),
