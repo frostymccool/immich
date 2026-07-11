@@ -389,6 +389,23 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     );
     _pauseRequested = false;
 
+    // Single persistent listener on the SESSION-long cancelToken.future, rather
+    // than one per file: a per-file `.then()` registration on this same
+    // long-lived Future would accumulate one closure per file for the entire
+    // session (never released until cancel/crash) — real growth on a
+    // thousand-file import, the exact kind of pressure behind the earlier OOM
+    // crashes. `_currentFileToken` is repointed each iteration; this one
+    // subscription completes whichever file's token is current. (batch3 item 6)
+    Completer<void>? currentFileToken;
+    unawaited(
+      cancelToken.future.then((_) {
+        final t = currentFileToken;
+        if (t != null && !t.isCompleted) {
+          t.complete();
+        }
+      }),
+    );
+
     // Dynamic queue loop: on each iteration pick the next SELECTED + PENDING
     // file from the LIVE state, so folders added mid-run via addFolders() are
     // picked up. When "upload smallest first" is on we take the pending file
@@ -430,13 +447,13 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         // tells the two apart (skip → mark skipped + continue; cancel → break).
         final skip = _skipToken = Completer<void>();
         final fileToken = Completer<void>();
+        currentFileToken = fileToken;
         void completeFileToken(void _) {
           if (!fileToken.isCompleted) {
             fileToken.complete();
           }
         }
 
-        unawaited(cancelToken.future.then(completeFileToken));
         unawaited(skip.future.then(completeFileToken));
         {
           // FB9: when "create folders" is on, mirror the file's subfolder beneath
