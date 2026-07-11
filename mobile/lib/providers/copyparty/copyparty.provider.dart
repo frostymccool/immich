@@ -372,6 +372,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     _log.log('config.uploadPath    = "${config.uploadPath}"');
     _log.log('config.parallelConns = ${config.parallelConnections}');
     _log.log('config.selfSigned    = ${config.allowSelfSignedCert}');
+    _log.log('config.stageToLocal  = ${config.stageToLocalBeforeUpload}');
+    _log.log('config.cacheSizeMb   = ${config.cacheSizeMb}');
     _log.log('password set         = ${password.isNotEmpty}');
     _log.log('files selected       = ${selectedFilePaths?.length ?? state.totalFiles}');
 
