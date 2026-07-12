@@ -254,6 +254,14 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   /// connection.
   Completer<void>? _uploadCancelToken;
 
+  /// Periodic MEM tick for the whole session, not just each file's start. A
+  /// single multi-GB file can take 10+ minutes to upload, during which
+  /// _logMemory('start ...') never fires again — leaving zero memory telemetry
+  /// for the exact window a silent kill tends to happen in. This is what will
+  /// finally show whether RSS climbs toward a ceiling before a kill (real
+  /// memory pressure) or stays flat (a kill unrelated to our own footprint).
+  Timer? _heartbeatTimer;
+
   /// True for the entire lifetime of one startUpload() invocation, including its
   /// teardown (which now awaits an in-flight prefetch). Gates every entry point
   /// so a SECOND upload loop can never start while one is active — which would
@@ -411,6 +419,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     if (useStaging) {
       await _refreshCacheUsage();
     }
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 30), (_) => _logMemory('heartbeat'));
 
     // Single persistent listener on the SESSION-long cancelToken.future, rather
     // than one per file: a per-file `.then()` registration on this same
@@ -793,6 +803,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
           await copy;
         } catch (_) {}
       }
+      _heartbeatTimer?.cancel();
+      _heartbeatTimer = null;
       _uploadCancelToken = null;
       _uploadRunning = false;
       _uploadingPath = null;
