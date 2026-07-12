@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.0.0-custom.N+<3048+N>  →  3.0.0-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.0.0-custom.95+3143** (next push → `96+3144`).
+Latest pushed: **3.0.0-custom.96+3144** (next push → `97+3145`).
 
 ### Branch targets
 - New feature branches off `feature/custom-upload-settings`, not `main`.
@@ -160,6 +160,36 @@ server section hidden, URL in the title).
 
 **Diagnostics** gated behind `debugMode` (off by default): self-test / share-log
 links hidden in normal use; a "Download log" button stays on the main settings.
+
+---
+
+## copyparty-immich-bridge (server-side, NOT mobile)
+
+`copyparty-immich-bridge/` — standalone Docker service for the Proxmox VM that
+hosts the immich + copyparty containers. Auto-imports media uploaded to
+copyparty (by ANY device) into Immich via its API. Branch
+`claude/auto-immich-copyparty-upload-eq80lh`, based on
+`feature/copyparty-up2k-import`.
+
+- **Trigger**: copyparty `xau` event hook (`--xau f,j,t30,/hooks/immich_bridge_hook.py`,
+  hook script in `hook/`; `IMMICH_BRIDGE_URL` env on the copyparty container)
+  POSTs the upload JSON (`ap`/`vp`/`sz`/`mt`/`wark`) to the bridge's `/hook`.
+  Hook facts verified from copyparty source (`util.py _runhook`): `f`=fork,
+  `j`=JSON argv, per-volume volflag `c,xau=...` also works.
+- **Reliability**: periodic sweep (startup + `SWEEP_INTERVAL_SECONDS`) over the
+  shared read-only volume reconciles anything missed. Skips `.hist`, dotfiles,
+  `*.PARTIAL`, empty and too-young (`MIN_FILE_AGE_SECONDS`) files.
+- **Import**: extensions from Immich's `GET /api/server/media-types` (fallback
+  route `/api/server-info/media-types` for older servers); streaming SHA-1 →
+  `POST /api/assets/bulk-upload-check` (hex accepted) → `POST /api/assets`
+  multipart with `x-immich-checksum` (200=duplicate, 201=created). SQLite state
+  DB keyed by path+size+mtime; per-version retry budget (`MAX_ATTEMPTS`).
+- **Options**: `POST_IMPORT_ACTION` keep|move|delete (default keep; move/delete
+  only run AFTER Immich confirms), `IMMICH_ALBUM_NAME` (optional album),
+  `PATH_MAP` for differing mount prefixes.
+- **Tests**: `python3 -m pytest tests/` in the bridge dir (stub Immich server,
+  44+ tests); CI workflow `.github/workflows/bridge-tests.yml` (path-filtered).
+  Python 3.11+, only dep is `requests`.
 
 ---
 
