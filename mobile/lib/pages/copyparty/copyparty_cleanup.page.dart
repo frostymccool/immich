@@ -116,6 +116,15 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     });
   }
 
+  /// Prefer an existing staged (phone-cached) copy over the ORIGINAL card path
+  /// for any re-hash — it's byte-identical to what was actually uploaded, so
+  /// this is strictly equivalent, never weaker, while being faster and not
+  /// requiring the card to still be inserted (the whole point of staging).
+  Future<String> _effectiveLocalPath(String sourcePath) async {
+    final staged = await ref.read(copypartyStagingProvider).findValidStaged(sourcePath);
+    return staged?.path ?? sourcePath;
+  }
+
   /// Cheap on-load check: a folder listing per file → presence, size, partial.
   Future<void> _runPresenceChecks(List<CopypartyReceipt> receipts) async {
     final uploader = ref.read(copypartyUploaderProvider);
@@ -148,7 +157,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       }
       VerifyState immich;
       try {
-        final assetId = await immichAssetIdByChecksum(api, r.localPath);
+        final assetId = await immichAssetIdByChecksum(api, await _effectiveLocalPath(r.localPath));
         immich = assetId != null ? VerifyState.yes : VerifyState.no;
       } catch (_) {
         immich = VerifyState.unknown;
@@ -171,9 +180,10 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     final uploader = ref.read(copypartyUploaderProvider);
     final api = ref.read(apiServiceProvider).assetsApi;
     try {
+      final effectivePath = await _effectiveLocalPath(r.localPath);
       final cp = await uploader.verifyHash(
         fileUrl: r.copypartyUrl,
-        localPath: r.localPath,
+        localPath: effectivePath,
         password: _password,
         base: _verify[r.id!] ?? const ServerFileVerification(),
         onHashProgress: (done, total) {
@@ -186,7 +196,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       bool applicable = _immichApplies(r);
       if (applicable) {
         try {
-          immich = (await immichAssetIdByChecksum(api, r.localPath)) != null ? VerifyState.yes : VerifyState.no;
+          immich = (await immichAssetIdByChecksum(api, effectivePath)) != null ? VerifyState.yes : VerifyState.no;
         } catch (_) {
           immich = VerifyState.unknown;
         }

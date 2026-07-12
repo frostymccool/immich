@@ -2420,6 +2420,7 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
     // anyway" that loses the only local copy while offline. (Review C1/C2/BLOCKER1)
     final config = ref.read(appConfigProvider).copyparty;
     final uploader = ref.read(copypartyUploaderProvider);
+    final staging = ref.read(copypartyStagingProvider);
     String password = '';
     try {
       password = await ref.read(copypartyPasswordProvider.future);
@@ -2474,10 +2475,16 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
           progress.value++;
           continue;
         }
-        // Reachable → re-validate the content hash (the strong proof).
+        // Reachable → re-validate the content hash (the strong proof). Prefer
+        // an existing staged (phone-cached) copy over the ORIGINAL card path —
+        // hashing the source here would be slower, require the card to still
+        // be inserted, and risk the exact class of USB-unmount access this
+        // project has hit before. The staged copy is byte-identical (it's what
+        // was actually uploaded) so this is strictly equivalent, never weaker.
+        final stagedCopy = await staging.findValidStaged(f.localPath);
         final v = await uploader.verifyHash(
           fileUrl: fileUrl,
-          localPath: f.localPath,
+          localPath: stagedCopy?.path ?? f.localPath,
           password: password,
           base: presence,
           now: now,
