@@ -17,6 +17,7 @@ import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/repositories/secure_storage.repository.dart';
 import 'package:immich_mobile/repositories/upload.repository.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_foreground_service.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_staging.service.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
@@ -356,6 +357,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     try {
       await WakelockPlus.enable();
     } catch (_) {}
+    // A wakelock alone wasn't enough on Samsung — see CLAUDE.md. Raise this
+    // process to foreground OOM-kill priority for the duration of the import.
+    await CopypartyForegroundService.start();
 
     final config = _ref.read(appConfigProvider).copyparty;
     // Q3: folder recreation is now a persistent setting, not a per-import flag.
@@ -771,6 +775,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       try {
         await WakelockPlus.disable();
       } catch (_) {}
+      await CopypartyForegroundService.stop();
       _log.log(
         'IMPORT SESSION ${wasPaused ? 'paused' : (cancelled ? 'cancelled' : 'complete')}: '
         '${state.completedFiles}/${state.totalFiles} files done',

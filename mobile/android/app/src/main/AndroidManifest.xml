@@ -40,6 +40,17 @@
       android:exported="false"
       android:foregroundServiceType="dataSync|shortService" />
 
+    <!-- Copyparty import: minimal keep-alive foreground service. A plain
+         wakelock + per-app "Unrestricted" battery setting were not enough to
+         stop Samsung from silently killing a many-hour import; this raises
+         the process's OOM-kill priority the way Android's own long-running
+         background work is designed to. -->
+    <service
+      android:name=".copyparty.CopypartyForegroundService"
+      android:enabled="true"
+      android:exported="false"
+      android:foregroundServiceType="dataSync" />
+
     <meta-data
       android:name="com.google.firebase.messaging.default_notification_icon"
       android:resource="@drawable/notification_icon" />

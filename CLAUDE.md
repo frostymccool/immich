@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.0.0-custom.N+<3048+N>  →  3.0.0-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.0.0-custom.98+3146** (next push → `99+3147`).
+Latest pushed: **3.0.0-custom.99+3147** (next push → `100+3148`).
 
 ### Branch targets
 - New feature branches off `feature/custom-upload-settings`, not `main`.
