@@ -169,6 +169,11 @@ class ImportSessionState {
   /// stays on the progress page with a Resume control. (batch3 item 6)
   final bool paused;
 
+  /// Live bytes currently sitting in the on-device staging cache, refreshed at
+  /// staging/discard transitions during an import so the progress page can
+  /// show the cache filling up and draining in near-real-time.
+  final int cacheUsedBytes;
+
   const ImportSessionState({
     this.step = ImportSessionStep.idle,
     this.directoryPath,
@@ -180,6 +185,7 @@ class ImportSessionState {
     this.selectedPaths,
     this.cancelled = false,
     this.paused = false,
+    this.cacheUsedBytes = 0,
   });
 
   ImportSessionState copyWith({
@@ -193,6 +199,7 @@ class ImportSessionState {
     Set<String>? selectedPaths,
     bool? cancelled,
     bool? paused,
+    int? cacheUsedBytes,
   }) => ImportSessionState(
     step: step ?? this.step,
     directoryPath: directoryPath ?? this.directoryPath,
@@ -204,6 +211,7 @@ class ImportSessionState {
     selectedPaths: selectedPaths ?? this.selectedPaths,
     cancelled: cancelled ?? this.cancelled,
     paused: paused ?? this.paused,
+    cacheUsedBytes: cacheUsedBytes ?? this.cacheUsedBytes,
   );
 
   int get totalBytes => uploadSets.fold(0, (s, u) => s + u.totalBytes);
@@ -359,7 +367,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     } catch (_) {}
     // A wakelock alone wasn't enough on Samsung — see CLAUDE.md. Raise this
     // process to foreground OOM-kill priority for the duration of the import.
-    await CopypartyForegroundService.start();
+    // Logged explicitly (crash-diagnosis gap): a prior crash log had zero
+    // evidence of whether this ever engaged, since a failure here was
+    // previously swallowed silently on both the Dart and Kotlin sides.
+    final fgServiceStarted = await CopypartyForegroundService.start();
+    _log.log('foreground service start → ${fgServiceStarted ? 'ok' : 'FAILED (import continues without it)'}');
 
     final config = _ref.read(appConfigProvider).copyparty;
     // Q3: folder recreation is now a persistent setting, not a per-import flag.
@@ -394,6 +406,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       paused: false,
     );
     _pauseRequested = false;
+    // Seed the cache indicator with whatever is already on disk (e.g. resuming
+    // a paused/interrupted run) so the progress page doesn't open at a stale 0%.
+    if (useStaging) {
+      await _refreshCacheUsage();
+    }
 
     // Single persistent listener on the SESSION-long cancelToken.future, rather
     // than one per file: a per-file `.then()` registration on this same
@@ -495,6 +512,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             // stops showing "Copying"/"Copied" regardless of which backend runs next.
             file.staging = false;
             file.stagedReady = false;
+            // A fresh copy just landed on disk — publish the new cache total right
+            // away rather than waiting for the read-ahead filler's next tick.
+            if (staged != null) {
+              await _refreshCacheUsage();
+            }
 
             // Card removed? A file with a complete staged copy continues from the
             // phone; a file WITHOUT one fails fast with a clear message instead of
@@ -691,6 +713,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             if (staged != null) {
               await _staging.discard(file.localPath);
               file.stagedReady = false;
+              // Reflect the drop immediately — the read-ahead filler (below) only
+              // republishes cacheUsedBytes when it finds another file to stage, so
+              // near the end of an import (nothing left to prefetch) this is the
+              // only place the indicator would otherwise update.
+              await _refreshCacheUsage();
               // Space freed → let the read-ahead filler resume if it had paused
               // because the cache was full. (cache-size feature)
               if (useStaging) {
@@ -775,7 +802,10 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       try {
         await WakelockPlus.disable();
       } catch (_) {}
-      await CopypartyForegroundService.stop();
+      final fgServiceStopped = await CopypartyForegroundService.stop();
+      _log.log(
+        'foreground service stop → ${fgServiceStopped ? 'ok' : 'failed (harmless — process is exiting FG mode anyway)'}',
+      );
       _log.log(
         'IMPORT SESSION ${wasPaused ? 'paused' : (cancelled ? 'cancelled' : 'complete')}: '
         '${state.completedFiles}/${state.totalFiles} files done',
@@ -808,24 +838,42 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
 
   int _lastCacheBytes = 0;
 
+  /// Re-sums the actual on-disk staging cache and publishes it to
+  /// `state.cacheUsedBytes` (progress-page indicator) and `_lastCacheBytes`
+  /// (memory diagnostic log) in one place, so both stay in sync with the
+  /// single source of truth instead of drifting apart.
+  Future<int> _refreshCacheUsage() async {
+    final used = await _staging.currentCacheBytes();
+    _lastCacheBytes = used;
+    state = state.copyWith(cacheUsedBytes: used);
+    return used;
+  }
+
   /// Returns a local staged [HashedFile] for [file], or null to upload directly
   /// from the source (staging off / failed / out of space → fallback). Shares
   /// the in-flight-staging dedup so if the read-ahead filler is already copying
   /// this file, the loop awaits the SAME copy instead of starting a second one.
+  ///
+  /// Never budget-gated: this is the loop's OWN current file — it must be
+  /// staged regardless of cache fullness, or the upload can't proceed at all.
   Future<HashedFile?> _acquireStaged(UploadFile file, Completer<void> cancelToken) {
-    return _ensureStaged(file, cancelToken);
+    return _ensureStaged(file, cancelToken, enforceBudget: false);
   }
 
   /// Copies [file] into the cache exactly once: if a copy for this source path
   /// is already in flight (started by the loop or the filler) return that same
   /// future; otherwise start one. The actual copy runs under [_stageLock] so
   /// only one card read happens at a time.
-  Future<HashedFile?> _ensureStaged(UploadFile file, Completer<void> cancelToken) {
+  ///
+  /// [enforceBudget] is true only for the read-ahead filler's speculative
+  /// prefetch (see _fillCache) — a candidate it picks may no longer fit by the
+  /// time its turn on the card lock arrives (see _copyFromCardLocked).
+  Future<HashedFile?> _ensureStaged(UploadFile file, Completer<void> cancelToken, {required bool enforceBudget}) {
     final existing = _inFlightStaging[file.localPath];
     if (existing != null) {
       return existing;
     }
-    final fut = _doStageLocked(file, cancelToken);
+    final fut = _doStageLocked(file, cancelToken, enforceBudget: enforceBudget);
     _inFlightStaging[file.localPath] = fut;
     unawaited(
       fut.whenComplete(() {
@@ -837,7 +885,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     return fut;
   }
 
-  Future<HashedFile?> _doStageLocked(UploadFile file, Completer<void> cancelToken) async {
+  Future<HashedFile?> _doStageLocked(
+    UploadFile file,
+    Completer<void> cancelToken, {
+    required bool enforceBudget,
+  }) async {
     if (cancelToken.isCompleted) {
       return null;
     }
@@ -860,10 +912,10 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     }
     // SLOW PATH — an actual card read. Serialise it behind any other in-flight
     // copy so only ONE card read happens at a time (the card is serial).
-    return _copyFromCardLocked(file, cancelToken);
+    return _copyFromCardLocked(file, cancelToken, enforceBudget: enforceBudget);
   }
 
-  Future<HashedFile?> _copyFromCardLocked(UploadFile file, Completer<void> cancelToken) {
+  Future<HashedFile?> _copyFromCardLocked(UploadFile file, Completer<void> cancelToken, {required bool enforceBudget}) {
     final prev = _stageLock;
     final done = Completer<void>();
     _stageLock = done.future;
@@ -876,6 +928,28 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       try {
         if (cancelToken.isCompleted) {
           return null;
+        }
+        // Re-validate the budget HERE, at the exact moment the real card read
+        // is about to start — not back when _fillCache first picked this
+        // candidate. This candidate may have sat queued behind _stageLock
+        // while another copy (e.g. the main loop's own current file, which is
+        // never budget-gated) ran to completion and grew the cache past the
+        // point where this one still fits — the upfront check in _fillCache
+        // is a cheap early-exit, not the authority. Nothing else writes to the
+        // cache concurrently (only one holder of _stageLock at a time), so a
+        // pass here holds for this copy's entire duration. (cache-overshoot fix)
+        if (enforceBudget) {
+          final config = _ref.read(appConfigProvider).copyparty;
+          final budget = config.cacheSizeMb * 1024 * 1024;
+          final used = await _staging.currentCacheBytes();
+          if (used > 0 && used + file.sizeBytes > budget) {
+            _log.log(
+              'staging: skipping read-ahead for ${file.filename} — would exceed the '
+              '${(config.cacheSizeMb / 1024).round()} GiB cache budget '
+              '(used≈${used ~/ (1024 * 1024)}MiB, file=${file.sizeBytes ~/ (1024 * 1024)}MiB)',
+            );
+            return null;
+          }
         }
         final hashed = await _staging.stage(
           file.localPath,
@@ -976,17 +1050,18 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       // staging dir. Always allow at least one file (used==0) so a single file
       // bigger than the whole cache still stages one-at-a-time; otherwise stop
       // and wait for an upload to discard and free space (which restarts us).
-      final used = await _staging.currentCacheBytes();
-      _lastCacheBytes = used;
+      final used = await _refreshCacheUsage();
       if (cancelToken.isCompleted) {
         return;
       }
       if (used > 0 && used + next.sizeBytes > budget) {
         return;
       }
-      final result = await _ensureStaged(next, cancelToken);
-      // A staging failure (out of space / IO) resolves to null — stop filling so
-      // we don't spin in a tight fail loop; the loop will fall back per-file.
+      final result = await _ensureStaged(next, cancelToken, enforceBudget: true);
+      // A staging failure (out of space / IO) or a budget re-check that failed
+      // once this candidate reached the front of the card queue both resolve to
+      // null — stop filling so we don't spin in a tight fail loop; the loop
+      // will fall back per-file, and a later discard restarts the filler.
       if (result == null && !next.stagedReady) {
         return;
       }
@@ -1447,6 +1522,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       selectedPaths: state.selectedPaths,
       cancelled: state.cancelled,
       paused: state.paused,
+      cacheUsedBytes: state.cacheUsedBytes,
     );
   }
 }

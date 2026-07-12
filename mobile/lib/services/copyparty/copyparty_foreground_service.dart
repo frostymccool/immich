@@ -17,15 +17,23 @@ import 'package:flutter/services.dart';
 class CopypartyForegroundService {
   static const _channel = MethodChannel('immich/copyparty_foreground');
 
-  static Future<void> start() async {
+  /// Returns true if the platform call succeeded (does NOT guarantee
+  /// `startForeground` itself succeeded inside the service — that runs later,
+  /// outside this call, and is only visible in device logcat for now). False
+  /// on any platform-channel failure; never throws.
+  static Future<bool> start() async {
     try {
-      await _channel.invokeMethod<void>('start');
-    } catch (_) {}
+      return (await _channel.invokeMethod<bool>('start')) ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
-  static Future<void> stop() async {
+  static Future<bool> stop() async {
     try {
-      await _channel.invokeMethod<void>('stop');
-    } catch (_) {}
+      return (await _channel.invokeMethod<bool>('stop')) ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 }

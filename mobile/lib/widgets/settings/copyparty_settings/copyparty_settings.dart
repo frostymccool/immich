@@ -40,12 +40,17 @@ class CopypartySettings extends ConsumerWidget {
           const SettingGroupTitle(title: 'Upload Behaviour', icon: Icons.tune_rounded),
           const _ParallelConnectionsSlider(),
           const _SortSmallestFirstTile(),
-          const _RecreateFolderStructureTile(),
+          // "Recreate folder structure" is a set-once, whole-server layout choice
+          // (like File Matching below) — it lives on the GLOBAL settings page
+          // only; the backup-entry upload page stays simple.
+          if (showServerConfig) const _RecreateFolderStructureTile(),
+          const _DefaultDestinationTile(),
+          const _AutoDeleteTile(),
+          const Divider(),
+          const SettingGroupTitle(title: 'Phone Cache', icon: Icons.storage_rounded),
           const _StageToLocalTile(),
           const _CacheSizeSlider(),
           const _ManageCacheTile(),
-          const _DefaultDestinationTile(),
-          const _AutoDeleteTile(),
           const Divider(),
           // File Matching is a set-once setting — it lives on the GLOBAL settings
           // page only; the backup-entry upload page stays simple. (batch3 item 4,

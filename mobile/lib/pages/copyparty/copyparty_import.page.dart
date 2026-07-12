@@ -1600,6 +1600,14 @@ class _UploadProgressStep extends ConsumerWidget {
       }
     }
 
+    // Cache-fill indicator: only meaningful when staging-to-phone is enabled,
+    // and only during the actual upload run (session.cacheUsedBytes is 0 once
+    // idle/complete). Shows the cache rising as files are copied ahead of the
+    // upload and dropping again as each finished file's staged copy is discarded.
+    final stagingEnabled = ref.watch(appConfigProvider.select((c) => c.copyparty.stageToLocalBeforeUpload));
+    final cacheBudgetBytes = ref.watch(appConfigProvider.select((c) => c.copyparty.cacheSizeMb)) * 1024 * 1024;
+    final cacheFraction = cacheBudgetBytes > 0 ? (session.cacheUsedBytes / cacheBudgetBytes).clamp(0.0, 1.0) : 0.0;
+
     return Column(
       children: [
         LinearProgressIndicator(value: opsTotal > 0 ? opsDone / opsTotal : null, minHeight: 4),
@@ -1620,6 +1628,42 @@ class _UploadProgressStep extends ConsumerWidget {
             ],
           ),
         ),
+        if (stagingEnabled)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.sd_storage_outlined,
+                      size: 14,
+                      color: context.colorScheme.onSurface.withValues(alpha: 0.6),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Phone cache: ${formatHumanReadableBytes(session.cacheUsedBytes, 1)} / '
+                      '${formatHumanReadableBytes(cacheBudgetBytes, 1)} '
+                      '(${(cacheFraction * 100).round()}%)',
+                      style: context.textTheme.bodySmall?.copyWith(
+                        color: context.colorScheme.onSurface.withValues(alpha: 0.6),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: LinearProgressIndicator(
+                    value: cacheFraction,
+                    minHeight: 3,
+                    backgroundColor: context.colorScheme.surfaceContainerHighest,
+                  ),
+                ),
+              ],
+            ),
+          ),
         const Divider(height: 1),
         Expanded(
           child: ListView.builder(

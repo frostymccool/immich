@@ -14,7 +14,8 @@ import io.flutter.plugin.common.MethodChannel
  * startUpload/teardown, alongside the WakelockPlus calls).
  *
  * Channel: immich/copyparty_foreground
- * Methods: start() -> null, stop() -> null
+ * Methods: start() -> bool, stop() -> bool (true = the platform call itself
+ * succeeded; does not guarantee onStartCommand's startForeground() succeeded).
  */
 class CopypartyForegroundServicePlugin(private val appContext: Context) : ImmichPlugin() {
     companion object {
@@ -38,33 +39,38 @@ class CopypartyForegroundServicePlugin(private val appContext: Context) : Immich
 
     private fun handleCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
-            "start" -> {
-                startService()
-                result.success(null)
-            }
-            "stop" -> {
-                stopService()
-                result.success(null)
-            }
+            // Both return a bool (true = call succeeded) rather than null, so
+            // the Dart side can log the outcome into the shared diagnostic log
+            // instead of it being silently invisible. (crash-diagnosis gap)
+            "start" -> result.success(startService())
+            "stop" -> result.success(stopService())
             else -> result.notImplemented()
         }
     }
 
-    private fun startService() {
-        try {
+    private fun startService(): Boolean {
+        return try {
             ContextCompat.startForegroundService(
                 appContext,
                 Intent(appContext, CopypartyForegroundService::class.java)
             )
+            true
         } catch (_: Exception) {
             // Never let a failure here break the import — the wakelock and
             // normal upload logic still function without the FG promotion.
+            // NOTE: this only catches failures in REQUESTING the start; a
+            // failure inside the service's own onStartCommand (e.g.
+            // startForeground itself throwing) is caught separately there,
+            // since it runs later and outside this call stack.
+            false
         }
     }
 
-    private fun stopService() {
-        try {
+    private fun stopService(): Boolean {
+        return try {
             appContext.stopService(Intent(appContext, CopypartyForegroundService::class.java))
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+            false
+        }
     }
 }
