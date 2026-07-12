@@ -48,8 +48,11 @@ class CopypartyForegroundService : Service() {
         )
         notificationManager.createNotificationChannel(channel)
 
+        // NOTE: Intent.setFlags(Int) returns Intent (not void), so Kotlin does
+        // NOT synthesize a mutable `var flags` from it — only a read-only `val`
+        // getter. Must call setFlags() explicitly rather than `flags = ...`.
         val openAppIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
         val contentIntent = PendingIntent.getActivity(
             this,
