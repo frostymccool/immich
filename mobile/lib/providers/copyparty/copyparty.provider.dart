@@ -1374,14 +1374,18 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       final dot = base.lastIndexOf('.');
       final stem = dot > 0 ? base.substring(0, dot) : base;
       final ext = dot > 0 ? base.substring(dot) : '';
+      // Prefer a staged copy for every read below — content-equivalent to the
+      // card, faster, and doesn't require the card to still be inserted.
+      // (staged-preference sweep)
+      final effectivePath = (await _staging.findValidStaged(path))?.path ?? path;
 
       // 1. baseline — original name + content
-      await attempt(path, config.uploadPath, 'orig:$base');
+      await attempt(effectivePath, config.uploadPath, 'orig:$base');
 
       // 2. renamed copy, SAME bytes
       File? renamed;
       try {
-        renamed = await File(path).copy('${tmp.path}/${stem}__rn$stamp$ext');
+        renamed = await File(effectivePath).copy('${tmp.path}/${stem}__rn$stamp$ext');
         await attempt(renamed.path, config.uploadPath, 'rename:$base');
       } catch (e) {
         _log.log('rename variation setup failed: $e');
@@ -1390,7 +1394,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       // 3 & 4. new name + appended bytes → brand-new wark (parallel upload)
       File? newc;
       try {
-        newc = await File(path).copy('${tmp.path}/${stem}__nc$stamp$ext');
+        newc = await File(effectivePath).copy('${tmp.path}/${stem}__nc$stamp$ext');
         await newc.writeAsBytes(utf8.encode('\n#immich-selftest-$stamp\n'), mode: FileMode.append);
         await attempt(newc.path, config.uploadPath, 'newcontent:$base');
         await attempt(newc.path, '${config.uploadPath}/selftest_$stamp', 'newfolder:$base');
@@ -1403,7 +1407,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       // server mis-places concurrent/out-of-order chunks.
       File? seqc;
       try {
-        seqc = await File(path).copy('${tmp.path}/${stem}__sq$stamp$ext');
+        seqc = await File(effectivePath).copy('${tmp.path}/${stem}__sq$stamp$ext');
         await seqc.writeAsBytes(utf8.encode('\n#immich-selftest-SEQ-$stamp\n'), mode: FileMode.append);
         await attempt(seqc.path, config.uploadPath, 'seq-newcontent:$base', sequential: true);
       } catch (e) {
@@ -1453,14 +1457,18 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       final name = path.split('/').last;
       final fileUrl = '${config.hostUrl.trimRight()}/${_stripSlashes(config.uploadPath)}/$name';
       try {
-        final size = await File(path).length();
+        // Mirror production: prefer a staged copy when one exists, so this
+        // self-test actually validates the code path _confirmDelete/_verifyFile
+        // run, not a stale one that always reads the card. (staged-preference sweep)
+        final effectivePath = (await _staging.findValidStaged(path))?.path ?? path;
+        final size = await File(effectivePath).length();
         var v = CopypartyUploaderService.verificationFromListing(sizes, name, size);
-        v = await _uploader.verifyHash(fileUrl: fileUrl, localPath: path, password: password, base: v);
+        v = await _uploader.verifyHash(fileUrl: fileUrl, localPath: effectivePath, password: password, base: v);
         final applicable = CopypartyFilePairer.isNativeImmichFilename(name);
         VerifyState immich = VerifyState.unknown;
         if (applicable) {
           try {
-            immich = (await immichAssetIdByChecksum(api, path)) != null ? VerifyState.yes : VerifyState.no;
+            immich = (await immichAssetIdByChecksum(api, effectivePath)) != null ? VerifyState.yes : VerifyState.no;
           } catch (_) {}
         }
         v = v.copyWith(immich: immich, immichApplicable: applicable);
@@ -1479,20 +1487,6 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     }
     _log.section('VERIFICATION SELF-TEST done');
     return lines;
-  }
-
-  /// Uploads a local file to Immich by path (used by the cleanup-page
-  /// "Upload now" recovery). Returns the Immich asset id on success, else null.
-  Future<String?> uploadPathToImmich(String localPath, String filename) async {
-    final stat = await File(localPath).stat();
-    final file = UploadFile(
-      localPath: localPath,
-      filename: filename,
-      sizeBytes: stat.size,
-      lastModifiedMs: stat.modified.millisecondsSinceEpoch,
-    );
-    final result = await _uploadToImmich(file);
-    return result.isSuccess ? result.remoteAssetId : null;
   }
 
   /// Streams the whole-file SHA-512 of [path] (hex) — used to cross-check a

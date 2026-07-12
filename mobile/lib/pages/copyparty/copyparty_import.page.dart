@@ -593,6 +593,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     // Background Immich-by-checksum pass for native-Immich files (FB4); rows
     // update as each completes. Skipped if the listing failed above.
     final api = ref.read(apiServiceProvider).assetsApi;
+    final staging = ref.read(copypartyStagingProvider);
     for (final f in files) {
       // Bail immediately if disposed or a newer _verify run superseded us — do
       // NOT start hashing the next (possibly multi-GB) file.
@@ -603,7 +604,12 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
         continue;
       }
       try {
-        final id = await immichAssetIdByChecksum(api, f.localPath);
+        // A staged copy can already exist here (e.g. resuming a prior partial
+        // session) — prefer it over the card path for the same reason as the
+        // cleanup/completion-screen checks: byte-identical, faster, and
+        // doesn't require the card.
+        final staged = await staging.findValidStaged(f.localPath);
+        final id = await immichAssetIdByChecksum(api, staged?.path ?? f.localPath);
         // Re-check after the await: the user may have left or refreshed while
         // this file was hashing. Don't mutate shared state for a stale run.
         if (_disposed || generation != _verifyGeneration) {
