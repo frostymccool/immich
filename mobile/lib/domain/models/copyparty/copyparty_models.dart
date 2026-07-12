@@ -54,6 +54,12 @@ class UploadFile {
   // live in ephemeral card state and vanished when the list scrolled. (Batch: item 2)
   int? transferStartMs;
   int? transferEndMs;
+  // Copy-to-phone (staging) timing, same idea as transferStartMs/EndMs but for
+  // the USB-read+hash pass rather than the network transfer — so "Copied,
+  // waiting to upload" can show how long the copy took and its avg speed
+  // instead of going silent on that phase.
+  int? stageStartMs;
+  int? stageEndMs;
   // When set, the upload loop sends this file to EXACTLY this server folder
   // instead of deriving one from config/mirroring — used when re-uploading a
   // receipt from the cleanup page, whose original folder must be preserved
@@ -110,6 +116,10 @@ class UploadFile {
   Duration? get transferElapsed => (transferStartMs != null && transferEndMs != null)
       ? Duration(milliseconds: transferEndMs! - transferStartMs!)
       : null;
+
+  /// Frozen copy-to-phone (staging) duration (null until staging finishes).
+  Duration? get stageElapsed =>
+      (stageStartMs != null && stageEndMs != null) ? Duration(milliseconds: stageEndMs! - stageStartMs!) : null;
 }
 
 class UploadSet {

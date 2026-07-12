@@ -108,6 +108,11 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
   final Set<String> _selectedPaths = {};
   final Map<String, UploadDestination> _destinationOverrides = {};
   bool _adding = false;
+  // Tracks manual selection changes so the post-verify smart-default below
+  // never clobbers a choice the user already made. (staged-preference sweep
+  // follow-up: this page was defaulting to "select everything" and never
+  // revising it once server verification landed, unlike the initial picker.)
+  bool _userTouched = false;
 
   @override
   void initState() {
@@ -132,9 +137,23 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
       // summaries sat on "checking server…" forever. (batch3 item 13)
       unawaited(
         ref.read(importSessionProvider.notifier).verifySetsAgainstServer(sets).then((_) {
-          if (mounted) {
-            setState(() {});
+          if (!mounted) {
+            return;
           }
+          setState(() {
+            // Same smart default as the initial picker (_OptionsStepState):
+            // once we actually know what's already on the server, untick the
+            // files that are already there instead of leaving every file
+            // (including ones already fully uploaded) selected forever.
+            // Skipped if the user already changed the selection by hand.
+            if (!_userTouched) {
+              _selectedPaths
+                ..clear()
+                ..addAll(
+                  sets.expand((s) => s.files).where((f) => !_OptionsStepState._looksPresent(f)).map((f) => f.localPath),
+                );
+            }
+          });
         }),
       );
     } catch (e) {
@@ -149,6 +168,7 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
 
   void _toggleGroup(UploadSet set, bool select) {
     setState(() {
+      _userTouched = true;
       for (final f in set.files) {
         if (select) {
           _selectedPaths.add(f.localPath);
@@ -161,6 +181,7 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
 
   void _toggleFile(String path, bool select) {
     setState(() {
+      _userTouched = true;
       if (select) {
         _selectedPaths.add(path);
       } else {
@@ -244,6 +265,7 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
               ),
               TextButton(
                 onPressed: () => setState(() {
+                  _userTouched = true;
                   if (allSelected) {
                     _selectedPaths.clear();
                   } else {
@@ -1858,6 +1880,19 @@ String? _doneTimingSuffix(UploadFile f) {
   return '${_formatTransferDuration(el)} · avg $avg';
 }
 
+/// Same idea as [_doneTimingSuffix] but for the copy-to-phone (staging) phase
+/// — null when staging timing wasn't captured (e.g. an already-valid cached
+/// copy was reused instead of a fresh copy).
+String? _stageTimingSuffix(UploadFile f) {
+  final el = f.stageElapsed;
+  if (el == null) {
+    return null;
+  }
+  final secs = el.inMilliseconds / 1000.0;
+  final avg = _formatTransferSpeed(secs > 0 ? f.sizeBytes / secs : 0);
+  return '${_formatTransferDuration(el)} · avg $avg';
+}
+
 class CopypartyProgressFileCard extends StatefulWidget {
   final UploadFile file;
   // batch3 item 6: invoked to skip this file while it's the one being worked on.
@@ -2063,8 +2098,14 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
                         ? '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · copying '
                               '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}% · $_speed'
                         : isCopied
-                        // Fully staged, waiting for its upload turn.
-                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · copied to phone · waiting to upload'
+                        // Fully staged, waiting for its upload turn. Include the
+                        // copy's own elapsed/avg speed when captured — was
+                        // silently dropped before, unlike the analogous "Done"
+                        // (upload) timing line.
+                        ? (_stageTimingSuffix(file) != null
+                              ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · copied in '
+                                    '${_stageTimingSuffix(file)} · waiting to upload'
+                              : '${formatHumanReadableBytes(file.sizeBytes, 1)} · copied to phone · waiting to upload')
                         : isHashing
                         ? '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · hashing '
                               '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}% · $_speed'

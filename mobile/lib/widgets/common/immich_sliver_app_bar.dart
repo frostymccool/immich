@@ -8,6 +8,7 @@ import 'package:flutter_svg/svg.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/models/server_info/server_info.model.dart';
+import 'package:immich_mobile/pages/common/settings.page.dart';
 import 'package:immich_mobile/providers/backup/drift_backup.provider.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/cast.provider.dart';
@@ -193,7 +194,21 @@ class _CopypartyIndicatorState extends ConsumerState<_CopypartyIndicator> {
             final host = cp.hostUrl.replaceAll(RegExp(r'/+$'), '');
             final path = '/${cp.uploadPath.replaceAll(RegExp(r'^/+|/+$'), '')}';
             return Scaffold(
-              appBar: AppBar(title: Text('Copyparty ($host$path)'), centerTitle: false),
+              appBar: AppBar(
+                title: Text('Copyparty ($host$path)'),
+                centerTitle: false,
+                actions: [
+                  IconButton(
+                    // Same flow as the rest of the app (e.g. asset viewer/
+                    // free-up-space settings jump straight to their own
+                    // section) — this embedded page hides server config, so
+                    // give it a direct way to the full Copyparty settings.
+                    onPressed: () => ctx.pushRoute(SettingsSubRoute(section: SettingSection.copyparty)),
+                    icon: const Icon(Icons.settings_outlined),
+                    tooltip: 'Copyparty settings',
+                  ),
+                ],
+              ),
               body: const CopypartySettings(showServerConfig: false),
             );
           },

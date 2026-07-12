@@ -12,6 +12,7 @@ import 'package:immich_mobile/extensions/platform_extensions.dart';
 import 'package:immich_mobile/extensions/theme_extensions.dart';
 import 'package:immich_mobile/extensions/translate_extensions.dart';
 import 'package:immich_mobile/generated/translations.g.dart';
+import 'package:immich_mobile/pages/common/settings.page.dart';
 import 'package:immich_mobile/presentation/widgets/backup/backup_toggle_button.widget.dart';
 import 'package:immich_mobile/providers/background_sync.provider.dart';
 import 'package:immich_mobile/providers/backup/backup_album.provider.dart';
@@ -132,6 +133,19 @@ class _DriftBackupPageState extends ConsumerState<DriftBackupPage> {
                         // the server section is hidden on this embedded page.
                         title: Text('Copyparty ($host$path)'),
                         centerTitle: false,
+                        actions: [
+                          IconButton(
+                            // Same flow as the rest of the app (e.g. asset
+                            // viewer/free-up-space settings jump straight to
+                            // their own section) — this embedded page hides
+                            // server config, so give it a direct way to the
+                            // full Copyparty settings instead of making the
+                            // user hunt through the main Settings list.
+                            onPressed: () => ctx.pushRoute(SettingsSubRoute(section: SettingSection.copyparty)),
+                            icon: const Icon(Icons.settings_outlined),
+                            tooltip: 'Copyparty settings',
+                          ),
+                        ],
                       ),
                       // item 3: server config lives in main app settings only.
                       body: const CopypartySettings(showServerConfig: false),

@@ -513,7 +513,14 @@ class CopypartyUploaderService {
     // X-Up2k-Stat is optional progress telemetry (u2c.py only sends it "if
     // stats"); omit it rather than risk a malformed value confusing the server.
     final headers = {'Content-Type': 'application/octet-stream', 'X-Up2k-Wark': wark, 'X-Up2k-Hash': chunkHash};
-    _log?.request('POST', chunkUri, headers, body: 'chunk #$chunkIdx (${chunkBytes.length} bytes)');
+    // One compact line rather than the general request()/response() dump (a
+    // separate log() call per header): this runs on every chunk, at up to
+    // `parallelism` concurrency, so the per-line print()/file-write overhead of
+    // the full multi-line form adds up fast on large uploads. The wark/headers
+    // don't vary per chunk (already logged once at handshake) so nothing
+    // diagnostically useful is lost. Failures still get their own full log
+    // line below/in the retry loop regardless of this. (jank fix)
+    _log?.log('>>> chunk #$chunkIdx (${chunkBytes.length}B) hash=$chunkHash');
 
     final request = http.Request('POST', chunkUri);
     request.headers.addAll(headers);
@@ -547,7 +554,11 @@ class CopypartyUploaderService {
     }
     final statusCode = response.statusCode;
     final respBody = await response.stream.bytesToString();
-    _log?.response(statusCode, headers: response.headers, body: respBody);
+    // Compact form (see the matching request log above) — response headers
+    // for a chunk POST carry nothing beyond what the handshake already logged.
+    _log?.log(
+      '<<< chunk #$chunkIdx HTTP $statusCode  body: ${respBody.length > 200 ? respBody.substring(0, 200) : respBody}',
+    );
 
     if (statusCode < 400) {
       return; // 200/204 = accepted.

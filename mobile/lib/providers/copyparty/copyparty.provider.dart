@@ -398,6 +398,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     _log.log('config.selfSigned    = ${config.allowSelfSignedCert}');
     _log.log('config.stageToLocal  = ${config.stageToLocalBeforeUpload}');
     _log.log('config.cacheSizeMb   = ${config.cacheSizeMb}');
+    _log.log('config.sortSmallest  = ${config.sortSmallestFirst}');
     _log.log('config.autoDelete    = ${config.autoDeleteAfterVerify}');
     _log.log('password set         = ${password.isNotEmpty}');
     _log.log('files selected       = ${selectedFilePaths?.length ?? state.totalFiles}');
@@ -980,6 +981,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             return null;
           }
         }
+        file.stageStartMs ??= DateTime.now().millisecondsSinceEpoch;
         final hashed = await _staging.stage(
           file.localPath,
           cancelToken: cancelToken,
@@ -995,12 +997,16 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         // Copy AND hash are done (hashing happens during the copy) → "Copied".
         file.staging = false;
         file.stagedReady = true;
+        file.stageEndMs = DateTime.now().millisecondsSinceEpoch;
         _notify();
         return hashed;
       } on CopypartyCancelledException {
         file.staging = false;
         file.stagedReady = false;
         file.uploadedBytes = 0;
+        // Clear so a later retry's timing starts fresh instead of including
+        // this aborted attempt's dead time.
+        file.stageStartMs = null;
         _notify();
         return null;
       } catch (e) {
@@ -1009,6 +1015,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         file.staging = false;
         file.stagedReady = false;
         file.uploadedBytes = 0;
+        file.stageStartMs = null;
         _notify();
         return null;
       } finally {
@@ -1070,7 +1077,6 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       if (config.sortSmallestFirst) {
         candidates.sort((a, b) => owner[a]!.totalBytes.compareTo(owner[b]!.totalBytes));
       }
-      final next = candidates.first;
 
       // Budget against the ACTUAL bytes on disk (data-integrity + concurrency
       // finding 3): the in-memory stagedReady tally under-counted the file
@@ -1083,7 +1089,23 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       if (cancelToken.isCompleted) {
         return;
       }
-      if (used > 0 && used + next.sizeBytes > budget) {
+      // Find the FIRST candidate (in the order above) that fits, rather than
+      // only ever checking candidates.first — a single large file earlier in
+      // that order (e.g. next-in-upload-order when sortSmallestFirst is off)
+      // used to make the whole filler give up permanently even though a
+      // smaller file further down would easily fit in the remaining headroom.
+      // (observed: cache sat flat for 20+ minutes with several GiB of unused
+      // budget while a large in-progress file blocked every other candidate)
+      UploadFile? next;
+      for (final c in candidates) {
+        if (used == 0 || used + c.sizeBytes <= budget) {
+          next = c;
+          break;
+        }
+      }
+      if (next == null) {
+        // Every remaining candidate is too big for the current headroom —
+        // genuinely nothing to do until an upload finishes and discards.
         return;
       }
       final result = await _ensureStaged(next, cancelToken, enforceBudget: true);
@@ -1529,7 +1551,39 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     );
   }
 
+  // Progress callbacks (chunk upload, hashing, staging) can call _notify()
+  // many times a second per file, times however many run in parallel. Every
+  // call forces the whole progress screen to rebuild (it watches the full
+  // session, and re-sorts/re-folds the entire file list on each build) — at
+  // that rate the rebuild work itself became a second source of jank on top
+  // of hashing. None of it loses data: file fields are mutated on the same
+  // long-lived UploadFile objects _notify() doesn't touch, it only decides how
+  // often to force a rebuild — so coalescing calls within a short window is
+  // safe. Leading+trailing: the first tick in a burst publishes immediately
+  // (a status change still feels instant), later ticks in the same window
+  // just mark "something changed"; one final publish at the end of the
+  // window guarantees the latest state (e.g. 100%, a status flip) is never
+  // dropped. (jank fix — see also the compacted chunk logging below)
+  Timer? _notifyThrottle;
+  bool _notifyCoalesced = false;
+  static const _notifyThrottleWindow = Duration(milliseconds: 120);
+
   void _notify() {
+    if (_notifyThrottle != null) {
+      _notifyCoalesced = true;
+      return;
+    }
+    _publishNotify();
+    _notifyThrottle = Timer(_notifyThrottleWindow, () {
+      _notifyThrottle = null;
+      if (_notifyCoalesced) {
+        _notifyCoalesced = false;
+        _publishNotify();
+      }
+    });
+  }
+
+  void _publishNotify() {
     // Force a state update so the UI rebuilds. Reconstruct ALL fields (a bare
     // copyWith would clear errorMessage; an omission would drop scannedFiles /
     // selectedPaths) so per-tick rebuilds don't lose the selection used to
@@ -1547,6 +1601,13 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       paused: state.paused,
       cacheUsedBytes: state.cacheUsedBytes,
     );
+  }
+
+  @override
+  void dispose() {
+    _notifyThrottle?.cancel();
+    _heartbeatTimer?.cancel();
+    super.dispose();
   }
 }
 
