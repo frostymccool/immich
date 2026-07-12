@@ -398,6 +398,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     _log.log('config.selfSigned    = ${config.allowSelfSignedCert}');
     _log.log('config.stageToLocal  = ${config.stageToLocalBeforeUpload}');
     _log.log('config.cacheSizeMb   = ${config.cacheSizeMb}');
+    _log.log('config.autoDelete    = ${config.autoDeleteAfterVerify}');
     _log.log('password set         = ${password.isNotEmpty}');
     _log.log('files selected       = ${selectedFilePaths?.length ?? state.totalFiles}');
 
@@ -687,18 +688,34 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
               // direct (double-read) path gets for free. (data-integrity finding 2)
               var safeToRemove = true;
               if (staged != null) {
-                try {
-                  final srcHash = await _wholeFileSha512(file.localPath);
-                  safeToRemove = srcHash == file.sha512;
-                  if (!safeToRemove) {
-                    _log.log(
-                      'AUTO-DELETE BLOCKED for ${file.filename}: source hash != uploaded hash '
-                      '(possible bad read) — keeping the source file',
-                    );
-                  }
-                } catch (_) {
-                  // Source unreadable (e.g. card pulled) → nothing to delete anyway.
+                // Once staged, nothing else in the pipeline needs the ORIGINAL
+                // source again — this re-hash is the one exception, and only to
+                // sanity-check before an irreversible delete. Check existence
+                // first rather than going straight to a full streamed read: a
+                // source that's gone (card removed/unmounted) should be a quick,
+                // ordinary "can't verify, keep it" — not a full-file read
+                // against a torn-down mount, which is exactly the kind of
+                // access this project has previously seen cause USB-unmount
+                // crashes (see CLAUDE.md). No delete is safe without a source
+                // to compare against anyway.
+                final sourceStillThere = await File(file.localPath).exists().catchError((_) => false);
+                if (!sourceStillThere) {
                   safeToRemove = false;
+                  _log.log('AUTO-DELETE SKIPPED for ${file.filename}: source gone — nothing to verify against');
+                } else {
+                  try {
+                    final srcHash = await _wholeFileSha512(file.localPath);
+                    safeToRemove = srcHash == file.sha512;
+                    if (!safeToRemove) {
+                      _log.log(
+                        'AUTO-DELETE BLOCKED for ${file.filename}: source hash != uploaded hash '
+                        '(possible bad read) — keeping the source file',
+                      );
+                    }
+                  } catch (_) {
+                    // Source unreadable (e.g. card pulled mid-check) → nothing to delete anyway.
+                    safeToRemove = false;
+                  }
                 }
               }
               if (safeToRemove) {
