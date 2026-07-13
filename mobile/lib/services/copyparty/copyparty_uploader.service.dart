@@ -951,50 +951,69 @@ class CopypartyUploaderService {
       return end - start;
     }
 
-    final neededBytesTotal = handshakeResult.neededChunks.fold<int>(0, (s, idx) => s + chunkByteLength(idx));
-    final alreadyConfirmedBytes = hashed.totalBytes - neededBytesTotal;
-    // Report the resume baseline immediately, before the first new chunk
-    // completes, so a mostly-done resume doesn't sit at 0% for however long
-    // the first remaining chunk takes.
-    onUploadProgress?.call(alreadyConfirmedBytes, hashed.totalBytes);
+    // Step 3+4: upload the needed chunks, then confirm. If the CONFIRM
+    // handshake still reports missing chunks, retry by uploading exactly
+    // those and re-confirming, instead of failing the whole file after one
+    // round — observed after a pause/resume: the confirm handshake can
+    // report chunks the upload pass didn't know about (e.g. a chunk POST
+    // that "succeeded" client-side but the server's up2k.snap didn't end up
+    // recording, or a resume racing a stale needed-list) as a hard failure
+    // even though a second round would fix it with no re-hash needed. A
+    // genuine hash MISMATCH is NOT retried — that's a content problem retry
+    // can't fix, not a transient one.
+    const maxConfirmAttempts = 3;
+    var neededChunks = handshakeResult.neededChunks;
+    var confirmed = handshakeResult;
+    for (var attempt = 1; attempt <= maxConfirmAttempts; attempt++) {
+      if (neededChunks.isNotEmpty) {
+        final neededBytesTotal = neededChunks.fold<int>(0, (s, idx) => s + chunkByteLength(idx));
+        final alreadyConfirmedBytes = hashed.totalBytes - neededBytesTotal;
+        // Report the resume baseline immediately, before the first new chunk
+        // completes, so a mostly-done resume doesn't sit at 0% for however
+        // long the first remaining chunk takes.
+        onUploadProgress?.call(alreadyConfirmedBytes, hashed.totalBytes);
+        await uploadChunks(
+          hashed,
+          confirmed.wark,
+          neededChunks,
+          hostUrl,
+          confirmed.purl,
+          password,
+          parallelism: parallelism,
+          onProgress: onUploadProgress == null
+              ? null
+              : (bytesDoneInNeeded, _) =>
+                    onUploadProgress(alreadyConfirmedBytes + bytesDoneInNeeded, hashed.totalBytes),
+          cancelToken: cancelToken,
+        );
+      }
 
-    // Step 3: upload the missing chunks to purl (matches u2c.py).
-    await uploadChunks(
-      hashed,
-      handshakeResult.wark,
-      handshakeResult.neededChunks,
-      hostUrl,
-      handshakeResult.purl,
-      password,
-      parallelism: parallelism,
-      onProgress: onUploadProgress == null
-          ? null
-          : (bytesDoneInNeeded, _) => onUploadProgress(alreadyConfirmedBytes + bytesDoneInNeeded, hashed.totalBytes),
-      cancelToken: cancelToken,
-    );
-
-    throwIfCancelled();
-    // Step 4: confirmation handshake — triggers server finalization
-    // (.PARTIAL → file). Only needed because we actually uploaded chunks.
-    final confirmed = await handshake(
-      hashed,
-      hostUrl,
-      uploadPath,
-      password,
-      label: 'confirm',
-      cancelToken: cancelToken,
-    );
-    if (!confirmed.fullyConfirmed) {
-      final detail = confirmed.unmatchedHashes.isNotEmpty
-          ? 'server needs ${confirmed.unmatchedHashes.length} chunk(s) whose '
-                'hashes do not match what we computed — likely a hashing or '
-                'partial-file mismatch (see diagnostic log)'
-          : 'server still needs ${confirmed.neededChunks.length} chunk(s)';
-      _log?.log('!! CONFIRM FAILED: $detail');
-      throw CopypartyUploadException('Upload confirmation failed: $detail');
+      throwIfCancelled();
+      // Confirmation handshake — triggers server finalization (.PARTIAL →
+      // file). Also tells us whether anything is STILL missing.
+      confirmed = await handshake(hashed, hostUrl, uploadPath, password, label: 'confirm', cancelToken: cancelToken);
+      if (confirmed.fullyConfirmed) {
+        _log?.log('✓ confirmed: wark=${confirmed.wark}');
+        return (confirmed, false);
+      }
+      if (confirmed.unmatchedHashes.isNotEmpty || confirmed.neededChunks.isEmpty) {
+        // Unmatched-hash mismatch: not retryable. Empty neededChunks despite
+        // !fullyConfirmed shouldn't happen, but don't loop forever on it either.
+        break;
+      }
+      _log?.log(
+        'confirm attempt $attempt/$maxConfirmAttempts: server still needs '
+        '${confirmed.neededChunks.length} chunk(s) — retrying',
+      );
+      neededChunks = confirmed.neededChunks;
     }
-    _log?.log('✓ confirmed: wark=${confirmed.wark}');
-    return (confirmed, false);
+    final detail = confirmed.unmatchedHashes.isNotEmpty
+        ? 'server needs ${confirmed.unmatchedHashes.length} chunk(s) whose '
+              'hashes do not match what we computed — likely a hashing or '
+              'partial-file mismatch (see diagnostic log)'
+        : 'server still needs ${confirmed.neededChunks.length} chunk(s) after $maxConfirmAttempts attempt(s)';
+    _log?.log('!! CONFIRM FAILED: $detail');
+    throw CopypartyUploadException('Upload confirmation failed: $detail');
   }
 
   /// Copies [sourcePath] → [stagedPath] while computing the up2k chunk hashes
@@ -1059,6 +1078,13 @@ class CopypartyUploaderService {
               fileHasher.add(chunkBytes);
               chunkHashes.add(_chunkId(chunkBytes));
               replayed += chunkBytes.length;
+              // Yield after every chunk — each chunk's SHA-512 pass is
+              // synchronous CPU work (up to 32 MiB) and a large partial can
+              // have hundreds of them; without this the isolate never returns
+              // to the event loop, starving UI frames and the heartbeat timer
+              // for tens of seconds (confirmed via a missing heartbeat tick
+              // spanning a 6880MiB/215-chunk replay in the field).
+              await Future<void>.delayed(Duration.zero);
             }
             if (replayed == candidateOffset) {
               resumeOffset = candidateOffset;

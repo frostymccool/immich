@@ -485,11 +485,32 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         if (candidates.isEmpty) {
           break;
         }
-        if (config.sortSmallestFirst) {
-          candidates.sort((a, b) => a.set.totalBytes.compareTo(b.set.totalBytes));
-        }
-        final set = candidates.first.set;
-        final file = candidates.first.file;
+        // Prefer an ALREADY-STAGED candidate for the loop's next pick,
+        // regardless of size order — it can start uploading (network) RIGHT
+        // NOW while any other pending candidate is still being copied to the
+        // phone (USB/disk) by the read-ahead filler in the background.
+        // Without this, a smaller-but-not-yet-staged file could win the
+        // size-order pick and leave an already-fully-cached file sitting idle
+        // — network unused — until its own copy finishes. Decorate-sort
+        // (index kept as the final tiebreaker) since List.sort isn't stable
+        // and the natural scan order matters when sortSmallestFirst is off.
+        final decorated = [for (var i = 0; i < candidates.length; i++) (i: i, c: candidates[i])];
+        decorated.sort((a, b) {
+          final aStaged = a.c.file.stagedReady ? 0 : 1;
+          final bStaged = b.c.file.stagedReady ? 0 : 1;
+          if (aStaged != bStaged) {
+            return aStaged.compareTo(bStaged);
+          }
+          if (config.sortSmallestFirst) {
+            final sizeCmp = a.c.set.totalBytes.compareTo(b.c.set.totalBytes);
+            if (sizeCmp != 0) {
+              return sizeCmp;
+            }
+          }
+          return a.i.compareTo(b.i);
+        });
+        final set = decorated.first.c.set;
+        final file = decorated.first.c.file;
         // Mark it as the loop's current file so the read-ahead filler excludes
         // it (concurrency finding 2).
         _uploadingPath = file.localPath;
@@ -1079,7 +1100,10 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       } on CopypartyCancelledException {
         file.staging = false;
         file.stagedReady = false;
-        file.uploadedBytes = 0;
+        // Leave uploadedBytes as-is: the partial copy on disk is preserved
+        // (staging.service no longer deletes it) and stageAndHash resumes
+        // from it next time, so the displayed progress should reflect that
+        // rather than jumping back to 0 while paused.
         // Clear so a later retry's timing starts fresh instead of including
         // this aborted attempt's dead time.
         file.stageStartMs = null;
