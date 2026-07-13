@@ -433,16 +433,24 @@ class _CacheSizeSlider extends HookConsumerWidget {
     // Fetched once when this section mounts (and again if it remounts, e.g.
     // returning from "Manage phone cache") rather than on every slider drag
     // tick — a directory listing per frame while dragging would be wasteful.
-    final usedBytes = useState<int?>(null);
+    final scannedBytes = useState<int?>(null);
     useEffect(() {
       ref.read(copypartyStagingProvider).currentCacheBytes().then((v) {
         if (context.mounted) {
-          usedBytes.value = v;
+          scannedBytes.value = v;
         }
       });
       return null;
       // ignore: exhaustive_keys
     }, const []);
+
+    // While an import is actively uploading, the provider itself keeps
+    // cacheUsedBytes fresh in near-real-time — prefer that over our one-shot
+    // scan above, which otherwise goes stale the moment a background import
+    // stages/uploads/discards a file while this settings page stays open.
+    final importStep = ref.watch(importSessionProvider.select((s) => s.step));
+    final liveCacheUsed = ref.watch(importSessionProvider.select((s) => s.cacheUsedBytes));
+    final usedBytes = importStep == ImportSessionStep.uploading ? liveCacheUsed : scannedBytes.value;
 
     return Padding(
       padding: const EdgeInsets.only(left: 8.0, right: 8.0),

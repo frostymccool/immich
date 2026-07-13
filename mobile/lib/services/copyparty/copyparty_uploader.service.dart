@@ -1078,6 +1078,11 @@ class CopypartyUploaderService {
               fileHasher.add(chunkBytes);
               chunkHashes.add(_chunkId(chunkBytes));
               replayed += chunkBytes.length;
+              // Report replay progress too — otherwise the progress bar sits
+              // frozen at whatever it showed before the pause for as long as
+              // the replay takes (minutes, for a multi-GiB partial), which
+              // reads as a hang even though the app is actually responsive.
+              onProgress?.call(replayed, fileSize);
               // Yield after every chunk — each chunk's SHA-512 pass is
               // synchronous CPU work (up to 32 MiB) and a large partial can
               // have hundreds of them; without this the isolate never returns
