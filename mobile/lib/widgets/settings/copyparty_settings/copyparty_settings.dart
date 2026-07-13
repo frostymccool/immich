@@ -475,12 +475,12 @@ class _CacheSizeSlider extends HookConsumerWidget {
               style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.onSurfaceVariant),
             ),
           ),
-          if (usedBytes.value != null)
+          if (usedBytes != null)
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
               child: Text(
-                '${formatHumanReadableBytes(usedBytes.value!, 1)} used now '
-                '(${(usedBytes.value! / (mb * 1024 * 1024) * 100).clamp(0, 100).round()}%)',
+                '${formatHumanReadableBytes(usedBytes, 1)} used now '
+                '(${(usedBytes / (mb * 1024 * 1024) * 100).clamp(0, 100).round()}%)',
                 style: context.textTheme.bodySmall?.copyWith(
                   color: context.colorScheme.onSurfaceVariant,
                   fontWeight: FontWeight.w500,
