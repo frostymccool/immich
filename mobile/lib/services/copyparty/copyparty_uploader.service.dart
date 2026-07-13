@@ -16,17 +16,48 @@ import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
 ///   2. Handshake POST — tell server about the file, receive needed chunk list
 ///   3. Upload needed chunks in parallel, then re-handshake to confirm
 class CopypartyUploaderService {
-  final http.Client _client;
+  http.Client _client;
   final CopypartyLogger? _log;
+  final bool _acceptSelfSignedCert;
+  // False when the caller injected their own client (e.g. tests) — we don't
+  // know how to rebuild an opaque client we didn't create, so resetConnection
+  // is a no-op in that case.
+  final bool _ownsClient;
 
-  CopypartyUploaderService({http.Client? client, CopypartyLogger? logger})
-    : _client = client ?? _createClient(),
-      _log = logger;
+  CopypartyUploaderService({http.Client? client, CopypartyLogger? logger, bool acceptSelfSignedCert = true})
+    : _client = client ?? _createClient(acceptSelfSignedCert),
+      _log = logger,
+      _acceptSelfSignedCert = acceptSelfSignedCert,
+      _ownsClient = client == null;
 
-  // Build an HTTP client that accepts self-signed certs (common for home servers).
-  static http.Client _createClient() {
+  // Build an HTTP client, optionally accepting self-signed certs (common for
+  // home servers).
+  static http.Client _createClient(bool acceptSelfSignedCert) {
+    if (!acceptSelfSignedCert) {
+      return http.Client();
+    }
     final inner = HttpClient()..badCertificateCallback = (cert, host, port) => true;
     return IOClient(inner);
+  }
+
+  /// Closes the current connection pool and opens a fresh one. A dart:io
+  /// HttpClient can keep trying to reuse sockets/routes bound to a network
+  /// path that no longer exists (e.g. after connecting a VPN, a wifi handoff,
+  /// or a cellular/wifi switch) rather than establishing a new connection —
+  /// observed as every request failing with the same "connection abort"/
+  /// "no route to host" even once a working route exists again. Safe to call
+  /// anytime; in-flight requests on the old client are unaffected (they keep
+  /// running against the closed client's still-open sockets until they finish
+  /// or themselves fail — closing a Client doesn't cancel in-flight sends).
+  void resetConnection() {
+    if (!_ownsClient) {
+      return;
+    }
+    final old = _client;
+    _client = _createClient(_acceptSelfSignedCert);
+    try {
+      old.close();
+    } catch (_) {}
   }
 
   void dispose() => _client.close();
@@ -593,12 +624,24 @@ class CopypartyUploaderService {
     String purl,
     String password, {
     int parallelism = 2,
-    void Function(int chunksDone, int chunksTotal)? onProgress,
+    // BYTES done/total across just the NEEDED chunks (not the whole file —
+    // uploadHashedFile adds the already-confirmed baseline before forwarding
+    // to its own caller). Byte-based rather than chunk-count-based so the
+    // last (possibly shorter) chunk doesn't skew the fraction.
+    void Function(int bytesDone, int bytesTotal)? onProgress,
     Completer<void>? cancelToken,
   }) async {
     if (neededChunkIndices.isEmpty) {
       return;
     }
+
+    int chunkByteLength(int idx) {
+      final start = idx * file.chunkSizeBytes;
+      final end = (start + file.chunkSizeBytes).clamp(0, file.totalBytes);
+      return end - start;
+    }
+
+    final neededBytesTotal = neededChunkIndices.fold<int>(0, (s, idx) => s + chunkByteLength(idx));
 
     final chunkUri = _buildChunkUri(hostUrl, purl, password);
     _log?.log(
@@ -620,7 +663,7 @@ class CopypartyUploaderService {
       );
     }
 
-    int done = 0;
+    int bytesDone = 0;
     final semaphore = _Semaphore(effParallelism);
 
     final futures = neededChunkIndices.map((chunkIdx) async {
@@ -661,8 +704,8 @@ class CopypartyUploaderService {
             }
           }
         }
-        done++;
-        onProgress?.call(done, neededChunkIndices.length);
+        bytesDone += end - start;
+        onProgress?.call(bytesDone, neededBytesTotal);
       } finally {
         semaphore.release();
       }
@@ -832,7 +875,7 @@ class CopypartyUploaderService {
     String password, {
     int parallelism = 2,
     void Function(int bytesHashed, int totalBytes)? onHashProgress,
-    void Function(int chunksDone, int chunksTotal)? onUploadProgress,
+    void Function(int bytesDone, int bytesTotal)? onUploadProgress,
     Completer<void>? cancelToken,
   }) async {
     _log?.section('UPLOAD ${filePath.split('/').last}');
@@ -871,7 +914,12 @@ class CopypartyUploaderService {
     String uploadPath,
     String password, {
     int parallelism = 2,
-    void Function(int chunksDone, int chunksTotal)? onUploadProgress,
+    // BYTES done/total across the WHOLE file (not just the needed chunks) —
+    // chunks the server already had (e.g. resuming after a pause/interrupted
+    // upload) count as immediately done, so a mostly-complete resume shows
+    // close to its true % right away instead of restarting the bar from 0
+    // and racing to 100% over just the few remaining chunks.
+    void Function(int bytesDone, int bytesTotal)? onUploadProgress,
     Completer<void>? cancelToken,
   }) async {
     void throwIfCancelled() {
@@ -897,6 +945,19 @@ class CopypartyUploaderService {
       return (handshakeResult, true);
     }
 
+    int chunkByteLength(int idx) {
+      final start = idx * hashed.chunkSizeBytes;
+      final end = (start + hashed.chunkSizeBytes).clamp(0, hashed.totalBytes);
+      return end - start;
+    }
+
+    final neededBytesTotal = handshakeResult.neededChunks.fold<int>(0, (s, idx) => s + chunkByteLength(idx));
+    final alreadyConfirmedBytes = hashed.totalBytes - neededBytesTotal;
+    // Report the resume baseline immediately, before the first new chunk
+    // completes, so a mostly-done resume doesn't sit at 0% for however long
+    // the first remaining chunk takes.
+    onUploadProgress?.call(alreadyConfirmedBytes, hashed.totalBytes);
+
     // Step 3: upload the missing chunks to purl (matches u2c.py).
     await uploadChunks(
       hashed,
@@ -906,7 +967,9 @@ class CopypartyUploaderService {
       handshakeResult.purl,
       password,
       parallelism: parallelism,
-      onProgress: onUploadProgress,
+      onProgress: onUploadProgress == null
+          ? null
+          : (bytesDoneInNeeded, _) => onUploadProgress(alreadyConfirmedBytes + bytesDoneInNeeded, hashed.totalBytes),
       cancelToken: cancelToken,
     );
 
@@ -959,13 +1022,75 @@ class CopypartyUploaderService {
     final fileSink = _DigestSink();
     final fileHasher = sha512.startChunkedConversion(fileSink);
 
-    final readHandle = await source.open(mode: FileMode.read);
-    // Truncating write handle — a stale partial from a previous aborted attempt
-    // must not leave trailing bytes past what we write now.
     final dest = File(stagedPath);
     await dest.parent.create(recursive: true);
-    final writeHandle = await dest.open(mode: FileMode.writeOnly);
+
+    // Resume from a partial copy left by a previous paused/skipped attempt
+    // instead of always re-reading the whole (slow, USB) source from byte 0.
+    // Only whole already-written CHUNKS are trusted, replayed from the fast
+    // LOCAL partial (never the USB source) through the same hasher the main
+    // loop below continues using — replaying identical bytes through SHA-512
+    // is deterministic, so the resulting running state is indistinguishable
+    // from having hashed them in one continuous pass. Any doubt at all falls
+    // back to wiping and starting clean, exactly like before this existed.
+    int resumeOffset = 0;
+    if (await dest.exists()) {
+      try {
+        final existingLen = await dest.length();
+        final candidateOffset = (existingLen ~/ chunkSize) * chunkSize;
+        if (candidateOffset > 0 && candidateOffset <= fileSize) {
+          final replayHandle = await dest.open(mode: FileMode.read);
+          try {
+            int replayed = 0;
+            while (replayed < candidateOffset) {
+              final chunkExpected = (candidateOffset - replayed).clamp(0, chunkSize);
+              final chunkBuf = BytesBuilder(copy: false);
+              while (chunkBuf.length < chunkExpected) {
+                final slice = await replayHandle.read(chunkExpected - chunkBuf.length);
+                if (slice.isEmpty) {
+                  break;
+                }
+                chunkBuf.add(slice);
+              }
+              final chunkBytes = chunkBuf.takeBytes();
+              if (chunkBytes.length != chunkExpected) {
+                break; // short read — don't trust the partial, fall through to wipe.
+              }
+              fileHasher.add(chunkBytes);
+              chunkHashes.add(_chunkId(chunkBytes));
+              replayed += chunkBytes.length;
+            }
+            if (replayed == candidateOffset) {
+              resumeOffset = candidateOffset;
+              _log?.log(
+                'staging: resuming ${sourcePath.split('/').last} from '
+                '${(resumeOffset / (1024 * 1024)).round()}MiB '
+                '(${chunkHashes.length} chunk(s) already copied)',
+              );
+            }
+          } finally {
+            await replayHandle.close();
+          }
+        }
+      } catch (_) {}
+      if (resumeOffset == 0) {
+        chunkHashes.clear();
+        try {
+          await dest.delete();
+        } catch (_) {}
+      }
+    }
+
+    final readHandle = await source.open(mode: FileMode.read);
+    if (resumeOffset > 0) {
+      await readHandle.setPosition(resumeOffset);
+    }
+    // Append when resuming (the partial's already-written bytes must survive);
+    // truncate when starting clean (a stale partial must not leave trailing
+    // bytes past what we write now).
+    final writeHandle = await dest.open(mode: resumeOffset > 0 ? FileMode.writeOnlyAppend : FileMode.writeOnly);
     var ok = false;
+    var cancelledCleanly = false;
     // Measure where the copy wall-clock actually goes: USB read vs hashing vs
     // local write. These run in series per chunk, so the sum ≈ total copy time,
     // and the split tells us whether hashing is throttling the USB drain (→ worth
@@ -974,7 +1099,7 @@ class CopypartyUploaderService {
     final hashSw = Stopwatch();
     final writeSw = Stopwatch();
     try {
-      int bytesRead = 0;
+      int bytesRead = resumeOffset;
       // Force a real fsync periodically so a multi-GB copy doesn't leave GBs of
       // dirty pages sitting in RAM waiting for the single flush at the end — on a
       // big import that dirty-page backlog adds to system memory pressure (the
@@ -1020,6 +1145,15 @@ class CopypartyUploaderService {
       }
       await writeHandle.flush();
       ok = true;
+    } on CopypartyCancelledException {
+      // Clean user cancel (pause/skip) — KEEP the partial (flushed up through
+      // the last COMPLETE chunk above) so a future resume can replay it
+      // instead of re-reading everything from the USB source again.
+      try {
+        await writeHandle.flush();
+      } catch (_) {}
+      cancelledCleanly = true;
+      rethrow;
     } finally {
       // A dead mount (USB unplugged mid-copy) makes readHandle.close() itself
       // throw — guard both closes so the write handle still closes and the
@@ -1030,9 +1164,9 @@ class CopypartyUploaderService {
       try {
         await writeHandle.close();
       } catch (_) {}
-      if (!ok) {
-        // Leave nothing usable behind on failure/cancel — the caller treats a
-        // missing marker as "not staged", but delete the bytes too to reclaim space.
+      if (!ok && !cancelledCleanly) {
+        // A genuine failure (IO error, out of space, dead mount) — never
+        // trust a partial that didn't end at a clean, deliberate cancel.
         try {
           await dest.delete();
         } catch (_) {}

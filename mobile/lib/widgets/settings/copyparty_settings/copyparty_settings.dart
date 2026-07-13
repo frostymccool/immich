@@ -9,6 +9,7 @@ import 'package:immich_mobile/pages/copyparty/copyparty_import.page.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/repositories/secure_storage.repository.dart';
+import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:immich_mobile/widgets/settings/setting_group_title.dart';
 import 'package:immich_mobile/widgets/settings/setting_list_tile.dart';
 import 'package:immich_mobile/widgets/settings/settings_sub_page_scaffold.dart';
@@ -416,7 +417,7 @@ class _StageToLocalTile extends ConsumerWidget {
   }
 }
 
-class _CacheSizeSlider extends ConsumerWidget {
+class _CacheSizeSlider extends HookConsumerWidget {
   const _CacheSizeSlider();
 
   @override
@@ -428,6 +429,21 @@ class _CacheSizeSlider extends ConsumerWidget {
     final mb = ref.watch(appConfigProvider.select((c) => c.copyparty.cacheSizeMb));
     // Slider works in whole GiB (1–32); stored as MiB.
     final gib = (mb / 1024).clamp(1, 32).round();
+
+    // Fetched once when this section mounts (and again if it remounts, e.g.
+    // returning from "Manage phone cache") rather than on every slider drag
+    // tick — a directory listing per frame while dragging would be wasteful.
+    final usedBytes = useState<int?>(null);
+    useEffect(() {
+      ref.read(copypartyStagingProvider).currentCacheBytes().then((v) {
+        if (context.mounted) {
+          usedBytes.value = v;
+        }
+      });
+      return null;
+      // ignore: exhaustive_keys
+    }, const []);
+
     return Padding(
       padding: const EdgeInsets.only(left: 8.0, right: 8.0),
       child: Column(
@@ -451,6 +467,18 @@ class _CacheSizeSlider extends ConsumerWidget {
               style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.onSurfaceVariant),
             ),
           ),
+          if (usedBytes.value != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+              child: Text(
+                '${formatHumanReadableBytes(usedBytes.value!, 1)} used now '
+                '(${(usedBytes.value! / (mb * 1024 * 1024) * 100).clamp(0, 100).round()}%)',
+                style: context.textTheme.bodySmall?.copyWith(
+                  color: context.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
           Slider(
             value: gib.toDouble(),
             min: 1,

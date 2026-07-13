@@ -75,6 +75,17 @@ class UploadFile {
   // upload turn. Shown as "Copied", not a stuck "Copying 100%". (feedback)
   bool stagedReady;
 
+  // Transient (not persisted): the file's hash from an EARLIER attempt this
+  // session, kept so a paused/cancelled-then-resumed file doesn't force a
+  // full USB re-read + re-hash pass when staging is off (or unavailable for
+  // this file) — a staged file already gets this via its on-disk staged
+  // copy, but the direct-read path had no equivalent, so every resume
+  // re-hashed the entire file from the card before upload could continue,
+  // even though the server-side chunk state was already preserved. For a
+  // multi-GB file that re-hash alone can take many minutes, which is
+  // indistinguishable from "starting over" even though it isn't.
+  HashedFile? cachedHash;
+
   UploadFile({
     required this.localPath,
     required this.filename,

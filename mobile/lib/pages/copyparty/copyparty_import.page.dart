@@ -1702,6 +1702,7 @@ class _UploadProgressStep extends ConsumerWidget {
               selectedPaths: selected,
               rootPath: orderedSets[i].rootPath ?? session.directoryPath,
               onSkipFile: (f) => ref.read(importSessionProvider.notifier).skipCurrentFile(f.localPath),
+              onRetryFile: (f) => ref.read(importSessionProvider.notifier).retrySkippedFile(f.localPath),
             ),
           ),
         ),
@@ -1794,7 +1795,8 @@ class _ProgressSetSection extends StatelessWidget {
   final Set<String>? selectedPaths;
   final String? rootPath;
   final void Function(UploadFile)? onSkipFile;
-  const _ProgressSetSection({required this.set, this.selectedPaths, this.rootPath, this.onSkipFile});
+  final void Function(UploadFile)? onRetryFile;
+  const _ProgressSetSection({required this.set, this.selectedPaths, this.rootPath, this.onSkipFile, this.onRetryFile});
 
   @override
   Widget build(BuildContext context) {
@@ -1844,7 +1846,11 @@ class _ProgressSetSection extends StatelessWidget {
         ...files.map(
           (f) => Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: CopypartyProgressFileCard(file: f, onSkip: onSkipFile == null ? null : () => onSkipFile!(f)),
+            child: CopypartyProgressFileCard(
+              file: f,
+              onSkip: onSkipFile == null ? null : () => onSkipFile!(f),
+              onRetry: onRetryFile == null ? null : () => onRetryFile!(f),
+            ),
           ),
         ),
         const SizedBox(height: 4),
@@ -1897,7 +1903,9 @@ class CopypartyProgressFileCard extends StatefulWidget {
   final UploadFile file;
   // batch3 item 6: invoked to skip this file while it's the one being worked on.
   final VoidCallback? onSkip;
-  const CopypartyProgressFileCard({super.key, required this.file, this.onSkip});
+  // Invoked from the skipped-file card's retry icon to requeue it.
+  final VoidCallback? onRetry;
+  const CopypartyProgressFileCard({super.key, required this.file, this.onSkip, this.onRetry});
 
   @override
   State<CopypartyProgressFileCard> createState() => _ProgressFileCardState();
@@ -2063,7 +2071,16 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
                         ),
                       ),
                       if (isActive) ...[const SizedBox(width: 8), _phaseChip(context, file)],
-                      if (widget.onSkip != null && isActive && file.status != UploadFileStatus.pending) ...[
+                      // Copying-to-phone deliberately keeps status `pending`
+                      // (so the upload loop can still pick the file up — see
+                      // isCopying above), which meant the mid-work condition
+                      // below (status != pending) hid the skip button for the
+                      // entire copy phase. isCopying is the actual "is real
+                      // work happening on this file right now" signal for
+                      // that phase. (fixes: skip missing while copying)
+                      if (widget.onSkip != null &&
+                          isActive &&
+                          (file.status != UploadFileStatus.pending || isCopying)) ...[
                         const SizedBox(width: 4),
                         // batch3 item 6: skip THIS file and move on to the next.
                         InkWell(
@@ -2140,7 +2157,22 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
               child: isFailed
                   ? Icon(Icons.error_rounded, color: context.colorScheme.error, size: 28)
                   : isSkipped
-                  ? Icon(Icons.skip_next_rounded, color: context.colorScheme.onSurfaceVariant, size: 26)
+                  // Tappable when a retry handler is wired up: requeue this
+                  // ONE file instead of only being able to retry via a bulk
+                  // "failed files" action or waiting for the whole session.
+                  ? (widget.onRetry == null
+                        ? Icon(Icons.skip_next_rounded, color: context.colorScheme.onSurfaceVariant, size: 26)
+                        : Tooltip(
+                            message: 'Retry this file',
+                            child: InkWell(
+                              onTap: widget.onRetry,
+                              borderRadius: BorderRadius.circular(20),
+                              child: Padding(
+                                padding: const EdgeInsets.all(4),
+                                child: Icon(Icons.replay_rounded, color: context.colorScheme.primary, size: 26),
+                              ),
+                            ),
+                          ))
                   : isDone
                   ? const Icon(Icons.check_circle_rounded, color: Colors.green, size: 28)
                   : isCopied

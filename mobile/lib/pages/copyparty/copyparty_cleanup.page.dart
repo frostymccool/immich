@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
@@ -73,11 +75,41 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   final Set<String> _collapsed = {}; // group keys currently collapsed (item 7)
   String _password = '';
   bool _loading = true;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+  // Guards the connectivity-triggered retry specifically — separate from
+  // _loading (which only reflects the very first load) so a burst of
+  // connectivity events (a VPN handshake can fire several in a row) can't
+  // pile up overlapping retries.
+  bool _autoRetrying = false;
 
   @override
   void initState() {
     super.initState();
     _loadExisting();
+    // A one-shot check that fails while offline (or mid network-path-change,
+    // e.g. connecting a VPN) previously stayed stuck showing the raw error
+    // until the user manually pulled to refresh. Listen for ANY connectivity
+    // change and retry automatically instead — also resets the shared HTTP
+    // client, since a dart:io HttpClient can keep failing against a route
+    // that no longer exists even after a working one is available again.
+    _connectivitySub = Connectivity().onConnectivityChanged.listen((_) async {
+      if (!mounted || _autoRetrying) {
+        return;
+      }
+      _autoRetrying = true;
+      try {
+        ref.read(copypartyUploaderProvider).resetConnection();
+        await _loadExisting();
+      } finally {
+        _autoRetrying = false;
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _connectivitySub?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadExisting() async {
@@ -831,12 +863,14 @@ class _CleanupGroupSection extends StatelessWidget {
             'name',
             verifications.where((v) => v.filenamePresent == VerifyState.yes).length,
             verifications.length,
+            confirmedAbsent: verifications.where((v) => v.filenamePresent == VerifyState.no).length,
           ),
           _countChip(
             context,
             'size',
             verifications.where((v) => v.sizeMatches == VerifyState.yes).length,
             verifications.length,
+            confirmedAbsent: verifications.where((v) => v.sizeMatches == VerifyState.no).length,
           ),
           if (partial > 0)
             _rawChip(
@@ -867,15 +901,25 @@ class _CleanupGroupSection extends StatelessWidget {
     int total, {
     bool neutralWhenZero = false,
     IconData? zeroIcon,
+    // How many of the "not yes" ones are CONFIRMED absent (VerifyState.no) —
+    // as opposed to simply never checked/failed (VerifyState.unknown, e.g. a
+    // network error mid-request). A file reaching Pending Cleanup was, by
+    // definition, uploaded successfully at some point, so "0/N" from a failed
+    // check is not evidence it's gone — only a real .no count is. Without
+    // this, a network blip renders identically to "every file is missing."
+    int confirmedAbsent = 0,
   }) {
     final full = yes == total;
     final none = yes == 0;
+    final allUnknown = none && confirmedAbsent == 0;
     final color = full
         ? Colors.green.shade600
         : (none
-              ? (neutralWhenZero ? context.colorScheme.onSurfaceVariant : context.colorScheme.error)
+              ? ((neutralWhenZero || allUnknown) ? context.colorScheme.onSurfaceVariant : context.colorScheme.error)
               : Colors.orange.shade700);
-    final icon = full ? Icons.check_circle : (none ? (zeroIcon ?? Icons.cancel) : Icons.adjust);
+    final icon = full
+        ? Icons.check_circle
+        : (none ? (allUnknown ? Icons.help_outline : (zeroIcon ?? Icons.cancel)) : Icons.adjust);
     return _rawChip(context, '$label $yes/$total', color, icon);
   }
 

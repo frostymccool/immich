@@ -136,8 +136,19 @@ class CopypartyStagingService {
     Completer<void>? cancelToken,
   }) async {
     final paths = await _pathsFor(sourcePath);
-    // Clear any stale partial before starting so writeOnly can't inherit bytes.
-    await _deletePaths(paths);
+    // Clear a stale/incomplete MARKER only — findValidStaged() already ruled
+    // out a valid complete pair before this was ever called, but a marker
+    // shouldn't exist without one anyway (defensive). Deliberately do NOT
+    // delete the staged file itself: a partial from a previous paused/skipped
+    // attempt is exactly what stageAndHash() now resumes from instead of
+    // re-reading the whole (slow) USB source again. (pause/resume fix)
+    for (final f in [paths.marker, File('${paths.marker.path}.tmp')]) {
+      try {
+        if (await f.exists()) {
+          await f.delete();
+        }
+      } catch (_) {}
+    }
 
     final hashed = await _uploader.stageAndHash(
       sourcePath,

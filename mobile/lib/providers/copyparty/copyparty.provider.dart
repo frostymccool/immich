@@ -5,8 +5,6 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:openapi/api.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/io_client.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
@@ -78,14 +76,13 @@ final copypartyLoggerProvider = Provider<CopypartyLogger>((ref) => CopypartyLogg
 
 final copypartyUploaderProvider = Provider<CopypartyUploaderService>((ref) {
   final allowSelfSigned = ref.watch(appConfigProvider.select((c) => c.copyparty.allowSelfSignedCert));
-  http.Client client;
-  if (allowSelfSigned) {
-    final httpClient = HttpClient()..badCertificateCallback = (cert, host, port) => true;
-    client = IOClient(httpClient);
-  } else {
-    client = http.Client();
-  }
-  final service = CopypartyUploaderService(client: client, logger: ref.watch(copypartyLoggerProvider));
+  // No explicit `client:` here (unlike before) — letting the service build its
+  // own means it owns the client and resetConnection() can actually swap it
+  // out later (see CopypartyUploaderService.resetConnection).
+  final service = CopypartyUploaderService(
+    logger: ref.watch(copypartyLoggerProvider),
+    acceptSelfSignedCert: allowSelfSigned,
+  );
   ref.onDispose(service.dispose);
   return service;
 });
@@ -308,6 +305,26 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     }
   }
 
+  /// Requeues a previously-skipped file so it's picked up again. While the
+  /// upload loop is still running, the dynamic queue (`startUpload`'s outer
+  /// `while (true)`) re-scans for `pending` files on every iteration — the
+  /// same mechanism that lets `addFolders` inject new work mid-run — so
+  /// flipping the status back is enough; no restart needed. If the loop has
+  /// already finished (session on the completion screen), this just leaves
+  /// the file pending for the next Resume/retry.
+  void retrySkippedFile(String localPath) {
+    for (final s in state.uploadSets) {
+      for (final f in s.files) {
+        if (f.localPath == localPath && f.status == UploadFileStatus.skipped) {
+          f.status = UploadFileStatus.pending;
+          _log.log('-- un-skipped ${f.filename}, requeued');
+          _notify();
+          return;
+        }
+      }
+    }
+  }
+
   void reset() {
     cancelUpload();
     state = const ImportSessionState();
@@ -500,7 +517,6 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                   ? mirroredUploadPath(config.uploadPath, set.rootPath ?? state.directoryPath, file.localPath)
                   : config.uploadPath);
           int? receiptId;
-          final fileSizeBytes = file.sizeBytes;
           // Stage the file to local phone storage first (copy + hash in one USB
           // read pass) when enabled — then upload from the fast local copy. Null
           // means "read directly from the source" (staging off, or it failed /
@@ -565,13 +581,19 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
               file.uploadedBytes = 0;
               _notify();
 
-              void onUp(int done, int total) {
+              void onUp(int bytesDone, int bytesTotal) {
                 // POSTing chunks to copyparty — flip to `uploading` so the phase
                 // chip changes to "Copyparty". The bar fills 0→100% over upload.
+                // bytesDone/bytesTotal are already absolute bytes across the
+                // WHOLE file (uploadHashedFile folds in the already-confirmed
+                // baseline for a resume), so no fraction math needed here —
+                // doing it here previously scaled "fraction of NEEDED chunks
+                // done" against the full file size, which made a mostly-done
+                // resume look like it was racing from 0% to 100% on just the
+                // handful of remaining chunks instead of reflecting reality.
                 file.status = UploadFileStatus.uploading;
                 file.transferStartMs ??= DateTime.now().millisecondsSinceEpoch;
-                final chunkProgress = total > 0 ? done / total : 0.0;
-                file.uploadedBytes = (fileSizeBytes * chunkProgress).round();
+                file.uploadedBytes = bytesDone;
                 _notify();
               }
 
@@ -583,6 +605,24 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                 hashed = staged;
                 final (res, already) = await _uploader.uploadHashedFile(
                   staged,
+                  config.hostUrl,
+                  uploadPath,
+                  password,
+                  parallelism: config.parallelConnections,
+                  onUploadProgress: onUp,
+                  cancelToken: fileToken,
+                );
+                confirmed = res;
+                alreadyOnServer = already;
+              } else if (file.cachedHash != null) {
+                // Resuming a paused/cancelled attempt that read directly from
+                // the source (staging off, or unavailable for this file) —
+                // already hashed once this session, so reuse it instead of a
+                // full USB re-read + re-hash pass (many minutes for a
+                // multi-GB file) on every resume. (pause/resume fix)
+                hashed = file.cachedHash!;
+                final (res, already) = await _uploader.uploadHashedFile(
+                  hashed,
                   config.hostUrl,
                   uploadPath,
                   password,
@@ -612,6 +652,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                 confirmed = res;
                 alreadyOnServer = already;
               }
+              // Remember it for a possible future pause/resume this session
+              // (harmless to set even for the staged/cache-hit branches above).
+              file.cachedHash = hashed;
 
               file.sha512 = hashed.fileHash;
               file.wark = confirmed.wark;
@@ -641,6 +684,13 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                 ),
               );
               file.dbRecordWritten = true;
+              // A new file just became eligible for Pending Cleanup — without
+              // this the settings badge (a plain, non-reactive FutureProvider)
+              // only ever refreshed itself when the cleanup page invalidated
+              // it after a delete, so it kept showing whatever count was
+              // cached from BEFORE this import's uploads completed. (fixes:
+              // "Free up space" badge stuck on a stale, too-low count)
+              _ref.invalidate(pendingCleanupProvider);
               // Re-upload of a tracked file: the fresh receipt supersedes the
               // old row so Pending Cleanup doesn't show duplicates. (item 18)
               final oldReceiptId = file.existingReceipt?.id;
@@ -723,6 +773,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                 try {
                   await File(file.localPath).delete();
                   await _receiptRepo.markSourceDeleted(receiptId);
+                  // This file just left Pending Cleanup (auto-deleted) — keep
+                  // the badge count in sync the same way a fresh receipt does.
+                  _ref.invalidate(pendingCleanupProvider);
                 } catch (_) {}
               }
             }
@@ -753,7 +806,18 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
               }
             }
             state = state.copyWith(completedFiles: state.completedFiles + 1);
-          } on CopypartyCancelledException {
+          } catch (e) {
+            // Check skip/cancel FIRST, regardless of what exception actually
+            // surfaced — not just for CopypartyCancelledException. Skip/cancel
+            // abort the in-flight request by racing it against a token via
+            // Future.any and closing the connection; depending on exactly
+            // which future in that race resolves first, the abort can surface
+            // as our own CopypartyCancelledException OR as the raw underlying
+            // SocketException/ClientException from the connection actually
+            // breaking. Gating only on the former meant a skip that happened
+            // to lose that race showed up as a hard FAILED card with a raw
+            // exception message instead of a clean skip. (fixes: skip mid-chunk
+            // showing as failed)
             if (!cancelToken.isCompleted && skip.isCompleted) {
               // SKIP (batch3 item 6): mark this file skipped — not failed, not
               // pending — and move straight on to the next file. Any staged copy
@@ -765,17 +829,26 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
               _notify();
               continue;
             }
-            // User cancelled mid-file: leave it pending (not failed) so it can be
-            // resumed cleanly next run, and stop the loop. The staged copy (if any)
-            // is intentionally KEPT for a fast resume.
-            file.staging = false;
-            file.status = UploadFileStatus.pending;
-            file.uploadedBytes = 0;
-            cancelled = true;
-            _log.log('-- CANCELLED at ${file.filename}');
-            _notify();
-            break;
-          } catch (e) {
+            if (cancelToken.isCompleted) {
+              // User cancelled (pause/stop) mid-file: leave it pending (not
+              // failed) so it can be resumed cleanly next run, and stop the
+              // loop. The staged copy (if any) is intentionally KEPT for a
+              // fast resume. uploadedBytes is deliberately NOT reset here —
+              // it's the real number of bytes the server already has (up2k
+              // resume skips already-uploaded chunks via the handshake), so
+              // zeroing it made a paused file look like it had lost all
+              // progress when nothing was actually discarded. The next
+              // upload attempt for this file resets it properly once a fresh
+              // handshake determines the real (possibly non-zero) starting
+              // point.
+              file.staging = false;
+              file.status = UploadFileStatus.pending;
+              cancelled = true;
+              _log.log('-- CANCELLED at ${file.filename}');
+              _notify();
+              break;
+            }
+            // Neither skip nor cancel was requested — a genuine failure.
             file.staging = false;
             file.status = UploadFileStatus.failed;
             file.errorMessage = e.toString();
