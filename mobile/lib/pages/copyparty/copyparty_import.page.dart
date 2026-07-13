@@ -16,6 +16,32 @@ import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:immich_mobile/utils/upload_speed_calculator.dart';
 import 'package:share_plus/share_plus.dart';
 
+/// Pick a folder via SAF and push the "Add folders" selection page for it —
+/// the same flow the active-import progress screen's "Add folders" button
+/// uses, but callable from anywhere (e.g. the settings page's own "Add"
+/// button, so adding more folders to a running background import doesn't
+/// require first opening the progress screen). Safe to call even when
+/// [context] isn't inside a live [CopypartyImportPage] — appendSelectedSets
+/// on the notifier is what actually queues the work, not page state.
+Future<void> pickAndAddFoldersToImport(BuildContext context) async {
+  const safChannel = MethodChannel('immich/saf_picker');
+  String? path;
+  try {
+    path = await safChannel.invokeMethod<String?>('pickDirectory');
+  } on PlatformException catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Picker error: ${e.message}')));
+    }
+    return;
+  }
+  if (path == null || !context.mounted) {
+    return;
+  }
+  await Navigator.of(
+    context,
+  ).push(MaterialPageRoute<void>(builder: (_) => _AddFoldersSelectionPage(directoryPath: path!)));
+}
+
 /// The full multi-step "Import from Memory Card" flow.
 ///
 /// Steps: directory picker → scan → options → progress → completion
@@ -27,28 +53,6 @@ class CopypartyImportPage extends ConsumerStatefulWidget {
 }
 
 class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
-  static const _safChannel = MethodChannel('immich/saf_picker');
-
-  /// Item 4: pick another folder, scan it, then show a selection page so the
-  /// user can pick files as normal BEFORE they're appended to the active task.
-  Future<void> _pickAndAddFolder() async {
-    String? path;
-    try {
-      path = await _safChannel.invokeMethod<String?>('pickDirectory');
-    } on PlatformException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Picker error: ${e.message}')));
-      }
-      return;
-    }
-    if (path == null || !mounted) {
-      return;
-    }
-    await Navigator.of(
-      context,
-    ).push(MaterialPageRoute<void>(builder: (_) => _AddFoldersSelectionPage(directoryPath: path!)));
-  }
-
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(importSessionProvider);
@@ -76,7 +80,7 @@ class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
             ImportSessionStep.uploading => _UploadProgressStep(
               session,
               onCancel: () => ref.read(importSessionProvider.notifier).cancelUpload(),
-              onAddFolders: _pickAndAddFolder,
+              onAddFolders: () => pickAndAddFoldersToImport(context),
             ),
             ImportSessionStep.complete => _CompletionStep(session),
           },
@@ -1635,6 +1639,18 @@ class _UploadProgressStep extends ConsumerWidget {
     final stagingEnabled = ref.watch(appConfigProvider.select((c) => c.copyparty.stageToLocalBeforeUpload));
     final cacheBudgetBytes = ref.watch(appConfigProvider.select((c) => c.copyparty.cacheSizeMb)) * 1024 * 1024;
     final cacheFraction = cacheBudgetBytes > 0 ? (session.cacheUsedBytes / cacheBudgetBytes).clamp(0.0, 1.0) : 0.0;
+    // Files that couldn't be cached (e.g. the phone ran out of storage, not
+    // just hit the configured cache budget) and quietly fell back to reading
+    // straight from the card — without this, a user who sees "mostly staged"
+    // has no way to know one of these still needs the card connected.
+    final fallbackCount = allFiles
+        .where(
+          (f) =>
+              f.stagingFallback &&
+              f.status != UploadFileStatus.receiptWritten &&
+              !(f.status == UploadFileStatus.confirmed && !f.needsImmich),
+        )
+        .length;
 
     return Column(
       children: [
@@ -1687,6 +1703,30 @@ class _UploadProgressStep extends ConsumerWidget {
                     value: cacheFraction,
                     minHeight: 3,
                     backgroundColor: context.colorScheme.surfaceContainerHighest,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (fallbackCount > 0)
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: context.colorScheme.errorContainer.withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.warning_amber_rounded, size: 16, color: context.colorScheme.error),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '$fallbackCount file${fallbackCount == 1 ? '' : 's'} could not be cached (phone storage '
+                    'full) and ${fallbackCount == 1 ? 'is' : 'are'} reading straight from the card — keep it '
+                    'connected until ${fallbackCount == 1 ? 'it finishes' : 'they finish'}.',
+                    style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.error),
                   ),
                 ),
               ],

@@ -612,15 +612,46 @@ class _ImportFromMemoryCardButton extends ConsumerWidget {
     // uploads" and reverts automatically when it finishes.
     final uploading = ref.watch(importSessionProvider.select((s) => s.step == ImportSessionStep.uploading));
 
+    if (!uploading) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+        child: FilledButton.icon(
+          onPressed: isConfigured
+              ? () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CopypartyImportPage()))
+              : null,
+          icon: const Icon(Icons.sd_card_rounded),
+          label: const Text('Import from Memory Card'),
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+        ),
+      );
+    }
+    // Split while an import is running: "Show" jumps straight to the
+    // progress screen (the old combined button's behavior); "Add" queues
+    // more folders into it directly, without a detour through the progress
+    // screen first just to reach ITS "Add folders" button.
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-      child: FilledButton.icon(
-        onPressed: isConfigured
-            ? () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CopypartyImportPage()))
-            : null,
-        icon: Icon(uploading ? Icons.cloud_upload_rounded : Icons.sd_card_rounded),
-        label: Text(uploading ? 'Show active uploads' : 'Import from Memory Card'),
-        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+      child: Row(
+        children: [
+          Expanded(
+            child: FilledButton.icon(
+              onPressed: () =>
+                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CopypartyImportPage())),
+              icon: const Icon(Icons.cloud_upload_rounded),
+              label: const Text('Show'),
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () => pickAndAddFoldersToImport(context),
+              icon: const Icon(Icons.create_new_folder_outlined),
+              label: const Text('Add'),
+              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            ),
+          ),
+        ],
       ),
     );
   }

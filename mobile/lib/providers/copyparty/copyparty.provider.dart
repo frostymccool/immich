@@ -1071,6 +1071,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         file.staging = false;
         file.stagedReady = true;
         file.stageEndMs = DateTime.now().millisecondsSinceEpoch;
+        // A later retry succeeded (e.g. space freed up) — this file no longer
+        // needs the card, so drop it from the "still needs the card" warning.
+        file.stagingFallback = false;
         _notify();
         return hashed;
       } on CopypartyCancelledException {
@@ -1084,11 +1087,17 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         return null;
       } catch (e) {
         // Out of space / IO error → fall back to reading direct from the card.
+        // Loud, not just a log line: without this the user has no way to know
+        // a file they assumed was safely cached still needs the card
+        // connected until it finishes (observed: phone ran out of storage
+        // mid-import, several files silently needed the card again, and the
+        // user reasonably unmounted it believing everything was staged).
         _log.log('staging failed for ${file.filename}: $e — reading direct from source');
         file.staging = false;
         file.stagedReady = false;
         file.uploadedBytes = 0;
         file.stageStartMs = null;
+        file.stagingFallback = true;
         _notify();
         return null;
       } finally {

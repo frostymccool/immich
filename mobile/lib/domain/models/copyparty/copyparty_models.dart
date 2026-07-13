@@ -86,6 +86,13 @@ class UploadFile {
   // indistinguishable from "starting over" even though it isn't.
   HashedFile? cachedHash;
 
+  // Transient: true once staging has failed for this file at least once this
+  // session (e.g. the phone ran out of storage) and it fell back to reading
+  // directly from the card. Surfaced as a banner on the progress screen —
+  // without it a user who sees "everything's staged" has no way to know THIS
+  // file quietly still needs the card connected until it finishes.
+  bool stagingFallback = false;
+
   UploadFile({
     required this.localPath,
     required this.filename,
