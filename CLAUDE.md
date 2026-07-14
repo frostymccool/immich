@@ -14,7 +14,20 @@ code runs 3048 ahead of the custom number):
 ```
 3.0.0-custom.N+<3048+N>  →  3.0.0-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.0.0-custom.113+3161** (next push → `114+3162`).
+Latest pushed: **3.0.0-custom.114+3162** (next push → `115+3163`).
+
+### Local Dart toolchain now available for formatting
+A standalone Dart SDK can be fetched directly (bypasses the "no local Dart
+toolchain" limitation for `dart format`, though not for `flutter analyze`/build):
+```
+curl -sS -o /tmp/dartsdk.zip https://storage.googleapis.com/dart-archive/channels/stable/release/latest/sdk/dartsdk-linux-x64-release.zip
+unzip -q /tmp/dartsdk.zip -d /tmp/dart-sdk
+/tmp/dart-sdk/dart-sdk/bin/dart format --line-length 120 <files>
+```
+Only pass specific files or use the same exclusions CI does
+(`-not \( -name '*.g.dart' -o -name '*.drift.dart' -o -name '*.gr.dart' \)`) —
+running it over the whole `lib/` tree unfiltered reformats generated files
+that CI's format step deliberately skips, producing an unrelated diff.
 
 ### Branch targets
 - New feature branches off `feature/custom-upload-settings`, not `main`.

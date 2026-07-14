@@ -1502,7 +1502,9 @@ class _CachedOnPhoneChip extends StatelessWidget {
       children: [
         Icon(Icons.phonelink_ring_rounded, size: 12, color: color),
         const SizedBox(width: 3),
-        Flexible(child: Text(label, style: context.textTheme.labelSmall?.copyWith(color: color))),
+        Flexible(
+          child: Text(label, style: context.textTheme.labelSmall?.copyWith(color: color)),
+        ),
       ],
     );
   }
