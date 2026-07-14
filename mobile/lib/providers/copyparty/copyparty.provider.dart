@@ -24,6 +24,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 const _copypartyPasswordKey = 'copyparty_password';
+const _copypartyTestPasswordKey = 'copyparty_test_password';
 
 /// Returns the Immich asset id if a file with this content already exists in
 /// Immich (matched by CHECKSUM, decision B), or null if not present. Returns
@@ -112,6 +113,17 @@ final copypartyStagingProvider = Provider<CopypartyStagingService>((ref) {
 final copypartyPasswordProvider = FutureProvider<String>((ref) async {
   final storage = ref.watch(secureStorageRepositoryProvider);
   return await storage.read(_copypartyPasswordKey) ?? '';
+});
+
+/// A SEPARATE, delete-capable credential — debug-mode only, never used by the
+/// normal import/cleanup flow. Deliberately kept apart from
+/// [copypartyPasswordProvider] (which the app authenticates uploads with) so a
+/// future scripted test harness can drive destructive scenarios (repeat
+/// upload/delete cycles) without ever touching the credential real imports
+/// depend on.
+final copypartyTestPasswordProvider = FutureProvider<String>((ref) async {
+  final storage = ref.watch(secureStorageRepositoryProvider);
+  return await storage.read(_copypartyTestPasswordKey) ?? '';
 });
 
 // ---------------------------------------------------------------------------

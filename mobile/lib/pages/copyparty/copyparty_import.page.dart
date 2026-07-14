@@ -1187,8 +1187,18 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                   ),
                 ),
                 // Self-test/diagnostic actions only when debug mode is on. (item 5)
+                // Captions stay on-screen (not just in a dialog after tapping) so
+                // it's obvious what each one does without having to remember.
                 if (debugMode) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Uploads each selected file several times under controlled '
+                    'variations (renamed, new content, new folder) and reports '
+                    'the server identity (wark) for each — a protocol diagnostic '
+                    'for dedup/identity bugs, not a normal upload.',
+                    style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 4),
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
@@ -1197,6 +1207,15 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                       label: const Text('Run upload self-test (diagnostics)'),
                     ),
                   ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Re-runs the SAME name/size/hash/Immich checks the delete '
+                    'flow uses against the server, right now, and prints the raw '
+                    'result — for checking why a file is (or isn\'t) considered '
+                    'safe to delete. Read-only, nothing is uploaded or deleted.',
+                    style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 4),
                   SizedBox(
                     width: double.infinity,
                     child: TextButton.icon(

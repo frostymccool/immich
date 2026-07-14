@@ -74,6 +74,10 @@ class CopypartySettings extends ConsumerWidget {
             // A download-log button is always available; the full share/clear
             // diagnostic tools appear only when debug mode is on.
             if (debug) const _DiagnosticLogTile() else const _DownloadLogButton(),
+            // Test-harness credentials: a SEPARATE, delete-capable login for a
+            // future scripted test tool — debug-mode only, never read by the
+            // normal import/cleanup flow. (test-harness prep)
+            if (debug) const _TestHarnessCredentialsTile(),
           ],
           // Clear the Android gesture/nav bar so the last tile (e.g. "Free up
           // space") is never partially hidden behind it. (batch3 item 5)
@@ -201,6 +205,70 @@ class _DiagnosticLogTile extends ConsumerWidget {
     await ref.read(copypartyLoggerProvider).clear();
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Diagnostic log cleared')));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Test-harness credentials — a separate, delete-capable login for a future
+// scripted test tool that repeats failure scenarios (chunk drops, broken
+// pipes, resume races) against the real server without touching the phone.
+// ---------------------------------------------------------------------------
+
+class _TestHarnessCredentialsTile extends ConsumerWidget {
+  const _TestHarnessCredentialsTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final password = ref.watch(copypartyTestPasswordProvider);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+          child: Text(
+            'A SEPARATE login with delete access, used only by a scripted test '
+            'tool to repeat upload/delete scenarios against the real server '
+            'without touching the phone. Never used by normal imports or '
+            'cleanup — set this only if you\'re setting up that test harness.',
+            style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.onSurface.withValues(alpha: 0.6)),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(left: 8.0),
+          child: SettingListTile(
+            title: 'Test harness password',
+            subtitle: password.maybeWhen(data: (pw) => pw.isEmpty ? 'Not set' : '••••••••', orElse: () => 'Loading...'),
+            leading: const Icon(Icons.science_outlined),
+            onTap: () => _showPasswordDialog(context, ref, password.valueOrNull ?? ''),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _showPasswordDialog(BuildContext context, WidgetRef ref, String current) async {
+    final controller = TextEditingController(text: current);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Test Harness Password'),
+        content: TextField(
+          controller: controller,
+          obscureText: true,
+          decoration: const InputDecoration(hintText: 'Leave empty to unset', border: OutlineInputBorder()),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, controller.text), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (result != null) {
+      final storage = ref.read(secureStorageRepositoryProvider);
+      await storage.write('copyparty_test_password', result);
+      ref.invalidate(copypartyTestPasswordProvider);
     }
   }
 }
@@ -443,11 +511,23 @@ class _CacheSizeSlider extends HookConsumerWidget {
       // ignore: exhaustive_keys
     }, const []);
 
-    // The slider's max used to be a fixed 32 GiB guess. Size it against real
-    // available storage instead: current free space minus a 5 GiB buffer left
-    // for the phone itself, so the slider can never be dragged to a value
-    // that would starve the OS of disk space. Also fetched once on mount —
-    // free space is a snapshot, same cadence as the cache-used scan above.
+    // While an import is actively uploading, the provider itself keeps
+    // cacheUsedBytes fresh in near-real-time — prefer that over our one-shot
+    // scan above, which otherwise goes stale the moment a background import
+    // stages/uploads/discards a file while this settings page stays open.
+    final importStep = ref.watch(importSessionProvider.select((s) => s.step));
+    final liveCacheUsed = ref.watch(importSessionProvider.select((s) => s.cacheUsedBytes));
+    final usedBytes = importStep == ImportSessionStep.uploading ? liveCacheUsed : scannedBytes.value;
+
+    // The slider's max used to be a fixed 32 GiB guess, then just "current
+    // free space minus a 5 GiB buffer" — but that alone double-counts space
+    // the cache ITSELF already occupies: a phone showing "8.7 GiB free" while
+    // the cache already holds 15.7 GiB was computing a 3 GiB max, an
+    // impossible number below what's already safely sitting on disk right
+    // now. Bytes the cache currently occupies would become free again if the
+    // cache were cleared, so they belong on the "available for cache" side of
+    // the equation: max = free + currentlyCached − buffer. Also fetched once
+    // on mount — free space is a snapshot, same cadence as the cache-used scan.
     const bufferBytes = 5 * 1024 * 1024 * 1024;
     const fallbackMaxGib = 32;
     final freeBytes = useState<int?>(null);
@@ -462,17 +542,9 @@ class _CacheSizeSlider extends HookConsumerWidget {
     }, const []);
     final maxGib = freeBytes.value == null
         ? fallbackMaxGib
-        : ((freeBytes.value! - bufferBytes) / (1024 * 1024 * 1024)).floor().clamp(1, 1 << 20);
+        : ((freeBytes.value! + (usedBytes ?? 0) - bufferBytes) / (1024 * 1024 * 1024)).floor().clamp(1, 1 << 20);
     // Slider works in whole GiB (1–maxGib); stored as MiB.
     final gib = (mb / 1024).clamp(1, maxGib).round();
-
-    // While an import is actively uploading, the provider itself keeps
-    // cacheUsedBytes fresh in near-real-time — prefer that over our one-shot
-    // scan above, which otherwise goes stale the moment a background import
-    // stages/uploads/discards a file while this settings page stays open.
-    final importStep = ref.watch(importSessionProvider.select((s) => s.step));
-    final liveCacheUsed = ref.watch(importSessionProvider.select((s) => s.cacheUsedBytes));
-    final usedBytes = importStep == ImportSessionStep.uploading ? liveCacheUsed : scannedBytes.value;
 
     return Padding(
       padding: const EdgeInsets.only(left: 8.0, right: 8.0),
@@ -521,8 +593,12 @@ class _CacheSizeSlider extends HookConsumerWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
               child: Text(
-                'Max $maxGib GiB — based on ${formatHumanReadableBytes(freeBytes.value!, 1)} free '
-                '(keeps 5 GiB free for the phone).',
+                (usedBytes ?? 0) > 0
+                    ? 'Max $maxGib GiB — based on ${formatHumanReadableBytes(freeBytes.value!, 1)} free '
+                          '+ ${formatHumanReadableBytes(usedBytes!, 1)} already cached '
+                          '(keeps 5 GiB free for the phone).'
+                    : 'Max $maxGib GiB — based on ${formatHumanReadableBytes(freeBytes.value!, 1)} free '
+                          '(keeps 5 GiB free for the phone).',
                 style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.onSurfaceVariant),
               ),
             ),
