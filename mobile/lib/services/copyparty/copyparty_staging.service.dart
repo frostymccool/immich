@@ -7,8 +7,18 @@ import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 
-/// One complete (marker-verified) staged copy in the phone cache. (batch3 item 20)
-typedef StagedCacheEntry = ({String sourcePath, String filename, int sizeBytes, String stagedPath, DateTime modified});
+/// One staged copy in the phone cache — either complete (marker-verified,
+/// `complete: true`, safe to Upload) or an orphaned partial with no marker
+/// (`complete: false`, Delete-only — there's no record of its source path or
+/// upload state to safely resume from here).
+typedef StagedCacheEntry = ({
+  String sourcePath,
+  String filename,
+  int sizeBytes,
+  String stagedPath,
+  DateTime modified,
+  bool complete,
+});
 
 /// Local staging for copyparty imports (batch: item 4).
 ///
@@ -59,6 +69,21 @@ class CopypartyStagingService {
     final dir = await _dir();
     final base = _baseFor(sourcePath);
     return (staged: File('${dir.path}/$base'), marker: File('${dir.path}/$base.stagemeta'));
+  }
+
+  /// Bytes already sitting in the local staging cache for [sourcePath] —
+  /// partial or complete, marker or no marker — or 0 if nothing is cached
+  /// yet. Deliberately lighter than [findValidStaged]: the import picker uses
+  /// this to show "already cached on phone" for files not yet selected for
+  /// upload, before any marker validation (or even a copy) has happened.
+  Future<int> stagedBytesFor(String sourcePath) async {
+    try {
+      final paths = await _pathsFor(sourcePath);
+      if (await paths.staged.exists()) {
+        return await paths.staged.length();
+      }
+    } catch (_) {}
+    return 0;
   }
 
   /// Returns a ready-to-upload [HashedFile] pointing at an EXISTING valid staged
@@ -132,7 +157,7 @@ class CopypartyStagingService {
   /// space) — the caller should fall back to uploading directly from the source.
   Future<HashedFile> stage(
     String sourcePath, {
-    void Function(int bytesProcessed, int totalBytes)? onProgress,
+    void Function(int bytesProcessed, int totalBytes, bool verifying)? onProgress,
     Completer<void>? cancelToken,
   }) async {
     final paths = await _pathsFor(sourcePath);
@@ -178,11 +203,17 @@ class CopypartyStagingService {
     return hashed;
   }
 
-  /// Everything currently in the cache, one entry per completion marker.
-  /// Incomplete copies (no marker) are not listed — they are transient and
-  /// cleaned by the copy machinery itself. (batch3 item 20)
+  /// Everything currently in the cache: complete (marker-verified) copies,
+  /// PLUS any orphaned partial with no marker (an abandoned or still-copying
+  /// attempt). Orphans have no recorded source path, so `sourcePath` is set to
+  /// the staged path itself and they can only be deleted, not uploaded — but
+  /// they are still real disk usage, and previously being excluded here made
+  /// this page's total silently disagree with the cache-size indicator
+  /// elsewhere, with no way for the user to see or reclaim that space.
+  /// (cache-consistency fix)
   Future<List<StagedCacheEntry>> listEntries() async {
     final entries = <StagedCacheEntry>[];
+    final markedStagedPaths = <String>{};
     try {
       final dir = await _dir();
       if (!await dir.exists()) {
@@ -201,6 +232,7 @@ class CopypartyStagingService {
           if (!await File(stagedPath).exists()) {
             continue;
           }
+          markedStagedPaths.add(stagedPath);
           final stat = await entity.stat();
           entries.add((
             sourcePath: meta['sourcePath'] as String,
@@ -208,6 +240,27 @@ class CopypartyStagingService {
             sizeBytes: meta['sourceSize'] as int,
             stagedPath: stagedPath,
             modified: stat.modified,
+            complete: true,
+          ));
+        } catch (_) {}
+      }
+      await for (final entity in dir.list()) {
+        if (entity is! File) {
+          continue;
+        }
+        final path = entity.path;
+        if (path.endsWith('.stagemeta') || path.endsWith('.stagemeta.tmp') || markedStagedPaths.contains(path)) {
+          continue;
+        }
+        try {
+          final stat = await entity.stat();
+          entries.add((
+            sourcePath: path,
+            filename: '${path.split('/').last} (incomplete copy)',
+            sizeBytes: await entity.length(),
+            stagedPath: path,
+            modified: stat.modified,
+            complete: false,
           ));
         } catch (_) {}
       }
@@ -248,6 +301,19 @@ class CopypartyStagingService {
   /// confirmed on all backends, or when discarding a stale copy).
   Future<void> discard(String sourcePath) async {
     await _deletePaths(await _pathsFor(sourcePath));
+  }
+
+  /// Deletes an orphaned partial (no marker, so no known source path) by its
+  /// staged path directly — used for the incomplete entries `listEntries()`
+  /// surfaces so the user can reclaim that space even though it can't be
+  /// resumed/uploaded from here.
+  Future<void> discardOrphan(String stagedPath) async {
+    try {
+      final f = File(stagedPath);
+      if (await f.exists()) {
+        await f.delete();
+      }
+    } catch (_) {}
   }
 
   Future<void> _deletePaths(({File staged, File marker}) paths) async {

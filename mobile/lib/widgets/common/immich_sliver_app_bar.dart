@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/models/server_info/server_info.model.dart';
 import 'package:immich_mobile/pages/common/settings.page.dart';
@@ -220,34 +221,51 @@ class _CopypartyIndicatorState extends ConsumerState<_CopypartyIndicator> {
   @override
   Widget build(BuildContext context) {
     final uploading = ref.watch(importSessionProvider.select((s) => s.step == ImportSessionStep.uploading));
+    // Any file left failed (e.g. can't reach the copyparty server) is a
+    // persistent signal — it stays true across app restarts/navigation until
+    // the file is retried successfully or a fresh import replaces the set,
+    // same lifetime as the backup indicator's error badge below.
+    final hasError = ref.watch(
+      importSessionProvider.select(
+        (s) => s.uploadSets.any((set) => set.files.any((f) => f.status == UploadFileStatus.failed)),
+      ),
+    );
     final iconColor = context.isDarkTheme ? Colors.white : Colors.black;
     // Match the backup indicator exactly: a small circular-progress badge at the
-    // bottom-right of the icon while uploads are active. (batch3 item 3)
+    // bottom-right of the icon while uploads are active, or the same red warning
+    // badge Immich's own backup indicator uses when it can't reach the server.
+    Widget? badge;
+    if (hasError) {
+      badge = _BadgeLabel(
+        Icon(Icons.warning_rounded, size: 12, color: context.colorScheme.error, semanticLabel: 'Copyparty import'),
+        backgroundColor: context.colorScheme.errorContainer,
+      );
+    } else if (uploading) {
+      badge = _BadgeLabel(
+        Container(
+          padding: const EdgeInsets.all(3.5),
+          child: Theme(
+            data: context.themeData.copyWith(
+              progressIndicatorTheme: context.themeData.progressIndicatorTheme.copyWith(year2023: true),
+            ),
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              strokeCap: StrokeCap.round,
+              valueColor: AlwaysStoppedAnimation<Color>(iconColor),
+              semanticsLabel: 'Copyparty import',
+            ),
+          ),
+        ),
+      );
+    }
     return IconButton(
       tooltip: 'Copyparty import',
       onPressed: () => _open(context),
       icon: Badge(
-        label: uploading
-            ? _BadgeLabel(
-                Container(
-                  padding: const EdgeInsets.all(3.5),
-                  child: Theme(
-                    data: context.themeData.copyWith(
-                      progressIndicatorTheme: context.themeData.progressIndicatorTheme.copyWith(year2023: true),
-                    ),
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      strokeCap: StrokeCap.round,
-                      valueColor: AlwaysStoppedAnimation<Color>(iconColor),
-                      semanticsLabel: 'Copyparty import',
-                    ),
-                  ),
-                ),
-              )
-            : null,
+        label: badge,
         backgroundColor: Colors.transparent,
         alignment: Alignment.bottomRight,
-        isLabelVisible: uploading,
+        isLabelVisible: badge != null,
         offset: const Offset(-2, -12),
         child: Icon(Icons.sd_card_rounded, size: _kBadgeWidgetSize, color: context.primaryColor),
       ),

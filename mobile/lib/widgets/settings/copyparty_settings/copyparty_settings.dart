@@ -10,6 +10,7 @@ import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/repositories/secure_storage.repository.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
+import 'package:immich_mobile/utils/disk_space.dart';
 import 'package:immich_mobile/widgets/settings/setting_group_title.dart';
 import 'package:immich_mobile/widgets/settings/setting_list_tile.dart';
 import 'package:immich_mobile/widgets/settings/settings_sub_page_scaffold.dart';
@@ -427,8 +428,6 @@ class _CacheSizeSlider extends HookConsumerWidget {
       return const SizedBox.shrink();
     }
     final mb = ref.watch(appConfigProvider.select((c) => c.copyparty.cacheSizeMb));
-    // Slider works in whole GiB (1–32); stored as MiB.
-    final gib = (mb / 1024).clamp(1, 32).round();
 
     // Fetched once when this section mounts (and again if it remounts, e.g.
     // returning from "Manage phone cache") rather than on every slider drag
@@ -443,6 +442,29 @@ class _CacheSizeSlider extends HookConsumerWidget {
       return null;
       // ignore: exhaustive_keys
     }, const []);
+
+    // The slider's max used to be a fixed 32 GiB guess. Size it against real
+    // available storage instead: current free space minus a 5 GiB buffer left
+    // for the phone itself, so the slider can never be dragged to a value
+    // that would starve the OS of disk space. Also fetched once on mount —
+    // free space is a snapshot, same cadence as the cache-used scan above.
+    const bufferBytes = 5 * 1024 * 1024 * 1024;
+    const fallbackMaxGib = 32;
+    final freeBytes = useState<int?>(null);
+    useEffect(() {
+      freeSpaceBytes().then((v) {
+        if (context.mounted) {
+          freeBytes.value = v;
+        }
+      });
+      return null;
+      // ignore: exhaustive_keys
+    }, const []);
+    final maxGib = freeBytes.value == null
+        ? fallbackMaxGib
+        : ((freeBytes.value! - bufferBytes) / (1024 * 1024 * 1024)).floor().clamp(1, 1 << 20);
+    // Slider works in whole GiB (1–maxGib); stored as MiB.
+    final gib = (mb / 1024).clamp(1, maxGib).round();
 
     // While an import is actively uploading, the provider itself keeps
     // cacheUsedBytes fresh in near-real-time — prefer that over our one-shot
@@ -490,11 +512,20 @@ class _CacheSizeSlider extends HookConsumerWidget {
           Slider(
             value: gib.toDouble(),
             min: 1,
-            max: 32,
-            divisions: 31,
+            max: maxGib.toDouble(),
+            divisions: maxGib > 1 ? maxGib - 1 : null,
             label: '$gib GiB',
             onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyCacheSizeMb, (v.round() * 1024)),
           ),
+          if (freeBytes.value != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+              child: Text(
+                'Max $maxGib GiB — based on ${formatHumanReadableBytes(freeBytes.value!, 1)} free '
+                '(keeps 5 GiB free for the phone).',
+                style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.onSurfaceVariant),
+              ),
+            ),
         ],
       ),
     );
@@ -744,11 +775,26 @@ class _ConnectTestButton extends HookConsumerWidget {
 // Pending cleanup tile
 // ---------------------------------------------------------------------------
 
-class _PendingCleanupTile extends ConsumerWidget {
+class _PendingCleanupTile extends HookConsumerWidget {
   const _PendingCleanupTile();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // pendingCleanupProvider is a plain FutureProvider: once computed it stays
+    // cached until something explicitly invalidates it. Several code paths do
+    // that (a fresh receipt, an auto-delete, a manual delete on the cleanup
+    // page), but anything outside those — e.g. the USB card being unplugged
+    // then reconnected, which changes which receipts' local sources currently
+    // exist — can leave this badge showing a stale, too-low count while the
+    // full Pending Cleanup page (which always recomputes fresh on open) shows
+    // the true number. Invalidating here every time this settings section is
+    // built makes the badge behave the same way: always live, never a stale
+    // cache from whenever it last happened to be invalidated elsewhere.
+    useEffect(() {
+      Future.microtask(() => ref.invalidate(pendingCleanupProvider));
+      return null;
+      // ignore: exhaustive_keys
+    }, const []);
     final async = ref.watch(pendingCleanupProvider);
     return async.when(
       loading: () => const SizedBox.shrink(),

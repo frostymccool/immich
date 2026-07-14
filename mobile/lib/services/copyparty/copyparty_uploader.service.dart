@@ -1030,7 +1030,12 @@ class CopypartyUploaderService {
   Future<HashedFile> stageAndHash(
     String sourcePath,
     String stagedPath, {
-    void Function(int bytesProcessed, int totalBytes)? onProgress,
+    // `verifying` is true while re-hashing an already-on-disk partial to
+    // resume it (fast, local-only, no new bytes) and false during an actual
+    // USB copy — callers need this to label the two honestly, since both
+    // otherwise look identical (numerator climbing from 0), and a "verifying"
+    // pass was mistaken for the copy restarting from scratch.
+    void Function(int bytesProcessed, int totalBytes, bool verifying)? onProgress,
     Completer<void>? cancelToken,
   }) async {
     final source = File(sourcePath);
@@ -1062,6 +1067,16 @@ class CopypartyUploaderService {
           try {
             int replayed = 0;
             while (replayed < candidateOffset) {
+              // The replay itself never checked for cancellation — a pause
+              // request had to wait for the ENTIRE partial to finish replaying
+              // (minutes, for a large one) before it took effect, even though
+              // the yield above kept the UI/heartbeat alive throughout. Confirmed
+              // in the field: pause requested 32s into a 6880MiB/215-chunk
+              // replay, but CANCELLED didn't land until the replay's own log
+              // line ~5.5 minutes later.
+              if (cancelToken?.isCompleted ?? false) {
+                throw const CopypartyCancelledException();
+              }
               final chunkExpected = (candidateOffset - replayed).clamp(0, chunkSize);
               final chunkBuf = BytesBuilder(copy: false);
               while (chunkBuf.length < chunkExpected) {
@@ -1082,7 +1097,7 @@ class CopypartyUploaderService {
               // frozen at whatever it showed before the pause for as long as
               // the replay takes (minutes, for a multi-GiB partial), which
               // reads as a hang even though the app is actually responsive.
-              onProgress?.call(replayed, fileSize);
+              onProgress?.call(replayed, fileSize, true);
               // Yield after every chunk — each chunk's SHA-512 pass is
               // synchronous CPU work (up to 32 MiB) and a large partial can
               // have hundreds of them; without this the isolate never returns
@@ -1103,6 +1118,12 @@ class CopypartyUploaderService {
             await replayHandle.close();
           }
         }
+      } on CopypartyCancelledException {
+        // A genuine pause mid-replay, not an untrustworthy partial — the
+        // replay only READS dest to re-verify it, never writes, so nothing on
+        // disk needs wiping. Propagate so the caller sees the cancellation
+        // instead of this falling through to "resumeOffset == 0 → wipe".
+        rethrow;
       } catch (_) {}
       if (resumeOffset == 0) {
         chunkHashes.clear();
@@ -1172,7 +1193,7 @@ class CopypartyUploaderService {
         chunkHashes.add(_chunkId(chunkBytes));
         hashSw.stop();
         bytesRead += chunkBytes.length;
-        onProgress?.call(bytesRead, fileSize);
+        onProgress?.call(bytesRead, fileSize, false);
       }
       await writeHandle.flush();
       ok = true;

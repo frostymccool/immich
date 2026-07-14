@@ -1079,15 +1079,24 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         final hashed = await _staging.stage(
           file.localPath,
           cancelToken: cancelToken,
-          onProgress: (bytesCopied, total) {
+          onProgress: (bytesCopied, total, verifying) {
             // Drive the card's "Copying to phone N%" WITHOUT changing status —
             // the file must stay `pending` so the upload loop still picks it.
             file.staging = true;
             file.stagedReady = false;
             file.uploadedBytes = bytesCopied;
+            // A resumed partial gets RE-HASHED (verified) from byte 0 up to the
+            // resume point before any new copying happens — same numerator
+            // climbing from 0 as a real copy, so without this flag it reads as
+            // "the copy restarted from scratch" even though no data was lost
+            // (confirmed via a diagnostic log: a paused 6880MiB partial showed
+            // "608 MiB" moments after resuming — that was verify progress, not
+            // a fresh copy).
+            file.verifyingResume = verifying;
             _notify();
           },
         );
+        file.verifyingResume = false;
         // Copy AND hash are done (hashing happens during the copy) → "Copied".
         file.staging = false;
         file.stagedReady = true;
@@ -1100,6 +1109,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       } on CopypartyCancelledException {
         file.staging = false;
         file.stagedReady = false;
+        file.verifyingResume = false;
         // Leave uploadedBytes as-is: the partial copy on disk is preserved
         // (staging.service no longer deletes it) and stageAndHash resumes
         // from it next time, so the displayed progress should reflect that
@@ -1122,6 +1132,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         file.uploadedBytes = 0;
         file.stageStartMs = null;
         file.stagingFallback = true;
+        file.verifyingResume = false;
         _notify();
         return null;
       } finally {

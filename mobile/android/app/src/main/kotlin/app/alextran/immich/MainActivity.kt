@@ -11,6 +11,7 @@ import app.alextran.immich.background.BackgroundWorkerLockApi
 import app.alextran.immich.connectivity.ConnectivityApi
 import app.alextran.immich.connectivity.ConnectivityApiImpl
 import app.alextran.immich.copyparty.CopypartyForegroundServicePlugin
+import app.alextran.immich.copyparty.DiskSpacePlugin
 import app.alextran.immich.copyparty.SafPickerPlugin
 import app.alextran.immich.core.HttpClientManager
 import app.alextran.immich.core.ImmichPlugin
@@ -70,6 +71,7 @@ class MainActivity : FlutterFragmentActivity() {
       flutterEngine.plugins.add(permissionApiImpl)
       flutterEngine.plugins.add(SafPickerPlugin(ctx))
       flutterEngine.plugins.add(CopypartyForegroundServicePlugin(ctx))
+      flutterEngine.plugins.add(DiskSpacePlugin(ctx))
     }
 
     fun cancelPlugins(flutterEngine: FlutterEngine) {

@@ -11,7 +11,9 @@ import 'package:intl/intl.dart';
 /// Manage the phone staging cache (batch3 item 20): shows every complete cached
 /// copy with its size and original source, and offers per-file / bulk delete and
 /// "Upload" (queues the file into the live import — bytes come from the cache,
-/// so this works even with the card unplugged).
+/// so this works even with the card unplugged). Also surfaces any orphaned
+/// partial (no completion marker) as delete-only, so the total here always
+/// matches the live cache-size indicator shown elsewhere. (cache-consistency fix)
 class CopypartyCachePage extends ConsumerStatefulWidget {
   const CopypartyCachePage({super.key});
 
@@ -65,12 +67,19 @@ class _CopypartyCachePageState extends ConsumerState<CopypartyCachePage> {
     }
     final staging = ref.read(copypartyStagingProvider);
     for (final e in targets) {
-      await staging.discard(e.sourcePath);
+      if (e.complete) {
+        await staging.discard(e.sourcePath);
+      } else {
+        await staging.discardOrphan(e.stagedPath);
+      }
     }
     await _load();
   }
 
   Future<void> _upload(List<StagedCacheEntry> targets) async {
+    // Incomplete (orphaned) entries have no marker to resume/upload from —
+    // callers should already exclude them, but never queue one by mistake.
+    targets = targets.where((e) => e.complete).toList();
     if (targets.isEmpty) {
       return;
     }
@@ -126,8 +135,14 @@ class _CopypartyCachePageState extends ConsumerState<CopypartyCachePage> {
                   color: context.colorScheme.surfaceContainer,
                   padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
                   child: Text(
-                    '${entries.length} cached file${entries.length == 1 ? '' : 's'} · '
-                    '${formatHumanReadableBytes(total, 1)} used of ${budgetMb ~/ 1024} GiB budget',
+                    () {
+                      final incomplete = entries.where((e) => !e.complete).length;
+                      final complete = entries.length - incomplete;
+                      final countText = incomplete == 0
+                          ? '$complete cached file${complete == 1 ? '' : 's'}'
+                          : '$complete cached file${complete == 1 ? '' : 's'}, $incomplete incomplete';
+                      return '$countText · ${formatHumanReadableBytes(total, 1)} used of ${budgetMb ~/ 1024} GiB budget';
+                    }(),
                     style: context.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
                   ),
                 ),
@@ -177,29 +192,34 @@ class _CopypartyCachePageState extends ConsumerState<CopypartyCachePage> {
                                   children: [
                                     Text(
                                       '${formatHumanReadableBytes(e.sizeBytes, 1)} · '
-                                      'cached ${DateFormat.yMd().add_Hm().format(e.modified.toLocal())}',
-                                      style: context.textTheme.bodySmall,
+                                      '${e.complete ? 'cached' : 'incomplete, not uploadable —'} '
+                                      '${DateFormat.yMd().add_Hm().format(e.modified.toLocal())}',
+                                      style: e.complete
+                                          ? context.textTheme.bodySmall
+                                          : context.textTheme.bodySmall?.copyWith(color: context.colorScheme.error),
                                     ),
-                                    Text(
-                                      e.sourcePath,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: context.textTheme.labelSmall?.copyWith(
-                                        color: context.colorScheme.onSurfaceVariant,
-                                        fontFamily: 'monospace',
+                                    if (e.complete)
+                                      Text(
+                                        e.sourcePath,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: context.textTheme.labelSmall?.copyWith(
+                                          color: context.colorScheme.onSurfaceVariant,
+                                          fontFamily: 'monospace',
+                                        ),
                                       ),
-                                    ),
                                     Row(
                                       children: [
-                                        TextButton.icon(
-                                          onPressed: () => _upload([e]),
-                                          icon: const Icon(Icons.cloud_upload_outlined, size: 16),
-                                          label: const Text('Upload'),
-                                          style: TextButton.styleFrom(
-                                            visualDensity: VisualDensity.compact,
-                                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                                        if (e.complete)
+                                          TextButton.icon(
+                                            onPressed: () => _upload([e]),
+                                            icon: const Icon(Icons.cloud_upload_outlined, size: 16),
+                                            label: const Text('Upload'),
+                                            style: TextButton.styleFrom(
+                                              visualDensity: VisualDensity.compact,
+                                              padding: const EdgeInsets.symmetric(horizontal: 8),
+                                            ),
                                           ),
-                                        ),
                                         TextButton.icon(
                                           onPressed: () => _delete([e]),
                                           icon: const Icon(Icons.delete_outline_rounded, size: 16),
@@ -225,15 +245,16 @@ class _CopypartyCachePageState extends ConsumerState<CopypartyCachePage> {
                       padding: const EdgeInsets.all(16),
                       child: Row(
                         children: [
-                          Expanded(
-                            child: FilledButton.tonalIcon(
-                              onPressed: () => _upload(selectedEntries),
-                              icon: const Icon(Icons.cloud_upload_outlined),
-                              label: Text('Upload ${selectedEntries.length}'),
-                              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                          if (selectedEntries.any((e) => e.complete))
+                            Expanded(
+                              child: FilledButton.tonalIcon(
+                                onPressed: () => _upload(selectedEntries),
+                                icon: const Icon(Icons.cloud_upload_outlined),
+                                label: Text('Upload ${selectedEntries.where((e) => e.complete).length}'),
+                                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 12),
+                          if (selectedEntries.any((e) => e.complete)) const SizedBox(width: 12),
                           Expanded(
                             child: OutlinedButton.icon(
                               onPressed: () => _delete(selectedEntries),

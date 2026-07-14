@@ -532,6 +532,36 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     // verification lands (unless the user has already changed it).
     _selectedPaths = _allPaths(widget.session.uploadSets);
     WidgetsBinding.instance.addPostFrameCallback((_) => _verify());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkLocalCache());
+  }
+
+  /// Purely local, no-network check for whether each file already has bytes
+  /// sitting in the phone's staging cache (partial or complete) — e.g. from
+  /// an earlier session, or after re-adding a folder mid-import. Runs
+  /// independently of (and faster than) the server _verify() pass so it
+  /// doesn't wait on the network.
+  Future<void> _checkLocalCache() async {
+    final staging = ref.read(copypartyStagingProvider);
+    final files = widget.session.uploadSets.expand((s) => s.files).toList();
+    // Throttle rebuilds for a large batch — this is a fast local disk check,
+    // but a rebuild per file would still jank a many-hundred-file import.
+    final throttle = Stopwatch()..start();
+    for (var i = 0; i < files.length; i++) {
+      if (_disposed) {
+        return;
+      }
+      final f = files[i];
+      try {
+        f.stagedBytesOnPhone = await staging.stagedBytesFor(f.localPath);
+      } catch (_) {
+        f.stagedBytesOnPhone = 0;
+      }
+      final isLast = i == files.length - 1;
+      if (mounted && (isLast || throttle.elapsedMilliseconds >= 200)) {
+        throttle.reset();
+        setState(() {});
+      }
+    }
   }
 
   /// True when live verification says a file with this name AND size is already
@@ -595,6 +625,18 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
           f.sizeBytes,
           immichApplicable: CopypartyFilePairer.isNativeImmichFilename(f.filename),
         );
+      }
+      // A file already on the server (by name+size) might still have no local
+      // Pending Cleanup record — e.g. it was put there outside this app, or a
+      // previous import's receipt was already cleaned up. Surface that so the
+      // user can choose to add it (tick it) and let the normal pipeline write
+      // a receipt for it (fast — the handshake finds it fully confirmed and
+      // skips the byte transfer entirely).
+      final receiptRepo = ref.read(copypartyReceiptRepositoryProvider);
+      for (final f in files.where(_looksPresent)) {
+        try {
+          f.existingReceipt = await receiptRepo.findByLocalPath(f.localPath);
+        } catch (_) {}
       }
       if (!mounted) {
         return;
@@ -1043,10 +1085,16 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
           ),
         Builder(
           builder: (ctx) {
-            final alreadyCount = sets.expand((s) => s.files).where(_OptionsStepState._looksPresent).length;
-            if (alreadyCount == 0) {
+            final alreadyPresent = sets.expand((s) => s.files).where(_OptionsStepState._looksPresent).toList();
+            if (alreadyPresent.isEmpty) {
               return const SizedBox.shrink();
             }
+            // Present on the server but with no active Pending Cleanup record —
+            // e.g. put there outside this app, or an old receipt was already
+            // cleaned up. "Adding" one just ticks it: the normal pipeline will
+            // hash it, find it fully confirmed at the handshake (no bytes to
+            // transfer), and write the receipt exactly like any other upload.
+            final untracked = alreadyPresent.where((f) => !f.alreadyUploaded).toList();
             return Container(
               margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1054,16 +1102,45 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                 color: ctx.colorScheme.secondaryContainer,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.check_circle_outline, size: 16, color: ctx.colorScheme.onSecondaryContainer),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      '$alreadyCount file${alreadyCount == 1 ? '' : 's'} already on the server by name+size (hash not checked) — unchecked by default.',
-                      style: ctx.textTheme.bodySmall?.copyWith(color: ctx.colorScheme.onSecondaryContainer),
-                    ),
+                  Row(
+                    children: [
+                      Icon(Icons.check_circle_outline, size: 16, color: ctx.colorScheme.onSecondaryContainer),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '${alreadyPresent.length} file${alreadyPresent.length == 1 ? '' : 's'} already on the '
+                          'server by name+size (hash not checked) — unchecked by default.',
+                          style: ctx.textTheme.bodySmall?.copyWith(color: ctx.colorScheme.onSecondaryContainer),
+                        ),
+                      ),
+                    ],
                   ),
+                  if (untracked.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4, left: 24),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${untracked.length} of those aren\'t tracked in Pending Cleanup.',
+                              style: ctx.textTheme.bodySmall?.copyWith(color: ctx.colorScheme.onSecondaryContainer),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () => setState(() {
+                              _userTouched = true;
+                              for (final f in untracked) {
+                                _selectedPaths.add(f.localPath);
+                              }
+                            }),
+                            child: Text('Add all ${untracked.length}'),
+                          ),
+                        ],
+                      ),
+                    ),
                 ],
               ),
             );
@@ -1350,12 +1427,24 @@ class _SelectableFileTile extends StatelessWidget {
           trailing: file.isTriggerFile ? Icon(Icons.star_rounded, color: context.primaryColor, size: 20) : null,
           dense: true,
         ),
+        // Purely local (no network) — independent of and usually faster than
+        // the server verify pass below, so it can show up first. Only worth
+        // surfacing when there's actually something cached; every other file
+        // showing "not cached" would be pure noise.
+        if ((file.stagedBytesOnPhone ?? 0) > 0)
+          Padding(
+            padding: const EdgeInsets.only(left: 72, bottom: 4),
+            child: _CachedOnPhoneChip(cachedBytes: file.stagedBytesOnPhone!, totalBytes: file.sizeBytes),
+          ),
         // Live server state (Issue 3): name/size from copyparty, NOT a stored
         // receipt. Hash is honestly shown as unchecked until upload/verify.
         if (file.verification != null)
           Padding(
             padding: const EdgeInsets.only(left: 72, bottom: 6),
-            child: _LiveChips(v: file.verification!),
+            child: _LiveChips(
+              v: file.verification!,
+              trackedInCleanup: _OptionsStepState._looksPresent(file) ? file.alreadyUploaded : null,
+            ),
           ),
         // Destination selector — only for files Immich handles natively
         if (file.isNativeImmichFile && selected)
@@ -1393,11 +1482,43 @@ class _SelectableFileTile extends StatelessWidget {
   }
 }
 
+/// "Already cached on phone" — a purely local disk fact (partial or complete
+/// staged copy from an earlier session), shown independent of server state so
+/// re-adding a folder honestly reflects what doesn't need a fresh USB read.
+class _CachedOnPhoneChip extends StatelessWidget {
+  final int cachedBytes;
+  final int totalBytes;
+  const _CachedOnPhoneChip({required this.cachedBytes, required this.totalBytes});
+
+  @override
+  Widget build(BuildContext context) {
+    final complete = totalBytes > 0 && cachedBytes >= totalBytes;
+    final color = complete ? Colors.green.shade600 : Colors.orange.shade700;
+    final label = complete
+        ? 'cached on phone'
+        : 'partially cached on phone (${formatHumanReadableBytes(cachedBytes, 1)} of '
+              '${formatHumanReadableBytes(totalBytes, 1)})';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.phonelink_ring_rounded, size: 12, color: color),
+        const SizedBox(width: 3),
+        Flexible(child: Text(label, style: context.textTheme.labelSmall?.copyWith(color: color))),
+      ],
+    );
+  }
+}
+
 /// Compact live name/size/partial chips + honest "hash not checked" for the
 /// import picker (Issue 3/4). Mirrors the cleanup-page evidence model.
 class _LiveChips extends StatelessWidget {
   final ServerFileVerification v;
-  const _LiveChips({required this.v});
+  // Only meaningful (non-null) when the file already looks present on the
+  // server: whether it has an active Pending Cleanup record. Lets the user
+  // spot files that are duplicated server-side but not yet tracked for
+  // cleanup — e.g. uploaded outside this app — and choose to add them.
+  final bool? trackedInCleanup;
+  const _LiveChips({required this.v, this.trackedInCleanup});
 
   Widget _chip(BuildContext context, IconData icon, Color color, String label) => Row(
     mainAxisSize: MainAxisSize.min,
@@ -1430,6 +1551,10 @@ class _LiveChips extends StatelessWidget {
         if (v.partialExists == VerifyState.yes)
           _chip(context, Icons.cancel, context.colorScheme.error, 'partial exists'),
         _chip(context, Icons.help_outline, grey, 'hash not checked'),
+        if (trackedInCleanup == true)
+          _chip(context, Icons.cleaning_services_rounded, Colors.green.shade600, 'in Pending Cleanup'),
+        if (trackedInCleanup == false)
+          _chip(context, Icons.cleaning_services_outlined, Colors.orange.shade700, 'not tracked — tick to add'),
         if (v.immichApplicable)
           switch (v.immich) {
             VerifyState.yes => _chip(context, Icons.photo_library_rounded, Colors.green.shade600, 'Immich ✓'),
@@ -2009,7 +2134,12 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
     // Copying to local phone storage (batch item 4). A prefetched file copies
     // ahead while still `pending`, so key this off the transient flag, not status.
     if (file.staging) {
-      return _chip(context, 'Copying', Icons.phone_android_rounded, context.colorScheme.secondary);
+      // A resumed partial re-hashes what's already on disk before any new
+      // bytes are copied — same byte counter climbing from 0 as a real copy,
+      // so label it honestly or it reads as the copy restarting from scratch.
+      return file.verifyingResume
+          ? _chip(context, 'Verifying', Icons.fact_check_outlined, context.colorScheme.tertiary)
+          : _chip(context, 'Copying', Icons.phone_android_rounded, context.colorScheme.secondary);
     }
     // Copy-ahead finished (copied AND hashed) — waiting for its upload turn.
     if (file.stagedReady) {
@@ -2152,7 +2282,11 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
                         // bar so a large file being staged isn't a frozen 0%.
                         // Copying/hashing now show bytes + speed like uploads,
                         // with the est time in the right column. (items 7+8)
-                        ? '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · copying '
+                        // A resumed partial re-verifies what's already on disk
+                        // before any new copying — label it "verifying", not
+                        // "copying", or it reads as restarting from scratch.
+                        ? '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · '
+                              '${file.verifyingResume ? 'verifying' : 'copying'} '
                               '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}% · $_speed'
                         : isCopied
                         // Fully staged, waiting for its upload turn. Include the

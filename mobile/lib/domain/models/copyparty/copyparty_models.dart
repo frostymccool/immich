@@ -93,6 +93,20 @@ class UploadFile {
   // file quietly still needs the card connected until it finishes.
   bool stagingFallback = false;
 
+  // Transient: true while a resumed partial is being RE-HASHED (verified)
+  // from byte 0 up to the resume point, before any new bytes are copied. The
+  // byte counter climbs from 0 exactly like a real copy, so without this flag
+  // it's indistinguishable from "the copy restarted from scratch" even though
+  // no data was lost — the card should show "Verifying" instead of "Copying".
+  bool verifyingResume = false;
+
+  // Transient: bytes already sitting in the local phone cache for this file
+  // (partial or complete), checked at picker/scan time — null until checked,
+  // 0 if nothing is cached. Lets the picker show "already cached on phone"
+  // BEFORE the file is even selected for upload, e.g. after re-adding a
+  // folder whose files were partly staged in an earlier session.
+  int? stagedBytesOnPhone;
+
   UploadFile({
     required this.localPath,
     required this.filename,
