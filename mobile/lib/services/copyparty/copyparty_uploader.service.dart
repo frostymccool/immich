@@ -376,7 +376,18 @@ class CopypartyUploaderService {
     final uri = folderUri.replace(queryParameters: params);
 
     _log?.request('GET', uri, const {'Accept': 'application/json'});
-    final resp = await _client.get(uri, headers: {'Accept': 'application/json'});
+    // Confirmed via a field log: this GET had no timeout at all, unlike the
+    // handshake POST — a degraded connection left one hanging for 17 MINUTES
+    // before the OS itself gave up with a raw connection-timeout, during
+    // which the import picker's verify pass / cleanup page / self-test that
+    // called it just sat there with no feedback. Same 60s stall guard as the
+    // handshake POST.
+    final resp = await _client
+        .get(uri, headers: {'Accept': 'application/json'})
+        .timeout(
+          const Duration(seconds: 60),
+          onTimeout: () => throw const CopypartyUploadException('Folder listing stalled (no response in 60s)'),
+        );
     _log?.response(
       resp.statusCode,
       headers: resp.headers,
@@ -414,6 +425,24 @@ class CopypartyUploaderService {
   /// picker to verify many files against the server with a single request.
   Future<Map<String, int>> listUploadFolder(String hostUrl, String uploadPath, String password) =>
       listFolderSizes(_buildUri(hostUrl, uploadPath, ''), password);
+
+  /// Deletes [filename] from the server via a plain HTTP DELETE. copyparty
+  /// accepts standard HTTP verbs on a file's own URL; auth is the same `?pw=`
+  /// query param used everywhere else in this file. NOT used by any normal
+  /// app flow (imports/cleanup only ever delete the LOCAL source, never
+  /// anything server-side) — this exists solely for the scripted test
+  /// harness (bin/copyparty_test_harness.dart) to clean up after itself using
+  /// a separate, delete-capable credential.
+  Future<void> deleteFile(String hostUrl, String uploadPath, String filename, String password) async {
+    final folderUri = _buildUri(hostUrl, uploadPath, password);
+    final fileUri = folderUri.replace(pathSegments: [...folderUri.pathSegments.where((s) => s.isNotEmpty), filename]);
+    _log?.request('DELETE', fileUri, const {});
+    final response = await _client.delete(fileUri);
+    _log?.response(response.statusCode, headers: response.headers, body: response.body);
+    if (response.statusCode >= 300) {
+      throw CopypartyUploadException('DELETE $filename failed: HTTP ${response.statusCode}');
+    }
+  }
 
   /// Builds a name/size/partial verification for [filename] from an already
   /// fetched folder listing (no network). Hash axis stays unchecked.

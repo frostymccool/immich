@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.0.0-custom.N+<3048+N>  →  3.0.0-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.0.0-custom.116+3164** (next push → `117+3165`).
+Latest pushed: **3.0.0-custom.117+3165** (next push → `118+3166`).
 
 ### Local Dart toolchain now available for formatting
 A standalone Dart SDK can be fetched directly (bypasses the "no local Dart
@@ -224,9 +224,30 @@ Migration rules:
 | `lib/pages/copyparty/copyparty_import.page.dart` | 5-step import UI + "Run upload self-test" action; pushed via `MaterialPageRoute` from `CopypartySettings` |
 | `lib/pages/copyparty/copyparty_cleanup.page.dart` | "Pending Cleanup" — multi-state live server verification before delete (never trusts a stored flag) |
 | `lib/widgets/settings/copyparty_settings/copyparty_settings.dart` | Settings widget; added as `SettingSection.copyparty` in `settings.page.dart`; Diagnostics section (share/clear log) |
+| `bin/copyparty_test_harness.dart` | Standalone CLI test harness — runs `CopypartyUploaderService` directly against a real server (`dart run bin/copyparty_test_harness.dart --help`). Scenarios: `basic`/`resume`/`broken-pipe`/`all`. Needs its own delete-capable password via `--password`/`COPYPARTY_TEST_PASSWORD` (the in-app "Test harness password" debug setting only lives in the phone's secure storage, unreachable from this process — copy it over manually) |
 
 Navigation note: `CopypartyImportPage` is NOT registered in `router.dart` (auto_route).
 It is pushed directly: `Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CopypartyImportPage()))`.
+
+### Local Flutter SDK also available (not just standalone Dart)
+Beyond the standalone-Dart-for-`dart format` trick above, the FULL Flutter SDK is
+also fetchable in this environment (`storage.googleapis.com` isn't blocked) —
+enough for real `dart analyze`/`flutter pub get`, not just formatting:
+```
+curl -sS -o /tmp/flutter.tar.xz https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.44.1-stable.tar.xz
+tar -xf /tmp/flutter.tar.xz -C /tmp/flutter-sdk   # ~1.5GB download, ~12GB extracted
+git config --global --add safe.directory /tmp/flutter-sdk/flutter   # needed when running as root
+export PATH="/tmp/flutter-sdk/flutter/bin:$PATH"
+cd mobile && flutter pub get   # ~90s; run once per fresh session/container
+dart analyze --fatal-infos <files>   # matches CI's Dart Analysis check exactly
+```
+Known limitation: `dart run`/`flutter test` currently fail in this sandbox with a
+`sqlite3` native-asset build-hook hash mismatch (`Bad state: Hash of downloaded
+file libsqlite3...`) — a pre-existing environment/proxy artifact, not caused by
+any app code. `flutter pub get` and `dart analyze` both work fine and are the
+two checks that matter most (they mirror CI). Don't waste time trying to fix the
+sqlite3 hook — it's out of scope; just rely on analyze + format for verification
+and note the limitation if a script genuinely needs a live run.
 
 ### copyparty up2k — verified protocol facts (from logs + `u2c.py`)
 - **Chunk SIZE must match the server EXACTLY** (this was THE upload bug — builds
