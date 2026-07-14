@@ -99,6 +99,15 @@ class _CopypartyCachePageState extends ConsumerState<CopypartyCachePage> {
     setState(() => _selected.clear());
   }
 
+  String _headerText(List<StagedCacheEntry> entries, int total, int budgetMb) {
+    final incomplete = entries.where((e) => !e.complete).length;
+    final complete = entries.length - incomplete;
+    final countText = incomplete == 0
+        ? '$complete cached file${complete == 1 ? '' : 's'}'
+        : '$complete cached file${complete == 1 ? '' : 's'}, $incomplete incomplete';
+    return '$countText · ${formatHumanReadableBytes(total, 1)} used of ${budgetMb ~/ 1024} GiB budget';
+  }
+
   @override
   Widget build(BuildContext context) {
     final entries = _entries;
@@ -135,14 +144,7 @@ class _CopypartyCachePageState extends ConsumerState<CopypartyCachePage> {
                   color: context.colorScheme.surfaceContainer,
                   padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
                   child: Text(
-                    () {
-                      final incomplete = entries.where((e) => !e.complete).length;
-                      final complete = entries.length - incomplete;
-                      final countText = incomplete == 0
-                          ? '$complete cached file${complete == 1 ? '' : 's'}'
-                          : '$complete cached file${complete == 1 ? '' : 's'}, $incomplete incomplete';
-                      return '$countText · ${formatHumanReadableBytes(total, 1)} used of ${budgetMb ~/ 1024} GiB budget';
-                    }(),
+                    _headerText(entries, total, budgetMb),
                     style: context.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
                   ),
                 ),

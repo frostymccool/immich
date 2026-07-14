@@ -1494,10 +1494,9 @@ class _CachedOnPhoneChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final complete = totalBytes > 0 && cachedBytes >= totalBytes;
     final color = complete ? Colors.green.shade600 : Colors.orange.shade700;
-    final label = complete
-        ? 'cached on phone'
-        : 'partially cached on phone (${formatHumanReadableBytes(cachedBytes, 1)} of '
-              '${formatHumanReadableBytes(totalBytes, 1)})';
+    final cachedStr = formatHumanReadableBytes(cachedBytes, 1);
+    final totalStr = formatHumanReadableBytes(totalBytes, 1);
+    final label = complete ? 'cached on phone' : 'partially cached on phone ($cachedStr of $totalStr)';
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
