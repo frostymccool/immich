@@ -991,7 +991,37 @@ class CopypartyUploaderService {
       throwIfCancelled();
       // Confirmation handshake — triggers server finalization (.PARTIAL →
       // file). Also tells us whether anything is STILL missing.
-      confirmed = await handshake(hashed, hostUrl, uploadPath, password, label: 'confirm', cancelToken: cancelToken);
+      //
+      // The POST itself (not just its response) can hit a transient network
+      // error — confirmed in the field: a file whose all 503/503 chunks had
+      // already gotten "thank" responses still ended up FAILED because the
+      // confirm POST's own socket hit a broken pipe. At that point every byte
+      // is already safely on the server; retrying this cheap, idempotent
+      // re-check costs nothing, so a raw network exception here gets the same
+      // bounded retry as an incomplete-chunk response, instead of failing the
+      // whole file over the very last, already-redundant request.
+      for (var netAttempt = 1; ; netAttempt++) {
+        try {
+          confirmed = await handshake(
+            hashed,
+            hostUrl,
+            uploadPath,
+            password,
+            label: 'confirm',
+            cancelToken: cancelToken,
+          );
+          break;
+        } on CopypartyCancelledException {
+          rethrow;
+        } catch (e) {
+          if (netAttempt >= maxConfirmAttempts) {
+            rethrow;
+          }
+          _log?.log('confirm POST attempt $netAttempt/$maxConfirmAttempts failed ($e) — retrying in 2s');
+          await Future<void>.delayed(const Duration(seconds: 2));
+          throwIfCancelled();
+        }
+      }
       if (confirmed.fullyConfirmed) {
         _log?.log('✓ confirmed: wark=${confirmed.wark}');
         return (confirmed, false);
