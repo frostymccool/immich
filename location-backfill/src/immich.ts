@@ -1,7 +1,27 @@
-import { init, searchAssets, getAssetInfo, updateAsset, AssetOrder, type AssetResponseDto } from '@immich/sdk';
+import {
+  init,
+  searchAssets,
+  getAssetInfo,
+  updateAsset,
+  pingServer,
+  getMyUser,
+  AssetOrder,
+  type AssetResponseDto,
+} from '@immich/sdk';
 import { config } from './config.js';
 
 init({ baseUrl: `${config.immichUrl}/api`, apiKey: config.immichApiKey });
+
+/** Basic reachability check — no auth required. */
+export async function checkServerReachable(): Promise<void> {
+  await pingServer();
+}
+
+/** Confirms the API key is valid and returns the account it belongs to. */
+export async function checkApiKeyValid(): Promise<{ email: string }> {
+  const user = await getMyUser();
+  return { email: user.email };
+}
 
 export function hasCoordinates(asset: AssetResponseDto): boolean {
   const lat = asset.exifInfo?.latitude;

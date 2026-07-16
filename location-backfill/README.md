@@ -63,11 +63,43 @@ can be corrected in one place.
 
 - `POST /webhook` — called by the Immich workflow. Requires `x-webhook-secret` header.
 - `POST /sweep` — trigger a backlog sweep on demand. Requires `x-webhook-secret` header.
+- `GET /selftest` — diagnostics, see below. Requires `x-webhook-secret` header.
+- `GET /preview/:id` — dry run for one asset, see below. Requires `x-webhook-secret` header.
 - `GET /healthz` — for the Docker healthcheck.
+
+## Testing it
+
+Three ways to check this is working, in order of how much you trust it so far:
+
+1. **Algorithm correctness, no live server needed:**
+   ```
+   npm test
+   ```
+   Runs the copy/interpolate/skip decision logic against synthetic data (`test/matcher.test.ts`).
+
+2. **Is the deployed container wired up correctly?**
+   ```
+   curl -H "x-webhook-secret: <your secret>" http://<host>:8080/selftest
+   ```
+   Runs the same three algorithm scenarios *inside the running container*, then checks the
+   server is reachable and the API key authenticates. All three checks must pass; `ok: true`
+   in the response means the container itself is healthy end-to-end.
+
+3. **Will it do the right thing to a real photo, without changing anything?**
+   ```
+   curl -H "x-webhook-secret: <your secret>" http://<host>:8080/preview/<asset-id>
+   ```
+   Runs the exact matching logic for one real asset — including the live search for
+   neighbours — and returns what it *would* do (`copied` / `interpolated` / `skipped`,
+   with the source asset id(s) and coordinates) without writing anything back. Pick an
+   asset id from your library that's missing GPS and is near other GPS-tagged photos in
+   time, and confirm the result looks right before trusting the webhook/sweep to apply it
+   for real.
 
 ## Local development
 
 ```
 npm install
 npm run dev
+npm test
 ```
