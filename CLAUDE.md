@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.0.0-custom.N+<3048+N>  →  3.0.0-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.0.0-custom.117+3165** (next push → `118+3166`).
+Latest pushed: **3.0.0-custom.118+3166** (next push → `119+3167`).
 
 ### Local Dart toolchain now available for formatting
 A standalone Dart SDK can be fetched directly (bypasses the "no local Dart

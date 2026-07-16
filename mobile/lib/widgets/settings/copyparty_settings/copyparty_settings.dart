@@ -526,9 +526,11 @@ class _CacheSizeSlider extends HookConsumerWidget {
     // impossible number below what's already safely sitting on disk right
     // now. Bytes the cache currently occupies would become free again if the
     // cache were cleared, so they belong on the "available for cache" side of
-    // the equation: max = free + currentlyCached − buffer. Also fetched once
-    // on mount — free space is a snapshot, same cadence as the cache-used scan.
-    const bufferBytes = 5 * 1024 * 1024 * 1024;
+    // the equation: max = free + currentlyCached − buffer. Shared with
+    // "Manage phone cache" via sustainableCacheMb() so both pages always
+    // agree — they used to compute this independently and could show
+    // flatly different numbers for the same setting. Also fetched once on
+    // mount — free space is a snapshot, same cadence as the cache-used scan.
     const fallbackMaxGib = 32;
     final freeBytes = useState<int?>(null);
     useEffect(() {
@@ -542,7 +544,7 @@ class _CacheSizeSlider extends HookConsumerWidget {
     }, const []);
     final maxGib = freeBytes.value == null
         ? fallbackMaxGib
-        : ((freeBytes.value! + (usedBytes ?? 0) - bufferBytes) / (1024 * 1024 * 1024)).floor().clamp(1, 1 << 20);
+        : (sustainableCacheMb(freeBytes: freeBytes.value!, usedBytes: usedBytes ?? 0) / 1024).floor().clamp(1, 1 << 20);
     // Slider works in whole GiB (1–maxGib); stored as MiB.
     final gib = (mb / 1024).clamp(1, maxGib).round();
 

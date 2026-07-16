@@ -6,6 +6,7 @@ import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_staging.service.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
+import 'package:immich_mobile/utils/disk_space.dart';
 import 'package:intl/intl.dart';
 
 /// Manage the phone staging cache (batch3 item 20): shows every complete cached
@@ -24,11 +25,19 @@ class CopypartyCachePage extends ConsumerStatefulWidget {
 class _CopypartyCachePageState extends ConsumerState<CopypartyCachePage> {
   List<StagedCacheEntry>? _entries;
   final Set<String> _selected = {};
+  // Same free-space snapshot the settings slider uses, so the "budget" shown
+  // here always matches — see effectiveCacheBudgetMb(). (cache-consistency fix)
+  int? _freeBytes;
 
   @override
   void initState() {
     super.initState();
     _load();
+    freeSpaceBytes().then((v) {
+      if (mounted) {
+        setState(() => _freeBytes = v);
+      }
+    });
   }
 
   Future<void> _load() async {
@@ -112,7 +121,12 @@ class _CopypartyCachePageState extends ConsumerState<CopypartyCachePage> {
   Widget build(BuildContext context) {
     final entries = _entries;
     final total = entries?.fold<int>(0, (s, e) => s + e.sizeBytes) ?? 0;
-    final budgetMb = ref.watch(appConfigProvider.select((c) => c.copyparty.cacheSizeMb));
+    final configuredMb = ref.watch(appConfigProvider.select((c) => c.copyparty.cacheSizeMb));
+    // The same clamp the settings slider applies to its own display — before
+    // this, this page showed the raw configured value unclamped while the
+    // slider showed a clamped one, so the two could flatly disagree (e.g.
+    // "32 GiB budget" here vs "Max 17 GiB" there) for the exact same setting.
+    final budgetMb = effectiveCacheBudgetMb(configuredMb: configuredMb, freeBytes: _freeBytes, usedBytes: total);
     final selectedEntries = entries?.where((e) => _selected.contains(e.sourcePath)).toList() ?? [];
 
     return Scaffold(
