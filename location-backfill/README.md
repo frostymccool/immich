@@ -75,7 +75,34 @@ Three ways to check this is working, in order of how much you trust it so far:
    ```
    npm test
    ```
-   Runs the copy/interpolate/skip decision logic against synthetic data (`test/matcher.test.ts`).
+   Three test suites, each a persona built to stress a different layer:
+   - `test/persona-messy-library.test.ts` — a real photo library's mess: burst-mode
+     siblings sharing one timestamp, missing EXIF fields, a trip across the
+     antimeridian. Tests `matcher.ts`/`backfill.ts`.
+   - `test/persona-flaky-api.test.ts` — one asset failing mid-sweep, a malformed
+     pagination cursor, two overlapping sweeps. Tests `sweep.ts`/`immich.ts`.
+   - `test/persona-hostile-caller.test.ts` — endpoints hit without the secret,
+     malformed JSON, whether the process survives a real backend failure. Tests
+     `app.ts` over HTTP via `supertest`.
+   - `test/matcher.test.ts` — the base copy/interpolate/skip cases.
+
+   Two bugs these caught and fixed along the way, worth knowing about:
+   - A GPS-tagged asset sharing the *exact* timestamp of the target it's filling
+     (common in burst mode) could come back as both "nearest before" and "nearest
+     after" from the same search, since the date-range filters are inclusive on
+     both ends — `decideFill` used to read that as an interpolation between an
+     asset and itself. Now recognized as a single source and reported as `copied`.
+   - `sweep.ts` used to let one asset throwing (deleted mid-sweep, a transient
+     API error) abort the entire run, silently leaving every asset after it
+     unprocessed. It now isolates failures per-asset and reports an `errored`
+     count alongside `filled`/`skipped`.
+
+   One thing deliberately *not* fixed, pinned by a test instead so it can't
+   regress into something worse: interpolating across the antimeridian (e.g. Fiji
+   to Samoa) computes the geographically wrong midpoint, the same way the
+   flight-across-the-ocean case can produce an implausible average. Both are
+   symptoms of the same gap — there's no plausibility guard on the interpolation
+   distance/bearing. Worth adding if you have assets that cross either.
 
 2. **Is the deployed container wired up correctly?**
    ```

@@ -18,6 +18,19 @@ export function decideFill(
     return { method: 'skipped', reason: 'no GPS neighbour within the match window' };
   }
 
+  // Inclusive window bounds mean a single asset sharing the target's exact timestamp
+  // (e.g. a burst-mode sibling) can come back as both "nearest before" and "nearest
+  // after" — the same asset from both directions. Treat that as one source, not an
+  // interpolation between an asset and itself.
+  if (before && after && before.id === after.id) {
+    return {
+      method: 'copied',
+      latitude: before.exifInfo!.latitude!,
+      longitude: before.exifInfo!.longitude!,
+      source: before.id,
+    };
+  }
+
   if (before && !after) {
     return {
       method: 'copied',

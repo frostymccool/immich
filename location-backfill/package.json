@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx --test test/*.test.ts"
+    "test": "IMMICH_URL=http://test-invalid.invalid IMMICH_API_KEY=test WEBHOOK_SECRET=test tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@immich/sdk": "^3.0.2",
@@ -19,6 +19,8 @@
     "@types/express": "^4.17.21",
     "@types/node": "^20.14.0",
     "@types/node-cron": "^3.0.11",
+    "@types/supertest": "^6.0.2",
+    "supertest": "^7.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"
   }

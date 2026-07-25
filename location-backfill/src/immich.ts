@@ -67,6 +67,28 @@ export async function findNearestAfter(takenAt: Date, windowMinutes: number): Pr
   return assets.items.find((asset) => hasCoordinates(asset)) ?? null;
 }
 
+/**
+ * Parses the search API's `nextPage` token into the next page number, or `undefined`
+ * to stop. Pulled out as a pure function because `Number(x)` on a non-numeric cursor
+ * silently produces `NaN` — which is falsy, so an unguarded `while (page)` loop would
+ * just stop pagination early with no signal that later assets were never scanned.
+ * `logError` defaults to `console.error` but is overridable so tests can assert the
+ * warning fires instead of just asserting the stop.
+ */
+export function parseNextPage(nextPage: string | null, logError: (message: string) => void = console.error):
+  | number
+  | undefined {
+  if (!nextPage) {
+    return undefined;
+  }
+  const next = Number(nextPage);
+  if (!Number.isFinite(next)) {
+    logError(`[sweep] unexpected nextPage value "${nextPage}" — stopping pagination early`);
+    return undefined;
+  }
+  return next;
+}
+
 /** Pages through the whole library, yielding assets missing GPS. Used only by the backlog sweep. */
 export async function* iterateAssetsMissingLocation(): AsyncGenerator<AssetResponseDto> {
   let page: number | undefined = 1;
@@ -79,7 +101,7 @@ export async function* iterateAssetsMissingLocation(): AsyncGenerator<AssetRespo
         yield asset;
       }
     }
-    page = assets.nextPage ? Number(assets.nextPage) : undefined;
+    page = parseNextPage(assets.nextPage);
   }
 }
 
