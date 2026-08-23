@@ -2,9 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/asset/asset_metadata.model.dart';
-import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
+import 'package:immich_mobile/domain/models/asset/base_asset.model.dart' hide AssetVisibility;
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
 import 'package:immich_mobile/extensions/network_capability_extensions.dart';
@@ -19,6 +20,7 @@ import 'package:immich_mobile/providers/infrastructure/storage.provider.dart';
 import 'package:immich_mobile/repositories/asset_media.repository.dart';
 import 'package:immich_mobile/repositories/upload.repository.dart';
 import 'package:logging/logging.dart';
+import 'package:openapi/api.dart';
 import 'package:path/path.dart' as p;
 import 'package:photo_manager/photo_manager.dart' show PMProgressHandler;
 
@@ -94,7 +96,9 @@ class ForegroundUploadService {
       Future<void> fetchSize() async {
         while (true) {
           final i = si;
-          if (i >= candidates.length) break;
+          if (i >= candidates.length) {
+            break;
+          }
           si++;
           final asset = candidates[i];
           try {
@@ -105,11 +109,14 @@ class ForegroundUploadService {
           }
         }
       }
+
       await Future.wait(List.generate(8, (_) => fetchSize()));
       // Photos before videos; within each group, smallest first.
       candidates.sort((a, b) {
         final typeOrder = (a.isVideo ? 1 : 0).compareTo(b.isVideo ? 1 : 0);
-        if (typeOrder != 0) return typeOrder;
+        if (typeOrder != 0) {
+          return typeOrder;
+        }
         return (sizeMap[a.id] ?? 0).compareTo(sizeMap[b.id] ?? 0);
       });
     }
@@ -138,17 +145,23 @@ class ForegroundUploadService {
 
       Future<void> worker(int workerIndex) async {
         while (true) {
-          if (shouldAbortUpload || cancelToken.isCompleted) break;
+          if (shouldAbortUpload || cancelToken.isCompleted) {
+            break;
+          }
 
           final limit = SettingsRepository.instance.appConfig.backup.parallelUploads.clamp(1, 10);
           if (workerIndex >= limit) {
-            if (idx >= candidates.length) break;
+            if (idx >= candidates.length) {
+              break;
+            }
             await Future.delayed(const Duration(milliseconds: 200));
             continue;
           }
 
           final i = idx;
-          if (i >= candidates.length) break;
+          if (i >= candidates.length) {
+            break;
+          }
 
           final asset = candidates[i];
 
@@ -160,15 +173,21 @@ class ForegroundUploadService {
           }
 
           idx++;
-          if (asset.isVideo) activeVideoCount++;
+          if (asset.isVideo) {
+            activeVideoCount++;
+          }
 
           if (shouldSkip(asset)) {
-            if (asset.isVideo) activeVideoCount--;
+            if (asset.isVideo) {
+              activeVideoCount--;
+            }
             continue;
           }
 
-          await _uploadSingleAsset(asset, cancelToken, callbacks: callbacks);
-          if (asset.isVideo) activeVideoCount--;
+          await uploadSingleAsset(asset, cancelToken, callbacks: callbacks);
+          if (asset.isVideo) {
+            activeVideoCount--;
+          }
         }
       }
 
@@ -197,7 +216,7 @@ class ForegroundUploadService {
         continue;
       }
 
-      await _uploadSingleAsset(asset, cancelToken, callbacks: callbacks);
+      await uploadSingleAsset(asset, cancelToken, callbacks: callbacks);
     }
   }
 
@@ -214,7 +233,7 @@ class ForegroundUploadService {
     await _executeWithWorkerPool<LocalAsset>(
       items: localAssets,
       cancelToken: cancelToken,
-      processItem: (asset) => _uploadSingleAsset(asset, cancelToken, callbacks: callbacks),
+      processItem: (asset) => uploadSingleAsset(asset, cancelToken, callbacks: callbacks),
     );
   }
 
@@ -304,7 +323,8 @@ class ForegroundUploadService {
     await Future.wait(workerFutures);
   }
 
-  Future<void> _uploadSingleAsset(
+  @visibleForTesting
+  Future<void> uploadSingleAsset(
     LocalAsset asset,
     Completer<void>? cancelToken, {
     required UploadCallbacks callbacks,
@@ -378,17 +398,10 @@ class ForegroundUploadService {
         return;
       }
 
-      String fileName = await _assetMediaRepository.getOriginalFilename(asset.id) ?? asset.name;
-
-      /// Handle special file name from DJI or Fusion app
-      /// If the file name has no extension, likely due to special renaming template by specific apps
-      /// we append the original extension from the asset name
-      final hasExtension = p.extension(fileName).isNotEmpty;
-      if (!hasExtension) {
-        fileName = p.setExtension(fileName, p.extension(asset.name));
-      }
-
-      final originalFileName = entity.isLivePhoto ? p.setExtension(fileName, p.extension(file.path)) : fileName;
+      final fileName = await _assetMediaRepository.getOriginalFilename(asset.id) ?? asset.name;
+      // Some apps (e.g. DJI/Fusion) return names without an extension; fall back to the asset name for those.
+      final extension = p.extension(file.path).isNotEmpty ? p.extension(file.path) : p.extension(asset.name);
+      final originalFileName = p.setExtension(fileName, extension);
       final deviceId = Store.get(StoreKey.deviceId);
 
       final fields = {
@@ -410,7 +423,8 @@ class ForegroundUploadService {
         final livePhotoResult = await _uploadRepository.uploadFile(
           file: livePhotoFile,
           originalFileName: livePhotoTitle,
-          fields: fields,
+          // Visibility hidden on upload to prevent the server from running regular jobs on the live photo asset
+          fields: {...fields, 'visibility': AssetVisibility.hidden.toString()},
           cancelToken: cancelToken,
           onProgress: onProgress != null
               ? (bytes, totalBytes) => onProgress(asset.localId!, livePhotoTitle, bytes, totalBytes)
