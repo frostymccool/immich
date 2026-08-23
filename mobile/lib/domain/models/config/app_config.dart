@@ -5,6 +5,7 @@ import 'package:immich_mobile/domain/models/config/album_config.dart';
 import 'package:immich_mobile/domain/models/config/backup_config.dart';
 import 'package:immich_mobile/domain/models/config/copyparty_config.dart';
 import 'package:immich_mobile/domain/models/config/cleanup_config.dart';
+import 'package:immich_mobile/domain/models/config/feature_message_config.dart';
 import 'package:immich_mobile/domain/models/config/image_config.dart';
 import 'package:immich_mobile/domain/models/config/map_config.dart';
 import 'package:immich_mobile/domain/models/config/network_config.dart';
@@ -17,6 +18,7 @@ import 'package:immich_mobile/domain/models/log.model.dart';
 import 'package:immich_mobile/domain/models/settings_key.dart';
 import 'package:immich_mobile/domain/models/timeline.model.dart';
 import 'package:immich_mobile/providers/album/album_sort_by_options.provider.dart';
+import 'package:immich_mobile/utils/semver.dart';
 
 const defaultConfig = AppConfig();
 
@@ -34,6 +36,7 @@ class AppConfig {
   final NetworkConfig network;
   final ShareConfig share;
   final CopypartyConfig copyparty;
+  final FeatureMessageConfig featureMessage;
 
   const AppConfig({
     this.logLevel = .info,
@@ -49,6 +52,7 @@ class AppConfig {
     this.network = const .new(),
     this.share = const .new(),
     this.copyparty = const .new(),
+    this.featureMessage = const .new(),
   });
 
   AppConfig copyWith({
@@ -65,6 +69,7 @@ class AppConfig {
     NetworkConfig? network,
     ShareConfig? share,
     CopypartyConfig? copyparty,
+    FeatureMessageConfig? featureMessage,
   }) => .new(
     logLevel: logLevel ?? this.logLevel,
     theme: theme ?? this.theme,
@@ -79,6 +84,7 @@ class AppConfig {
     network: network ?? this.network,
     share: share ?? this.share,
     copyparty: copyparty ?? this.copyparty,
+    featureMessage: featureMessage ?? this.featureMessage,
   );
 
   @override
@@ -97,7 +103,8 @@ class AppConfig {
           other.backup == backup &&
           other.network == network &&
           other.share == share &&
-          other.copyparty == copyparty);
+          other.copyparty == copyparty &&
+          other.featureMessage == featureMessage);
 
   @override
   int get hashCode => Object.hash(
@@ -114,11 +121,12 @@ class AppConfig {
     network,
     share,
     copyparty,
+    featureMessage,
   );
 
   @override
   String toString() =>
-      'AppConfig(logLevel: $logLevel, theme: $theme, cleanup: $cleanup, map: $map, timeline: $timeline, image: $image, viewer: $viewer, slideshow: $slideshow, album: $album, backup: $backup, network: $network, share: $share, copyparty: $copyparty)';
+      'AppConfig(logLevel: $logLevel, theme: $theme, cleanup: $cleanup, map: $map, timeline: $timeline, image: $image, viewer: $viewer, slideshow: $slideshow, album: $album, backup: $backup, network: $network, share: $share, copyparty: $copyparty, featureMessage: $featureMessage)';
 
   T read<T>(SettingsKey<T> key) =>
       (switch (key) {
@@ -155,6 +163,8 @@ class AppConfig {
             .timelineStorageIndicator => timeline.storageIndicator,
             .mapShowFavoriteOnly => map.favoritesOnly,
             .mapRelativeDate => map.relativeDays,
+            .mapCustomFrom => map.customFrom,
+            .mapCustomTo => map.customTo,
             .mapIncludeArchived => map.includeArchived,
             .mapThemeMode => map.themeMode,
             .mapWithPartners => map.withPartners,
@@ -177,11 +187,11 @@ class AppConfig {
             .copypartyStageToLocalBeforeUpload => copyparty.stageToLocalBeforeUpload,
             .copypartyCacheSizeMb => copyparty.cacheSizeMb,
             .copypartyDefaultDestination => copyparty.defaultDestination,
-            .slideshowTransition => slideshow.transition,
             .slideshowRepeat => slideshow.repeat,
             .slideshowDuration => slideshow.duration,
             .slideshowLook => slideshow.look,
             .slideshowDirection => slideshow.direction,
+            .featureMessageSeenRelease => featureMessage.seenRelease,
           })
           as T;
 
@@ -225,6 +235,8 @@ class AppConfig {
       .timelineStorageIndicator => copyWith(timeline: timeline.copyWith(storageIndicator: value as bool)),
       .mapShowFavoriteOnly => copyWith(map: map.copyWith(favoritesOnly: value as bool)),
       .mapRelativeDate => copyWith(map: map.copyWith(relativeDays: value as int)),
+      .mapCustomFrom => copyWith(map: map.copyWith(customFrom: .fromNullable(value as DateTime?))),
+      .mapCustomTo => copyWith(map: map.copyWith(customTo: .fromNullable(value as DateTime?))),
       .mapIncludeArchived => copyWith(map: map.copyWith(includeArchived: value as bool)),
       .mapThemeMode => copyWith(map: map.copyWith(themeMode: value as ThemeMode)),
       .mapWithPartners => copyWith(map: map.copyWith(withPartners: value as bool)),
@@ -251,11 +263,11 @@ class AppConfig {
       ),
       .copypartyCacheSizeMb => copyWith(copyparty: copyparty.copyWith(cacheSizeMb: value as int)),
       .copypartyDefaultDestination => copyWith(copyparty: copyparty.copyWith(defaultDestination: value as String)),
-      .slideshowTransition => copyWith(slideshow: slideshow.copyWith(transition: value as bool)),
       .slideshowRepeat => copyWith(slideshow: slideshow.copyWith(repeat: value as bool)),
       .slideshowDuration => copyWith(slideshow: slideshow.copyWith(duration: value as int)),
       .slideshowLook => copyWith(slideshow: slideshow.copyWith(look: value as SlideshowLook)),
       .slideshowDirection => copyWith(slideshow: slideshow.copyWith(direction: value as SlideshowDirection)),
+      .featureMessageSeenRelease => copyWith(featureMessage: featureMessage.copyWith(seenRelease: value as SemVer)),
     };
   }
 }
