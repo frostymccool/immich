@@ -12,9 +12,13 @@ Personal fork of immich-app/immich. Custom features stack on
 is identifiable on-device. Increment BOTH numbers by 1 together (the build
 code runs 3048 ahead of the custom number):
 ```
-3.0.0-custom.N+<3048+N>  →  3.0.0-custom.(N+1)+<3049+N>
+3.1.0-custom.N+<3048+N>  →  3.1.0-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.0.0-custom.118+3166** (next push → `119+3167`).
+Latest pushed: **3.1.0-custom.119+3167** (next push → `120+3168`).
+
+The `3.1.0` base tracks the upstream immich-app/immich release this fork is
+synced to — bump it (and re-derive the offset if upstream's own build number
+shifted) the next time upstream gets pulled in, not on every push.
 
 ### Local Dart toolchain now available for formatting
 A standalone Dart SDK can be fetched directly (bypasses the "no local Dart
