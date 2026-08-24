@@ -349,12 +349,24 @@ class Drift extends $Drift {
             );
           }
 
-          // v32 → v33: add upload_confirmed + immich_asset_id columns
+          // v32 → v33: add upload_confirmed + immich_asset_id columns.
+          // Devices that installed a pre-merge build already got these columns under the
+          // OLD v31->v32 numbering (before the v3.1.0 sync renumbered these raw-SQL steps),
+          // so their stored user_version is 32 despite already having both columns. Check
+          // pragma_table_info rather than trusting `from` to avoid a duplicate-column crash.
           if (from < 33 && to >= 33) {
-            await customStatement(
-              'ALTER TABLE copyparty_upload_receipts ADD COLUMN upload_confirmed INTEGER NOT NULL DEFAULT 0',
-            );
-            await customStatement('ALTER TABLE copyparty_upload_receipts ADD COLUMN immich_asset_id TEXT');
+            final existingColumns = await customSelect(
+              "SELECT name FROM pragma_table_info('copyparty_upload_receipts')",
+            ).get();
+            final columnNames = existingColumns.map((row) => row.data['name'] as String).toSet();
+            if (!columnNames.contains('upload_confirmed')) {
+              await customStatement(
+                'ALTER TABLE copyparty_upload_receipts ADD COLUMN upload_confirmed INTEGER NOT NULL DEFAULT 0',
+              );
+            }
+            if (!columnNames.contains('immich_asset_id')) {
+              await customStatement('ALTER TABLE copyparty_upload_receipts ADD COLUMN immich_asset_id TEXT');
+            }
           }
         });
 

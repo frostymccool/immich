@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.1.0-custom.N+<3048+N>  →  3.1.0-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.1.0-custom.120+3168** (next push → `121+3169`).
+Latest pushed: **3.1.0-custom.121+3169** (next push → `122+3170`).
 
 The `3.1.0` base tracks the upstream immich-app/immich release this fork is
 synced to — bump it (and re-derive the offset if upstream's own build number
