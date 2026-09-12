@@ -56,6 +56,12 @@ jobs:
         working-directory: mobile
         run: dart run build_runner build --delete-conflicting-outputs
 
+      - name: Generate Pigeon platform code
+        working-directory: mobile
+        run: |
+          ls pigeon/*.dart | xargs -n1 -P4 -I{} dart run pigeon --input {}
+          dart format lib/platform/
+
       - name: Decode keystore
         run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > mobile/android/key.jks
 

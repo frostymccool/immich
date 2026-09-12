@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.2.0-custom.N+<3048+N>  →  3.2.0-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.2.0-custom.125+3173** (next push → `126+3174`).
+Latest pushed: **3.2.0-custom.126+3174** (next push → `127+3175`).
 
 The `3.1.0` base tracks the upstream immich-app/immich release this fork is
 synced to — bump it (and re-derive the offset if upstream's own build number
@@ -266,22 +266,35 @@ must be kept in lockstep with it (a mismatch fails `flutter pub get` in CI with
 
 As of v3.2.0 the openapi Dart client (`mobile/generated/openapi`, imported by
 `mobile/pubspec.yaml` as a path dependency) is no longer checked in — it must be
-generated before `flutter pub get` will resolve at all:
+generated before `flutter pub get` will resolve at all. **Pigeon-generated
+platform code is also no longer checked in** (`lib/platform/*.g.dart`,
+`android/**/*.g.kt`, `ios/**/*.g.swift` — upstream commit "remove Pigeon
+generated code", landed in this same v3.1.0→v3.2.0 window): a fresh checkout
+won't compile at all (`'NativeSyncApi' isn't a type`, etc.) until pigeon runs.
 ```
 npm install -g @openapitools/openapi-generator-cli@2.40.1   # generate-dart-sdk.sh expects a real binary on PATH, not just npx
 cd open-api && bash ./bin/generate-dart-sdk.sh   # also needs java (both present here)
 cd ../mobile && flutter pub get   # ~90s; run once per fresh session/container
 dart run drift_dev make-migrations   # regenerates lib/data/db/main/database.steps.dart (gitignored)
 dart run build_runner build          # routes, riverpod, freezed, drift entities
+ls pigeon/*.dart | xargs -n1 -P4 -I{} dart run pigeon --input {}   # regenerates lib/platform/*.g.dart + native .g.kt/.g.swift
 dart analyze --fatal-infos <files>   # matches CI's Dart Analysis check exactly
 ```
-`build-custom-apk.yml` needs the same steps (global npm install, openapi client,
-drift migrations, build_runner) before `flutter build apk` — it doesn't use
-mise, so each was added as its own workflow step; keep them in that order if
-the DB or openapi spec changes again. (Build 124 shipped without the `npm
-install -g` step and failed CI with `openapi-generator-cli: command not
-found` — the local sandbox had it on PATH via a manual shim during testing,
-which masked the gap. Build 125 added the missing step.)
+`build-custom-apk.yml` needs the same steps (global npm install, openapi
+client, drift migrations, build_runner, pigeon) before `flutter build apk` —
+it doesn't use mise, so each was added as its own workflow step; keep them in
+that order if the DB, openapi spec, or a `pigeon/*.dart` file changes again.
+(Build 124 shipped without the `npm install -g` step and failed CI with
+`openapi-generator-cli: command not found` — the local sandbox had it on PATH
+via a manual shim during testing, which masked the gap. Build 125 fixed that
+but still omitted the pigeon step entirely — `dart analyze` passed locally
+because `.g.dart` files were left over on disk from earlier manual testing,
+but `flutter build apk` failed on a clean CI checkout with dozens of "isn't a
+type" errors for every pigeon-generated class. Build 126 added the missing
+step. Lesson: a local verification pass that reuses a dirty working tree can
+hide a missing-codegen-step bug that only a truly clean checkout exposes —
+CI's checkout is always clean, so re-verify against a state that mirrors that
+when a "no code changed, just CI config" fix keeps failing.)
 
 Known limitation: `flutter test` currently fails in this sandbox with a
 `sqlite3` native-asset build-hook hash mismatch (`Bad state: Hash of downloaded
