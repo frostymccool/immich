@@ -95,9 +95,9 @@ class UploadSpeedCalculator {
   String get speedAsString {
     final s = _currentSpeed;
     return switch (s) {
-      <= 0 => '-- MB/s',
-      >= 1 => '${s.round()} MB/s',
-      _ => '${(s * 1000).round()} kB/s',
+      <= 0 => '-- MiB/s',
+      >= 1 => '${s.toStringAsFixed(1)} MiB/s',
+      _ => '${(s * 1024).round()} KiB/s',
     };
   }
 

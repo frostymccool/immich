@@ -8,6 +8,7 @@
     android:maxSdkVersion="32" />
   <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
   <uses-permission android:name="android.permission.MANAGE_MEDIA" />
+  <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
   <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
   <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
   <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
@@ -17,6 +18,7 @@
   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
   <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
   <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
   <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
   <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
@@ -38,6 +40,17 @@
       android:enabled="@bool/enable_system_foreground_service_default"
       android:exported="false"
       android:foregroundServiceType="dataSync|shortService" />
+
+    <!-- Copyparty import: minimal keep-alive foreground service. A plain
+         wakelock + per-app "Unrestricted" battery setting were not enough to
+         stop Samsung from silently killing a many-hour import; this raises
+         the process's OOM-kill priority the way Android's own long-running
+         background work is designed to. -->
+    <service
+      android:name=".copyparty.CopypartyForegroundService"
+      android:enabled="true"
+      android:exported="false"
+      android:foregroundServiceType="dataSync" />
 
     <meta-data
       android:name="com.google.firebase.messaging.default_notification_icon"

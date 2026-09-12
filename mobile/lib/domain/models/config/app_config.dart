@@ -6,6 +6,7 @@ import 'package:immich_mobile/constants/enums.dart';
 import 'package:immich_mobile/domain/models/config/album_config.dart';
 import 'package:immich_mobile/domain/models/config/backup_config.dart';
 import 'package:immich_mobile/domain/models/config/cleanup_config.dart';
+import 'package:immich_mobile/domain/models/config/copyparty_config.dart';
 import 'package:immich_mobile/domain/models/config/feature_message_config.dart';
 import 'package:immich_mobile/domain/models/config/image_config.dart';
 import 'package:immich_mobile/domain/models/config/map_config.dart';
@@ -42,6 +43,7 @@ abstract class AppConfig with _$AppConfig {
     @Default(BackupConfig()) BackupConfig backup,
     @Default(NetworkConfig()) NetworkConfig network,
     @Default(ShareConfig()) ShareConfig share,
+    @Default(CopypartyConfig()) CopypartyConfig copyparty,
     @Default(FeatureMessageConfig()) FeatureMessageConfig featureMessage,
   }) = _AppConfig;
 
@@ -91,6 +93,19 @@ abstract class AppConfig with _$AppConfig {
             .cleanupCutoffDaysAgo => cleanup.cutoffDaysAgo,
             .cleanupDefaultsInitialized => cleanup.defaultsInitialized,
             .shareFileType => share.fileType,
+            .copypartyHostUrl => copyparty.hostUrl,
+            .copypartyUploadPath => copyparty.uploadPath,
+            .copypartyParallelConnections => copyparty.parallelConnections,
+            .copypartyAutoDeleteAfterVerify => copyparty.autoDeleteAfterVerify,
+            .copypartyWriteReceipts => copyparty.writeReceipts,
+            .copypartyTriggerExtensions => copyparty.triggerExtensions,
+            .copypartySelfSignedCert => copyparty.allowSelfSignedCert,
+            .copypartyRecreateFolderStructure => copyparty.recreateFolderStructure,
+            .copypartySortSmallestFirst => copyparty.sortSmallestFirst,
+            .copypartyDebugMode => copyparty.debugMode,
+            .copypartyStageToLocalBeforeUpload => copyparty.stageToLocalBeforeUpload,
+            .copypartyCacheSizeMb => copyparty.cacheSizeMb,
+            .copypartyDefaultDestination => copyparty.defaultDestination,
             .slideshowRepeat => slideshow.repeat,
             .slideshowDuration => slideshow.duration,
             .slideshowLook => slideshow.look,
@@ -150,6 +165,23 @@ abstract class AppConfig with _$AppConfig {
       .cleanupCutoffDaysAgo => copyWith(cleanup: cleanup.copyWith(cutoffDaysAgo: value as int)),
       .cleanupDefaultsInitialized => copyWith(cleanup: cleanup.copyWith(defaultsInitialized: value as bool)),
       .shareFileType => copyWith(share: share.copyWith(fileType: value as ShareAssetType)),
+      .copypartyHostUrl => copyWith(copyparty: copyparty.copyWith(hostUrl: value as String)),
+      .copypartyUploadPath => copyWith(copyparty: copyparty.copyWith(uploadPath: value as String)),
+      .copypartyParallelConnections => copyWith(copyparty: copyparty.copyWith(parallelConnections: value as int)),
+      .copypartyAutoDeleteAfterVerify => copyWith(copyparty: copyparty.copyWith(autoDeleteAfterVerify: value as bool)),
+      .copypartyWriteReceipts => copyWith(copyparty: copyparty.copyWith(writeReceipts: value as bool)),
+      .copypartyTriggerExtensions => copyWith(copyparty: copyparty.copyWith(triggerExtensions: value as List<String>)),
+      .copypartySelfSignedCert => copyWith(copyparty: copyparty.copyWith(allowSelfSignedCert: value as bool)),
+      .copypartyRecreateFolderStructure => copyWith(
+        copyparty: copyparty.copyWith(recreateFolderStructure: value as bool),
+      ),
+      .copypartySortSmallestFirst => copyWith(copyparty: copyparty.copyWith(sortSmallestFirst: value as bool)),
+      .copypartyDebugMode => copyWith(copyparty: copyparty.copyWith(debugMode: value as bool)),
+      .copypartyStageToLocalBeforeUpload => copyWith(
+        copyparty: copyparty.copyWith(stageToLocalBeforeUpload: value as bool),
+      ),
+      .copypartyCacheSizeMb => copyWith(copyparty: copyparty.copyWith(cacheSizeMb: value as int)),
+      .copypartyDefaultDestination => copyWith(copyparty: copyparty.copyWith(defaultDestination: value as String)),
       .slideshowRepeat => copyWith(slideshow: slideshow.copyWith(repeat: value as bool)),
       .slideshowDuration => copyWith(slideshow: slideshow.copyWith(duration: value as int)),
       .slideshowLook => copyWith(slideshow: slideshow.copyWith(look: value as SlideshowLook)),

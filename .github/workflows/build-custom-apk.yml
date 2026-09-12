@@ -3,7 +3,7 @@ name: Build Custom APK
 on:
   push:
     branches:
-      - feature/custom-upload-settings
+      - 'feature/**'
   workflow_dispatch:
 
 jobs:
@@ -24,12 +24,19 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Flutter 3.44.1
+      - name: Set up Flutter 3.47.1
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.44.1'
+          flutter-version: '3.47.1'
           channel: stable
           cache: true
+
+      - name: Install openapi-generator-cli
+        run: npm install -g @openapitools/openapi-generator-cli@2.40.1
+
+      - name: Generate OpenAPI Dart client
+        working-directory: open-api
+        run: bash ./bin/generate-dart-sdk.sh
 
       - name: Get Flutter dependencies
         working-directory: mobile
@@ -41,9 +48,19 @@ jobs:
           dart run easy_localization:generate -S ../i18n
           dart run bin/generate_keys.dart
 
+      - name: Generate Drift migrations
+        working-directory: mobile
+        run: dart run drift_dev make-migrations
+
       - name: Run build_runner (routes, riverpod, drift)
         working-directory: mobile
         run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Generate Pigeon platform code
+        working-directory: mobile
+        run: |
+          ls pigeon/*.dart | xargs -n1 -P4 -I{} dart run pigeon --input {}
+          dart format lib/platform/
 
       - name: Decode keystore
         run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > mobile/android/key.jks

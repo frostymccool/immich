@@ -6,11 +6,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/generated/translations.g.dart';
 import 'package:immich_mobile/models/server_info/server_info.model.dart';
+import 'package:immich_mobile/pages/common/settings.page.dart';
 import 'package:immich_mobile/providers/backup/backup.provider.dart';
 import 'package:immich_mobile/providers/cast.provider.dart';
+import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/readonly_mode.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/providers/server_info.provider.dart';
@@ -21,6 +24,7 @@ import 'package:immich_mobile/routing/router.dart';
 import 'package:immich_mobile/widgets/asset_viewer/cast_dialog.dart';
 import 'package:immich_mobile/widgets/common/app_bar_dialog/app_bar_dialog.dart';
 import 'package:immich_mobile/widgets/common/user_circle_avatar.dart';
+import 'package:immich_mobile/widgets/settings/copyparty_settings/copyparty_settings.dart';
 
 class ImmichSliverAppBar extends ConsumerWidget {
   final List<Widget>? actions;
@@ -74,6 +78,7 @@ class ImmichSliverAppBar extends ConsumerWidget {
                 icon: Icon(isCasting ? Icons.cast_connected_rounded : Icons.cast_rounded),
               ),
             ...?actions,
+            if (showUploadButton && !isReadonlyModeEnabled) const _CopypartyIndicator(),
             if (showUploadButton && !isReadonlyModeEnabled) const _BackupIndicator(),
             const _ProfileIndicator(),
             const SizedBox(width: 8),
@@ -171,6 +176,103 @@ class _ProfileIndicator extends ConsumerWidget {
 }
 
 const double _kBadgeWidgetSize = 30.0;
+
+/// Copyparty (memory-card import) entry point in the main app bar, to the left
+/// of the backup indicator. Its icon spins while an import upload is active.
+class _CopypartyIndicator extends ConsumerStatefulWidget {
+  const _CopypartyIndicator();
+
+  @override
+  ConsumerState<_CopypartyIndicator> createState() => _CopypartyIndicatorState();
+}
+
+class _CopypartyIndicatorState extends ConsumerState<_CopypartyIndicator> {
+  void _open(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => Consumer(
+          builder: (ctx, ref2, _) {
+            final cp = ref2.watch(appConfigProvider.select((c) => c.copyparty));
+            final host = cp.hostUrl.replaceAll(RegExp(r'/+$'), '');
+            final path = '/${cp.uploadPath.replaceAll(RegExp(r'^/+|/+$'), '')}';
+            return Scaffold(
+              appBar: AppBar(
+                title: Text('Copyparty ($host$path)'),
+                centerTitle: false,
+                actions: [
+                  IconButton(
+                    // Same flow as the rest of the app (e.g. asset viewer/
+                    // free-up-space settings jump straight to their own
+                    // section) — this embedded page hides server config, so
+                    // give it a direct way to the full Copyparty settings.
+                    onPressed: () => ctx.pushRoute(SettingsSubRoute(section: SettingSection.copyparty)),
+                    icon: const Icon(Icons.settings_outlined),
+                    tooltip: 'Copyparty settings',
+                  ),
+                ],
+              ),
+              body: const CopypartySettings(showServerConfig: false),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final uploading = ref.watch(importSessionProvider.select((s) => s.step == ImportSessionStep.uploading));
+    // Any file left failed (e.g. can't reach the copyparty server) is a
+    // persistent signal — it stays true across app restarts/navigation until
+    // the file is retried successfully or a fresh import replaces the set,
+    // same lifetime as the backup indicator's error badge below.
+    final hasError = ref.watch(
+      importSessionProvider.select(
+        (s) => s.uploadSets.any((set) => set.files.any((f) => f.status == UploadFileStatus.failed)),
+      ),
+    );
+    final iconColor = context.isDarkTheme ? Colors.white : Colors.black;
+    // Match the backup indicator exactly: a small circular-progress badge at the
+    // bottom-right of the icon while uploads are active, or the same red warning
+    // badge Immich's own backup indicator uses when it can't reach the server.
+    Widget? badge;
+    if (hasError) {
+      badge = _BadgeLabel(
+        Icon(Icons.warning_rounded, size: 12, color: context.colorScheme.error, semanticLabel: 'Copyparty import'),
+        backgroundColor: context.colorScheme.errorContainer,
+      );
+    } else if (uploading) {
+      badge = _BadgeLabel(
+        Container(
+          padding: const EdgeInsets.all(3.5),
+          child: Theme(
+            data: context.themeData.copyWith(
+              progressIndicatorTheme: context.themeData.progressIndicatorTheme.copyWith(year2023: true),
+            ),
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              strokeCap: StrokeCap.round,
+              valueColor: AlwaysStoppedAnimation<Color>(iconColor),
+              semanticsLabel: 'Copyparty import',
+            ),
+          ),
+        ),
+      );
+    }
+    return IconButton(
+      tooltip: 'Copyparty import',
+      onPressed: () => _open(context),
+      icon: Badge(
+        label: badge,
+        backgroundColor: Colors.transparent,
+        alignment: Alignment.bottomRight,
+        isLabelVisible: badge != null,
+        offset: const Offset(-2, -12),
+        child: Icon(Icons.sd_card_rounded, size: _kBadgeWidgetSize, color: context.primaryColor),
+      ),
+    );
+  }
+}
 
 class _BackupIndicator extends ConsumerWidget {
   const _BackupIndicator();

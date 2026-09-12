@@ -74,6 +74,21 @@ enum SettingsKey<T> {
   // Share
   shareFileType<ShareAssetType>(codec: EnumCodec(ShareAssetType.values)),
 
+  // Copyparty
+  copypartyHostUrl<String>(),
+  copypartyUploadPath<String>(),
+  copypartyParallelConnections<int>(),
+  copypartyAutoDeleteAfterVerify<bool>(),
+  copypartyWriteReceipts<bool>(),
+  copypartyTriggerExtensions<List<String>>(codec: ListCodec(PrimitiveCodec.string)),
+  copypartySelfSignedCert<bool>(),
+  copypartyRecreateFolderStructure<bool>(),
+  copypartySortSmallestFirst<bool>(),
+  copypartyDebugMode<bool>(),
+  copypartyStageToLocalBeforeUpload<bool>(),
+  copypartyCacheSizeMb<int>(),
+  copypartyDefaultDestination<String>(),
+
   // Slideshow
   slideshowRepeat<bool>(),
   slideshowDuration<int>(),
