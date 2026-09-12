@@ -62,7 +62,7 @@ class CopypartyStagingService {
     final digest = sha1.convert(utf8.encode(sourcePath));
     final ext = sourcePath.contains('.') ? sourcePath.split('.').last : 'bin';
     // Keep the extension so tools inspecting the staging dir can tell file types.
-    return '${digest.toString()}.$ext';
+    return '$digest.$ext';
   }
 
   Future<({File staged, File marker})> _pathsFor(String sourcePath) async {
@@ -79,7 +79,7 @@ class CopypartyStagingService {
   Future<int> stagedBytesFor(String sourcePath) async {
     try {
       final paths = await _pathsFor(sourcePath);
-      if (await paths.staged.exists()) {
+      if (paths.staged.existsSync()) {
         return await paths.staged.length();
       }
     } catch (_) {}
@@ -91,7 +91,7 @@ class CopypartyStagingService {
   /// source (in which case any stale staged files are removed).
   Future<HashedFile?> findValidStaged(String sourcePath) async {
     final paths = await _pathsFor(sourcePath);
-    if (!await paths.marker.exists() || !await paths.staged.exists()) {
+    if (!paths.marker.existsSync() || !paths.staged.existsSync()) {
       return null;
     }
     try {
@@ -114,10 +114,10 @@ class CopypartyStagingService {
       }
 
       final source = File(sourcePath);
-      if (await source.exists()) {
+      if (source.existsSync()) {
         // Source still here: it must be UNCHANGED since we staged it, or the
         // staged copy is stale (source edited) → re-stage.
-        final srcStat = await source.stat();
+        final srcStat = source.statSync();
         final sourceUnchanged =
             sourceSize == srcStat.size && meta['sourceMtimeMs'] == srcStat.modified.millisecondsSinceEpoch;
         if (!sourceUnchanged) {
@@ -169,7 +169,7 @@ class CopypartyStagingService {
     // re-reading the whole (slow) USB source again. (pause/resume fix)
     for (final f in [paths.marker, File('${paths.marker.path}.tmp')]) {
       try {
-        if (await f.exists()) {
+        if (f.existsSync()) {
           await f.delete();
         }
       } catch (_) {}
@@ -182,7 +182,7 @@ class CopypartyStagingService {
       cancelToken: cancelToken,
     );
 
-    final srcStat = await File(sourcePath).stat();
+    final srcStat = File(sourcePath).statSync();
     final marker = {
       'v': _markerVersion,
       'sourcePath': sourcePath,
@@ -216,7 +216,7 @@ class CopypartyStagingService {
     final markedStagedPaths = <String>{};
     try {
       final dir = await _dir();
-      if (!await dir.exists()) {
+      if (!dir.existsSync()) {
         return entries;
       }
       await for (final entity in dir.list()) {
@@ -229,11 +229,11 @@ class CopypartyStagingService {
             continue;
           }
           final stagedPath = entity.path.substring(0, entity.path.length - '.stagemeta'.length);
-          if (!await File(stagedPath).exists()) {
+          if (!File(stagedPath).existsSync()) {
             continue;
           }
           markedStagedPaths.add(stagedPath);
-          final stat = await entity.stat();
+          final stat = entity.statSync();
           entries.add((
             sourcePath: meta['sourcePath'] as String,
             filename: meta['filename'] as String,
@@ -253,7 +253,7 @@ class CopypartyStagingService {
           continue;
         }
         try {
-          final stat = await entity.stat();
+          final stat = entity.statSync();
           entries.add((
             sourcePath: path,
             filename: '${path.split('/').last} (incomplete copy)',
@@ -275,7 +275,7 @@ class CopypartyStagingService {
   Future<int> currentCacheBytes() async {
     try {
       final dir = await _dir();
-      if (!await dir.exists()) {
+      if (!dir.existsSync()) {
         return 0;
       }
       int total = 0;
@@ -310,7 +310,7 @@ class CopypartyStagingService {
   Future<void> discardOrphan(String stagedPath) async {
     try {
       final f = File(stagedPath);
-      if (await f.exists()) {
+      if (f.existsSync()) {
         await f.delete();
       }
     } catch (_) {}
@@ -319,7 +319,7 @@ class CopypartyStagingService {
   Future<void> _deletePaths(({File staged, File marker}) paths) async {
     for (final f in [paths.staged, paths.marker, File('${paths.marker.path}.tmp')]) {
       try {
-        if (await f.exists()) {
+        if (f.existsSync()) {
           await f.delete();
         }
       } catch (_) {}
@@ -333,7 +333,7 @@ class CopypartyStagingService {
   Future<void> sweepStale(Duration maxAge, DateTime now) async {
     try {
       final dir = await _dir();
-      if (!await dir.exists()) {
+      if (!dir.existsSync()) {
         return;
       }
       await for (final entity in dir.list()) {
@@ -341,7 +341,7 @@ class CopypartyStagingService {
           continue;
         }
         try {
-          final stat = await entity.stat();
+          final stat = entity.statSync();
           if (now.difference(stat.modified) <= maxAge) {
             continue;
           }

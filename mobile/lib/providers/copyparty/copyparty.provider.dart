@@ -4,7 +4,6 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:openapi/api.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
@@ -19,6 +18,7 @@ import 'package:immich_mobile/services/copyparty/copyparty_foreground_service.da
 import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_staging.service.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
+import 'package:openapi/api.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -142,7 +142,7 @@ final pendingCleanupProvider = FutureProvider<List<CopypartyReceipt>>((ref) asyn
   final all = await repo.getUndeleted();
   final existing = <CopypartyReceipt>[];
   for (final r in all) {
-    if (await File(r.localPath).exists()) {
+    if (File(r.localPath).existsSync()) {
       existing.add(r);
     }
   }
@@ -586,7 +586,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             if (staged == null) {
               var sourceAvailable = false;
               try {
-                sourceAvailable = await File(file.localPath).exists();
+                sourceAvailable = File(file.localPath).existsSync();
               } catch (_) {}
               if (!sourceAvailable) {
                 file.status = UploadFileStatus.failed;
@@ -782,7 +782,12 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                 // access this project has previously seen cause USB-unmount
                 // crashes (see CLAUDE.md). No delete is safe without a source
                 // to compare against anyway.
-                final sourceStillThere = await File(file.localPath).exists().catchError((_) => false);
+                bool sourceStillThere;
+                try {
+                  sourceStillThere = File(file.localPath).existsSync();
+                } catch (_) {
+                  sourceStillThere = false;
+                }
                 if (!sourceStillThere) {
                   safeToRemove = false;
                   _log.log('AUTO-DELETE SKIPPED for ${file.filename}: source gone — nothing to verify against');
@@ -1014,7 +1019,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     unawaited(
       fut.whenComplete(() {
         if (identical(_inFlightStaging[file.localPath], fut)) {
-          _inFlightStaging.remove(file.localPath);
+          _inFlightStaging.remove(file.localPath)?.ignore();
         }
       }),
     );

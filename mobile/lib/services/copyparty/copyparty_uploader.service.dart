@@ -186,7 +186,7 @@ class CopypartyUploaderService {
     fileHasher.close();
     final fileHash = fileSink.value!.toString();
 
-    final stat = await file.stat();
+    final stat = file.statSync();
     final lastModifiedMs = stat.modified.millisecondsSinceEpoch;
 
     _log?.log(
@@ -1117,7 +1117,7 @@ class CopypartyUploaderService {
     // from having hashed them in one continuous pass. Any doubt at all falls
     // back to wiping and starting clean, exactly like before this existed.
     int resumeOffset = 0;
-    if (await dest.exists()) {
+    if (dest.existsSync()) {
       try {
         final existingLen = await dest.length();
         final candidateOffset = (existingLen ~/ chunkSize) * chunkSize;
@@ -1298,7 +1298,7 @@ class CopypartyUploaderService {
 
     fileHasher.close();
     final fileHash = fileSink.value!.toString();
-    final stat = await source.stat();
+    final stat = source.statSync();
 
     String mbps(int bytes, int ms) => ms <= 0 ? '∞' : (bytes / (ms / 1000) / (1024 * 1024)).toStringAsFixed(1);
     final rd = readSw.elapsedMilliseconds;

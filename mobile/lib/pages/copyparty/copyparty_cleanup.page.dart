@@ -85,7 +85,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   @override
   void initState() {
     super.initState();
-    _loadExisting();
+    unawaited(_loadExisting());
     // A one-shot check that fails while offline (or mid network-path-change,
     // e.g. connecting a VPN) previously stayed stuck showing the raw error
     // until the user manually pulled to refresh. Listen for ANY connectivity
@@ -108,7 +108,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
 
   @override
   void dispose() {
-    _connectivitySub?.cancel();
+    unawaited(_connectivitySub?.cancel());
     super.dispose();
   }
 
@@ -116,7 +116,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     final receipts = await ref.read(copypartyReceiptRepositoryProvider).getUndeleted();
     final existing = <CopypartyReceipt>[];
     for (final r in receipts) {
-      if (await File(r.localPath).exists()) {
+      if (File(r.localPath).existsSync()) {
         existing.add(r);
       }
     }
@@ -225,7 +225,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         },
       );
       VerifyState immich = VerifyState.unknown;
-      bool applicable = _immichApplies(r);
+      final applicable = _immichApplies(r);
       if (applicable) {
         try {
           immich = (await immichAssetIdByChecksum(api, effectivePath)) != null ? VerifyState.yes : VerifyState.no;
@@ -565,7 +565,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                   case 'collapseAll':
                     _setAllCollapsed(true);
                   case 'removeSelected':
-                    _removeSelected();
+                    unawaited(_removeSelected());
                 }
               },
               itemBuilder: (ctx) => [
@@ -969,10 +969,10 @@ class _CleanupTile extends StatelessWidget {
     // Verification has been attempted and the copyparty side is NOT good.
     final hashTried = v.hashValidatedAt != null;
     final cpFailed =
-        (v.filenamePresent == VerifyState.no ||
+        v.filenamePresent == VerifyState.no ||
         v.sizeMatches == VerifyState.no ||
         v.partialExists == VerifyState.yes ||
-        (hashTried && !v.hashFreshAt(now)));
+        (hashTried && !v.hashFreshAt(now));
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -1038,7 +1038,7 @@ class _CleanupTile extends StatelessWidget {
                           ),
                         ),
                       // Progress bar + % while verifying (hashing) or uploading (FB2/FB8).
-                      if ((verifying || uploading))
+                      if (verifying || uploading)
                         Padding(
                           padding: const EdgeInsets.only(top: 6),
                           child: Row(

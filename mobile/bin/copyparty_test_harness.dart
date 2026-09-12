@@ -110,8 +110,10 @@ Future<void> _scenarioBasic(_Options o, int run) async {
     print('[basic] uploading (${hashed.chunkHashes.length} chunks)...');
     final (result, alreadyOnServer) = await uploader.uploadHashedFile(hashed, o.host, o.path, o.password);
     if (!result.fullyConfirmed) {
-      throw 'server did not confirm: needed=${result.neededChunks.length} '
-          'unmatched=${result.unmatchedHashes.length}';
+      throw Exception(
+        'server did not confirm: needed=${result.neededChunks.length} '
+        'unmatched=${result.unmatchedHashes.length}',
+      );
     }
     print('[basic] confirmed: wark=${result.wark} alreadyOnServer=$alreadyOnServer');
     await _cleanup(uploader, o, hashed.filename);
@@ -128,8 +130,10 @@ Future<void> _scenarioResume(_Options o, int run) async {
     print('[resume] hashing ${o.sizeMb} MiB...');
     final hashed = await uploader.hashFile(file.path);
     if (hashed.chunkHashes.length < 3) {
-      throw 'file too small to interrupt mid-upload (${hashed.chunkHashes.length} chunk(s)) '
-          '— try a larger --size-mb';
+      throw Exception(
+        'file too small to interrupt mid-upload (${hashed.chunkHashes.length} chunk(s)) '
+        '— try a larger --size-mb',
+      );
     }
 
     print('[resume] uploading, interrupting partway...');
@@ -154,18 +158,22 @@ Future<void> _scenarioResume(_Options o, int run) async {
       interrupted = true;
     }
     if (!interrupted) {
-      throw 'expected an interruption but the upload completed in one pass '
-          '(file too small/fast to interrupt? try a larger --size-mb)';
+      throw Exception(
+        'expected an interruption but the upload completed in one pass '
+        '(file too small/fast to interrupt? try a larger --size-mb)',
+      );
     }
     if (!sawProgress) {
-      throw 'cancelled before any progress was ever reported';
+      throw Exception('cancelled before any progress was ever reported');
     }
     print('[resume] interrupted as expected — resuming with a fresh call...');
 
     final (result, _) = await uploader.uploadHashedFile(hashed, o.host, o.path, o.password);
     if (!result.fullyConfirmed) {
-      throw 'resume did not confirm: needed=${result.neededChunks.length} '
-          'unmatched=${result.unmatchedHashes.length}';
+      throw Exception(
+        'resume did not confirm: needed=${result.neededChunks.length} '
+        'unmatched=${result.unmatchedHashes.length}',
+      );
     }
     print('[resume] resumed + confirmed: wark=${result.wark}');
     await _cleanup(uploader, o, hashed.filename);
@@ -189,12 +197,16 @@ Future<void> _scenarioBrokenPipe(_Options o, int run) async {
     );
     final (result, _) = await uploader.uploadHashedFile(hashed, o.host, o.path, o.password);
     if (!result.fullyConfirmed) {
-      throw 'did not confirm despite the retry logic: needed=${result.neededChunks.length} '
-          'unmatched=${result.unmatchedHashes.length}';
+      throw Exception(
+        'did not confirm despite the retry logic: needed=${result.neededChunks.length} '
+        'unmatched=${result.unmatchedHashes.length}',
+      );
     }
     if (flaky.failedCount == 0) {
-      throw 'the simulated failure never actually fired — check --fail-nth-json-post '
-          'against how many JSON POSTs this run makes';
+      throw Exception(
+        'the simulated failure never actually fired — check --fail-nth-json-post '
+        'against how many JSON POSTs this run makes',
+      );
     }
     print('[broken-pipe] confirmed despite ${flaky.failedCount} simulated failure(s): wark=${result.wark}');
     await _cleanup(uploader, o, hashed.filename);
@@ -349,7 +361,7 @@ class _Options {
       String next() {
         i++;
         if (i >= args.length) {
-          throw 'missing value for $arg';
+          throw Exception('missing value for $arg');
         }
         return args[i];
       }

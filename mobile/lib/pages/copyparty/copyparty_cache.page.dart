@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
@@ -32,12 +34,14 @@ class _CopypartyCachePageState extends ConsumerState<CopypartyCachePage> {
   @override
   void initState() {
     super.initState();
-    _load();
-    freeSpaceBytes().then((v) {
-      if (mounted) {
-        setState(() => _freeBytes = v);
-      }
-    });
+    unawaited(_load());
+    unawaited(
+      freeSpaceBytes().then((v) {
+        if (mounted) {
+          setState(() => _freeBytes = v);
+        }
+      }),
+    );
   }
 
   Future<void> _load() async {
@@ -88,17 +92,17 @@ class _CopypartyCachePageState extends ConsumerState<CopypartyCachePage> {
   Future<void> _upload(List<StagedCacheEntry> targets) async {
     // Incomplete (orphaned) entries have no marker to resume/upload from —
     // callers should already exclude them, but never queue one by mistake.
-    targets = targets.where((e) => e.complete).toList();
-    if (targets.isEmpty) {
+    final completeTargets = targets.where((e) => e.complete).toList();
+    if (completeTargets.isEmpty) {
       return;
     }
-    await ref.read(importSessionProvider.notifier).queueCachedFiles(targets);
+    await ref.read(importSessionProvider.notifier).queueCachedFiles(completeTargets);
     if (!mounted) {
       return;
     }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Queued ${targets.length} file${targets.length == 1 ? '' : 's'} for upload'),
+        content: Text('Queued ${completeTargets.length} file${completeTargets.length == 1 ? '' : 's'} for upload'),
         action: SnackBarAction(
           label: 'View',
           onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CopypartyImportPage())),
@@ -188,7 +192,7 @@ class _CopypartyCachePageState extends ConsumerState<CopypartyCachePage> {
                           onRefresh: _load,
                           child: ListView.separated(
                             itemCount: entries.length,
-                            separatorBuilder: (_, __) => const Divider(height: 1),
+                            separatorBuilder: (_, _) => const Divider(height: 1),
                             itemBuilder: (ctx, i) {
                               final e = entries[i];
                               return CheckboxListTile(

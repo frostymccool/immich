@@ -68,7 +68,7 @@ class CopypartyLogger {
     }
     // ignore: avoid_print
     print('[copyparty] $line');
-    final doFlush = (++_sinceFlush >= _flushEvery);
+    final doFlush = ++_sinceFlush >= _flushEvery;
     if (doFlush) {
       _sinceFlush = 0;
     }
@@ -79,7 +79,7 @@ class CopypartyLogger {
         // few lines each) would otherwise grow the file to hundreds of MB and
         // add to disk pressure. When it exceeds the cap, rewrite it from the
         // bounded in-memory tail (≤5000 lines) instead of appending. (crash A3)
-        if (doFlush && await f.exists() && await f.length() > _maxFileBytes) {
+        if (doFlush && f.existsSync() && await f.length() > _maxFileBytes) {
           await f.writeAsString('${_memory.join('\n')}\n', flush: true);
           return;
         }
@@ -138,7 +138,7 @@ class CopypartyLogger {
     _writeChain = _writeChain.then((_) async {
       try {
         final f = await _resolveFile();
-        if (await f.exists()) {
+        if (f.existsSync()) {
           await f.writeAsString('');
         }
       } catch (_) {}

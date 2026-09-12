@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/providers/api.provider.dart';
@@ -14,6 +13,7 @@ import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:immich_mobile/utils/upload_speed_calculator.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 
 /// Pick a folder via SAF and push the "Add folders" selection page for it —
@@ -835,6 +835,9 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
           TextButton(
             onPressed: () async {
               final path = await ref.read(copypartyLoggerProvider).flush();
+              if (!ctx.mounted) {
+                return;
+              }
               final box = ctx.findRenderObject() as RenderBox?;
               await Share.shareXFiles(
                 [XFile(path)],
@@ -932,6 +935,9 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
             onPressed: () async {
               final logger = ref.read(copypartyLoggerProvider);
               final path = await logger.flush();
+              if (!ctx.mounted) {
+                return;
+              }
               final box = ctx.findRenderObject() as RenderBox?;
               await Share.shareXFiles(
                 [XFile(path)],
@@ -1176,9 +1182,11 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                     onPressed: selectedCount > 0
                         ? () {
                             _applyDestinations();
-                            ref
-                                .read(importSessionProvider.notifier)
-                                .startUpload(selectedFilePaths: Set.of(_selectedPaths));
+                            unawaited(
+                              ref
+                                  .read(importSessionProvider.notifier)
+                                  .startUpload(selectedFilePaths: Set.of(_selectedPaths)),
+                            );
                           }
                         : null,
                     icon: const Icon(Icons.upload_rounded),
@@ -2673,6 +2681,9 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
   Future<void> _shareDiagnosticLog(BuildContext context, WidgetRef ref) async {
     final logger = ref.read(copypartyLoggerProvider);
     final path = await logger.flush();
+    if (!context.mounted) {
+      return;
+    }
     final box = context.findRenderObject() as RenderBox?;
     await Share.shareXFiles(
       [XFile(path)],
@@ -2698,6 +2709,9 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
     try {
       password = await ref.read(copypartyPasswordProvider.future);
     } catch (_) {}
+    if (!context.mounted) {
+      return;
+    }
     final cleanPath = config.uploadPath.replaceAll(RegExp(r'^/+|/+$'), '');
     final base = config.hostUrl.replaceAll(RegExp(r'/+$'), '');
 

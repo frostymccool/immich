@@ -1,5 +1,4 @@
 import 'package:auto_route/auto_route.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart' hide Store;
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
@@ -8,7 +7,7 @@ import 'package:immich_mobile/routing/router.dart';
 import 'package:immich_mobile/widgets/settings/advanced_settings.dart';
 import 'package:immich_mobile/widgets/settings/asset_list_settings/asset_list_settings.dart';
 import 'package:immich_mobile/widgets/settings/asset_viewer_settings/asset_viewer_settings.dart';
-import 'package:immich_mobile/widgets/settings/backup_settings/drift_backup_settings.dart';
+import 'package:immich_mobile/widgets/settings/backup_settings/backup_settings.dart';
 import 'package:immich_mobile/widgets/settings/beta_sync_settings/sync_status_and_actions.dart';
 import 'package:immich_mobile/widgets/settings/copyparty_settings/copyparty_settings.dart';
 import 'package:immich_mobile/widgets/settings/free_up_space_settings.dart';
@@ -19,26 +18,52 @@ import 'package:immich_mobile/widgets/settings/preference_settings/preference_se
 import 'package:immich_mobile/widgets/settings/settings_card.dart';
 
 enum SettingSection {
-  advanced('advanced', Icons.build_outlined, "advanced_settings_tile_subtitle"),
-  assetViewer('asset_viewer_settings_title', Icons.image_outlined, "asset_viewer_settings_subtitle"),
-  backup('backup', Icons.cloud_upload_outlined, "backup_settings_subtitle"),
-  copyparty('Copyparty Import', Icons.sd_card_rounded, "Upload to copyparty via up2k protocol"),
-  freeUpSpace('free_up_space', Icons.cleaning_services_outlined, "free_up_space_settings_subtitle"),
-  languages('language', Icons.language, "setting_languages_subtitle"),
-  networking('networking_settings', Icons.wifi, "networking_subtitle"),
-  notifications('notifications', Icons.notifications_none_rounded, "setting_notifications_subtitle"),
-  preferences('preferences_settings_title', Icons.interests_outlined, "preferences_settings_subtitle"),
-  timeline('asset_list_settings_title', Icons.auto_awesome_mosaic_outlined, "asset_list_settings_subtitle"),
-  beta('sync_status', Icons.sync_outlined, "sync_status_subtitle");
+  advanced(Icons.build_outlined),
+  assetViewer(Icons.image_outlined),
+  backup(Icons.cloud_upload_outlined),
+  copyparty(Icons.sd_card_rounded),
+  freeUpSpace(Icons.cleaning_services_outlined),
+  languages(Icons.language),
+  networking(Icons.wifi),
+  notifications(Icons.notifications_none_rounded),
+  preferences(Icons.interests_outlined),
+  timeline(Icons.auto_awesome_mosaic_outlined),
+  beta(Icons.sync_outlined);
 
-  final String title;
-  final String subtitle;
   final IconData icon;
+
+  String title(Translations t) => switch (this) {
+    SettingSection.advanced => t.advanced,
+    SettingSection.assetViewer => t.asset_viewer_settings_title,
+    SettingSection.backup => t.backup,
+    SettingSection.copyparty => 'Copyparty Import',
+    SettingSection.freeUpSpace => t.free_up_space,
+    SettingSection.languages => t.language,
+    SettingSection.networking => t.networking_settings,
+    SettingSection.notifications => t.notifications,
+    SettingSection.preferences => t.preferences_settings_title,
+    SettingSection.timeline => t.asset_list_settings_title,
+    SettingSection.beta => t.sync_status,
+  };
+
+  String subtitle(Translations t) => switch (this) {
+    SettingSection.advanced => t.advanced_settings_tile_subtitle,
+    SettingSection.assetViewer => t.asset_viewer_settings_subtitle,
+    SettingSection.backup => t.backup_settings_subtitle,
+    SettingSection.copyparty => 'Upload to copyparty via up2k protocol',
+    SettingSection.freeUpSpace => t.free_up_space_settings_subtitle,
+    SettingSection.languages => t.setting_languages_subtitle,
+    SettingSection.networking => t.networking_subtitle,
+    SettingSection.notifications => t.setting_notifications_subtitle,
+    SettingSection.preferences => t.preferences_settings_subtitle,
+    SettingSection.timeline => t.asset_list_settings_subtitle,
+    SettingSection.beta => t.sync_status_subtitle,
+  };
 
   Widget get widget => switch (this) {
     SettingSection.advanced => const AdvancedSettings(),
     SettingSection.assetViewer => const AssetViewerSettings(),
-    SettingSection.backup => const DriftBackupSettings(),
+    SettingSection.backup => const BackupSettings(),
     SettingSection.copyparty => const CopypartySettings(),
     SettingSection.freeUpSpace => const FreeUpSpaceSettings(),
     SettingSection.languages => const LanguageSettings(),
@@ -49,7 +74,7 @@ enum SettingSection {
     SettingSection.beta => const SyncStatusAndActions(),
   };
 
-  const SettingSection(this.title, this.icon, this.subtitle);
+  const SettingSection(this.icon);
 }
 
 @RoutePage()
@@ -58,9 +83,8 @@ class SettingsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    context.locale;
     return Scaffold(
-      appBar: AppBar(centerTitle: false, title: const Text('settings').tr()),
+      appBar: AppBar(centerTitle: false, title: Text(context.t.settings)),
       body: context.isMobile ? const _MobileLayout() : const _TabletLayout(),
     );
   }
@@ -76,15 +100,15 @@ class _MobileLayout extends StatelessWidget {
               ? [
                   SettingsCard(
                     icon: Icons.sync_outlined,
-                    title: 'sync_status'.tr(),
-                    subtitle: 'sync_status_subtitle'.tr(),
+                    title: context.t.sync_status,
+                    subtitle: context.t.sync_status_subtitle,
                     settingRoute: const SyncStatusRoute(),
                   ),
                 ]
               : [
                   SettingsCard(
-                    title: setting.title.tr(),
-                    subtitle: setting.subtitle.tr(),
+                    title: setting.title(context.t),
+                    subtitle: setting.subtitle(context.t),
                     icon: setting.icon,
                     settingRoute: SettingsSubRoute(section: setting),
                   ),
@@ -119,7 +143,7 @@ class _TabletLayout extends HookWidget {
               ...SettingSection.values.map(
                 (s) => SliverToBoxAdapter(
                   child: ListTile(
-                    title: Text(s.title).tr(),
+                    title: Text(s.title(context.t)),
                     leading: Icon(s.icon),
                     selected: s.index == selectedSection.value.index,
                     selectedColor: context.primaryColor,
@@ -130,7 +154,7 @@ class _TabletLayout extends HookWidget {
               ),
               SliverToBoxAdapter(
                 child: ListTile(
-                  title: Text('whats_new'.tr()),
+                  title: Text(context.t.whats_new),
                   leading: const Icon(Icons.auto_awesome_outlined),
                   onTap: () => context.pushRoute(const WhatsNewRoute()),
                 ),
@@ -153,9 +177,8 @@ class SettingsSubPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    context.locale;
     return Scaffold(
-      appBar: AppBar(centerTitle: false, title: Text(section.title).tr()),
+      appBar: AppBar(centerTitle: false, title: Text(section.title(context.t))),
       body: section.widget,
     );
   }

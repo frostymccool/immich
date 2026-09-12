@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -127,6 +129,9 @@ class _DownloadLogButton extends ConsumerWidget {
           onPressed: () async {
             final logger = ref.read(copypartyLoggerProvider);
             final path = await logger.flush();
+            if (!context.mounted) {
+              return;
+            }
             final box = context.findRenderObject() as RenderBox?;
             await Share.shareXFiles(
               [XFile(path)],
@@ -193,6 +198,9 @@ class _DiagnosticLogTile extends ConsumerWidget {
   Future<void> _shareLog(BuildContext context, WidgetRef ref) async {
     final logger = ref.read(copypartyLoggerProvider);
     final path = await logger.flush();
+    if (!context.mounted) {
+      return;
+    }
     final box = context.findRenderObject() as RenderBox?;
     await Share.shareXFiles(
       [XFile(path)],
@@ -502,11 +510,13 @@ class _CacheSizeSlider extends HookConsumerWidget {
     // tick — a directory listing per frame while dragging would be wasteful.
     final scannedBytes = useState<int?>(null);
     useEffect(() {
-      ref.read(copypartyStagingProvider).currentCacheBytes().then((v) {
-        if (context.mounted) {
-          scannedBytes.value = v;
-        }
-      });
+      unawaited(
+        ref.read(copypartyStagingProvider).currentCacheBytes().then((v) {
+          if (context.mounted) {
+            scannedBytes.value = v;
+          }
+        }),
+      );
       return null;
       // ignore: exhaustive_keys
     }, const []);
@@ -534,11 +544,13 @@ class _CacheSizeSlider extends HookConsumerWidget {
     const fallbackMaxGib = 32;
     final freeBytes = useState<int?>(null);
     useEffect(() {
-      freeSpaceBytes().then((v) {
-        if (context.mounted) {
-          freeBytes.value = v;
-        }
-      });
+      unawaited(
+        freeSpaceBytes().then((v) {
+          if (context.mounted) {
+            freeBytes.value = v;
+          }
+        }),
+      );
       return null;
       // ignore: exhaustive_keys
     }, const []);
@@ -589,7 +601,7 @@ class _CacheSizeSlider extends HookConsumerWidget {
             max: maxGib.toDouble(),
             divisions: maxGib > 1 ? maxGib - 1 : null,
             label: '$gib GiB',
-            onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyCacheSizeMb, (v.round() * 1024)),
+            onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyCacheSizeMb, v.round() * 1024),
           ),
           if (freeBytes.value != null)
             Padding(
@@ -650,7 +662,7 @@ class _DefaultDestinationTile extends ConsumerWidget {
           ],
           onChanged: (v) {
             if (v != null) {
-              ref.read(settingsProvider).write(SettingsKey.copypartyDefaultDestination, v);
+              unawaited(ref.read(settingsProvider).write(SettingsKey.copypartyDefaultDestination, v));
             }
           },
         ),
@@ -706,7 +718,7 @@ class _TriggerExtensionsTile extends ConsumerWidget {
                 .map((e) => e.trim().toLowerCase().replaceAll('.', ''))
                 .where((e) => e.isNotEmpty)
                 .toList();
-            ref.read(settingsProvider).write(SettingsKey.copypartyTriggerExtensions, list);
+            unawaited(ref.read(settingsProvider).write(SettingsKey.copypartyTriggerExtensions, list));
           },
         ),
       ),
@@ -869,14 +881,14 @@ class _PendingCleanupTile extends HookConsumerWidget {
     // built makes the badge behave the same way: always live, never a stale
     // cache from whenever it last happened to be invalidated elsewhere.
     useEffect(() {
-      Future.microtask(() => ref.invalidate(pendingCleanupProvider));
+      unawaited(Future.microtask(() => ref.invalidate(pendingCleanupProvider)));
       return null;
       // ignore: exhaustive_keys
     }, const []);
     final async = ref.watch(pendingCleanupProvider);
     return async.when(
       loading: () => const SizedBox.shrink(),
-      error: (_, __) => const SizedBox.shrink(),
+      error: (_, _) => const SizedBox.shrink(),
       data: (receipts) {
         if (receipts.isEmpty) {
           return const SizedBox.shrink();

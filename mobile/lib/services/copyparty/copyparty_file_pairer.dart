@@ -35,7 +35,7 @@ class CopypartyFilePairer {
   /// discovered, so callers can show live progress.
   Future<List<UploadSet>> scanDirectory(String directoryPath, {void Function(int count)? onFileFound}) async {
     final dir = Directory(directoryPath);
-    if (!await dir.exists()) {
+    if (!dir.existsSync()) {
       return [];
     }
 
@@ -171,7 +171,7 @@ class CopypartyFilePairer {
     await for (final entity in dir.list(recursive: true, followLinks: true)) {
       if (entity is File) {
         try {
-          final stat = await entity.stat();
+          final stat = entity.statSync();
           result.add(
             FileInfo(
               path: entity.path,

@@ -1,6 +1,6 @@
 import 'package:drift/drift.dart';
+import 'package:immich_mobile/data/db/main/database.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
-import 'package:immich_mobile/infrastructure/repositories/db.repository.dart';
 
 class CopypartyReceiptRepository {
   final Drift _db;
