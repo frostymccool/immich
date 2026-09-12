@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.2.0-custom.N+<3048+N>  →  3.2.0-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.2.0-custom.123+3171** (next push → `124+3172`).
+Latest pushed: **3.2.0-custom.124+3172** (next push → `125+3173`).
 
 The `3.1.0` base tracks the upstream immich-app/immich release this fork is
 synced to — bump it (and re-derive the offset if upstream's own build number
@@ -157,8 +157,8 @@ verification + cleanup workflow. Grown well beyond the original 5-step import.
 `flutter_secure_storage` (key `copyparty_password`, NOT in `SettingsKey`/`AppConfig`).
 (`writeReceipts` still exists but is unused — the `.cpreceipt` sidecar was dropped.)
 
-**DB** schema **v32**: `copyparty_upload_receipts` (v31) + `upload_confirmed` /
-`immich_asset_id` columns (v32). Raw SQL, outside the Drift entity model.
+**DB** schema **v33**: `copyparty_upload_receipts` (v32) + `upload_confirmed` /
+`immich_asset_id` columns (v33). Raw SQL, outside the Drift entity model.
 
 **Import** — directory picker → scan → options (per-file live name/size/partial
 verification + Immich-by-checksum axis, destination CP-only / Both / Immich) →
@@ -182,7 +182,7 @@ links hidden in normal use; a "Download log" button stays on the main settings.
 
 ## Mobile project structure
 
-- Flutter 3.44.1 / Dart SDK ≥3.12.0
+- Flutter 3.47.1 / Dart SDK ≥3.12.0
 - State management: Riverpod (`StateNotifierProvider`, `FutureProvider`, `Provider`)
 - ORM: Drift for all standard entities; raw SQL for non-Drift tables
 - Navigation: auto_route for most pages; `MaterialPageRoute` push for modal flows
@@ -202,18 +202,34 @@ When adding a new settings domain:
 4. Add enum values to `SettingsKey`
 
 ### Database / Drift
+As of v3.2.0, moved from `lib/infrastructure/repositories/` to `lib/data/db/`
+(upstream restructuring); the class name (`Drift`) and `driftProvider` are unchanged.
+
 | File | Purpose |
 |------|---------|
-| `mobile/lib/infrastructure/repositories/db.repository.dart` | `Drift` class — schema version, migrations, `beforeOpen` |
-| `mobile/lib/infrastructure/repositories/db.repository.steps.dart` | Generated migration steps (versions 1-30) |
-| `mobile/test/drift/main/generated/` | Generated schema snapshots (versions 1-30) |
+| `mobile/lib/data/db/main/database.dart` | `Drift` class — schema version, migrations, `beforeOpen` |
+| `mobile/lib/data/db/main/database.steps.dart` | Generated (gitignored) via `dart run drift_dev make-migrations` — provides `migrationSteps(...)` |
+| `mobile/drift_schemas/main/*.json` | Schema snapshots, one per drift-tracked version (currently up to v31 — see below) |
+| `mobile/test/drift/main/generated/` | Generated (gitignored) via `dart run drift_dev schema generate ...` |
 
 Migration rules:
-- Bump `schemaVersion` (currently 32)
+- Bump `schemaVersion` (currently 33 — see note below on why it's ahead of the last drift snapshot)
 - Add raw-SQL migration in `onUpgrade` guarded by version range
 - Mirror the same `CREATE TABLE/INDEX IF NOT EXISTS` in `beforeOpen` for fresh installs
-- Do NOT regenerate `test/drift/main/generated/` — only covers 1-30 and tests only test to the last generated version
 - `Drift` is a singleton accessed via `driftProvider`; test files create it directly with `NativeDatabase.memory()`
+
+**copyparty's schema versions are raw SQL, not drift-tracked.** `copyparty_upload_receipts`
+isn't a Drift entity, so its v31→v32 (table) and v32→v33 (columns) migrations are hand-written
+`customStatement(...)` calls in `onUpgrade`, gated by `if (from < N && to >= N)` — NOT part of
+the generated `migrationSteps(...)` helper. This means `schemaVersion` can be (and is) ahead of
+the highest real drift-schema version (v31): `dart run drift_dev make-migrations` still requires
+a `from31To33` (or whatever the gap is) parameter on `migrationSteps(...)` once it notices the
+version jump and auto-creates a matching (structurally-identical) `drift_schema_v33.json`
+snapshot — provide it as a no-op, since the actual work happens in the raw-SQL block below it.
+**Always guard column-adding ALTER TABLEs with a `pragma_table_info` check, not just `from`/`to`**
+— a prior renumbering (during the v3.1.0 sync) taught this the hard way: devices already on an
+older numbering scheme can have `from` values that don't mean what the current code assumes,
+causing a `duplicate column name` crash on upgrade (fixed in build 121).
 
 ### Copyparty feature files
 | File | Purpose |
@@ -238,20 +254,41 @@ Beyond the standalone-Dart-for-`dart format` trick above, the FULL Flutter SDK i
 also fetchable in this environment (`storage.googleapis.com` isn't blocked) —
 enough for real `dart analyze`/`flutter pub get`, not just formatting:
 ```
-curl -sS -o /tmp/flutter.tar.xz https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.44.1-stable.tar.xz
+curl -sS -o /tmp/flutter.tar.xz https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.47.1-stable.tar.xz
 tar -xf /tmp/flutter.tar.xz -C /tmp/flutter-sdk   # ~1.5GB download, ~12GB extracted
 git config --global --add safe.directory /tmp/flutter-sdk/flutter   # needed when running as root
 export PATH="/tmp/flutter-sdk/flutter/bin:$PATH"
-cd mobile && flutter pub get   # ~90s; run once per fresh session/container
+```
+Check `mobile/pubspec.yaml`'s `environment.flutter` on every sync — it's bumped
+almost every upstream release, and `build-custom-apk.yml`'s `flutter-version`
+must be kept in lockstep with it (a mismatch fails `flutter pub get` in CI with
+"version solving failed").
+
+As of v3.2.0 the openapi Dart client (`mobile/generated/openapi`, imported by
+`mobile/pubspec.yaml` as a path dependency) is no longer checked in — it must be
+generated before `flutter pub get` will resolve at all:
+```
+cd open-api && bash ./bin/generate-dart-sdk.sh   # needs npx (for openapi-generator-cli) + java, both present here
+cd ../mobile && flutter pub get   # ~90s; run once per fresh session/container
+dart run drift_dev make-migrations   # regenerates lib/data/db/main/database.steps.dart (gitignored)
+dart run build_runner build          # routes, riverpod, freezed, drift entities
 dart analyze --fatal-infos <files>   # matches CI's Dart Analysis check exactly
 ```
-Known limitation: `dart run`/`flutter test` currently fail in this sandbox with a
+`build-custom-apk.yml` needs the same three codegen steps (openapi client, drift
+migrations, build_runner) before `flutter build apk` — it doesn't use mise, so
+each was added as its own workflow step; keep them in that order if the DB or
+openapi spec changes again.
+
+Known limitation: `flutter test` currently fails in this sandbox with a
 `sqlite3` native-asset build-hook hash mismatch (`Bad state: Hash of downloaded
 file libsqlite3...`) — a pre-existing environment/proxy artifact, not caused by
-any app code. `flutter pub get` and `dart analyze` both work fine and are the
-two checks that matter most (they mirror CI). Don't waste time trying to fix the
-sqlite3 hook — it's out of scope; just rely on analyze + format for verification
-and note the limitation if a script genuinely needs a live run.
+any app code. Plain `dart run <script>` (build_runner, drift_dev, pigeon,
+easy_localization, the test harness) works fine and does NOT hit this — it's
+specific to the `flutter test`/`dart test` runner's native-asset build hook.
+`flutter pub get` and `dart analyze` both work fine and are the two checks that
+matter most (they mirror CI). Don't waste time trying to fix the sqlite3 hook —
+it's out of scope; just rely on analyze + format for verification and note the
+limitation if a script genuinely needs a live `flutter test` run.
 
 ### copyparty up2k — verified protocol facts (from logs + `u2c.py`)
 - **Chunk SIZE must match the server EXACTLY** (this was THE upload bug — builds

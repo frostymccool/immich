@@ -24,12 +24,16 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Flutter 3.44.8
+      - name: Set up Flutter 3.47.1
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.44.8'
+          flutter-version: '3.47.1'
           channel: stable
           cache: true
+
+      - name: Generate OpenAPI Dart client
+        working-directory: open-api
+        run: bash ./bin/generate-dart-sdk.sh
 
       - name: Get Flutter dependencies
         working-directory: mobile
@@ -40,6 +44,10 @@ jobs:
         run: |
           dart run easy_localization:generate -S ../i18n
           dart run bin/generate_keys.dart
+
+      - name: Generate Drift migrations
+        working-directory: mobile
+        run: dart run drift_dev make-migrations
 
       - name: Run build_runner (routes, riverpod, drift)
         working-directory: mobile
