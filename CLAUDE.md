@@ -12,9 +12,9 @@ Personal fork of immich-app/immich. Custom features stack on
 is identifiable on-device. Increment BOTH numbers by 1 together (the build
 code runs 3048 ahead of the custom number):
 ```
-3.1.0-custom.N+<3048+N>  →  3.1.0-custom.(N+1)+<3049+N>
+3.2.0-custom.N+<3048+N>  →  3.2.0-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.1.0-custom.121+3169** (next push → `122+3170`).
+Latest pushed: **3.2.0-custom.123+3171** (next push → `124+3172`).
 
 The `3.1.0` base tracks the upstream immich-app/immich release this fork is
 synced to — bump it (and re-derive the offset if upstream's own build number
