@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.2.0-custom.N+<3048+N>  →  3.2.0-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.2.0-custom.124+3172** (next push → `125+3173`).
+Latest pushed: **3.2.0-custom.125+3173** (next push → `126+3174`).
 
 The `3.1.0` base tracks the upstream immich-app/immich release this fork is
 synced to — bump it (and re-derive the offset if upstream's own build number
@@ -268,16 +268,20 @@ As of v3.2.0 the openapi Dart client (`mobile/generated/openapi`, imported by
 `mobile/pubspec.yaml` as a path dependency) is no longer checked in — it must be
 generated before `flutter pub get` will resolve at all:
 ```
-cd open-api && bash ./bin/generate-dart-sdk.sh   # needs npx (for openapi-generator-cli) + java, both present here
+npm install -g @openapitools/openapi-generator-cli@2.40.1   # generate-dart-sdk.sh expects a real binary on PATH, not just npx
+cd open-api && bash ./bin/generate-dart-sdk.sh   # also needs java (both present here)
 cd ../mobile && flutter pub get   # ~90s; run once per fresh session/container
 dart run drift_dev make-migrations   # regenerates lib/data/db/main/database.steps.dart (gitignored)
 dart run build_runner build          # routes, riverpod, freezed, drift entities
 dart analyze --fatal-infos <files>   # matches CI's Dart Analysis check exactly
 ```
-`build-custom-apk.yml` needs the same three codegen steps (openapi client, drift
-migrations, build_runner) before `flutter build apk` — it doesn't use mise, so
-each was added as its own workflow step; keep them in that order if the DB or
-openapi spec changes again.
+`build-custom-apk.yml` needs the same steps (global npm install, openapi client,
+drift migrations, build_runner) before `flutter build apk` — it doesn't use
+mise, so each was added as its own workflow step; keep them in that order if
+the DB or openapi spec changes again. (Build 124 shipped without the `npm
+install -g` step and failed CI with `openapi-generator-cli: command not
+found` — the local sandbox had it on PATH via a manual shim during testing,
+which masked the gap. Build 125 added the missing step.)
 
 Known limitation: `flutter test` currently fails in this sandbox with a
 `sqlite3` native-asset build-hook hash mismatch (`Bad state: Hash of downloaded
