@@ -610,6 +610,16 @@
               "dart_expr": "const EnumIndexConverter<AssetPlaybackStyle>(AssetPlaybackStyle.values)",
               "dart_type_name": "AssetPlaybackStyle"
             }
+          },
+          {
+            "name": "previous_checksum",
+            "getter_name": "previousChecksum",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
           }
         ],
         "is_virtual": false,
@@ -2295,10 +2305,7 @@
     },
     {
       "id": 28,
-      "references": [
-        1,
-        27
-      ],
+      "references": [],
       "type": "table",
       "data": {
         "name": "asset_face_entity",
@@ -2320,25 +2327,9 @@
             "moor_type": "string",
             "nullable": false,
             "customConstraints": null,
-            "defaultConstraints": "REFERENCES remote_asset_entity (id) ON DELETE CASCADE",
-            "dialectAwareDefaultConstraints": {
-              "sqlite": "REFERENCES remote_asset_entity (id) ON DELETE CASCADE"
-            },
             "default_dart": null,
             "default_client_dart": null,
-            "dsl_features": [
-              {
-                "foreign_key": {
-                  "to": {
-                    "table": "remote_asset_entity",
-                    "column": "id"
-                  },
-                  "initially_deferred": false,
-                  "on_update": null,
-                  "on_delete": "cascade"
-                }
-              }
-            ]
+            "dsl_features": []
           },
           {
             "name": "person_id",
@@ -2346,25 +2337,9 @@
             "moor_type": "string",
             "nullable": true,
             "customConstraints": null,
-            "defaultConstraints": "REFERENCES person_entity (id) ON DELETE SET NULL",
-            "dialectAwareDefaultConstraints": {
-              "sqlite": "REFERENCES person_entity (id) ON DELETE SET NULL"
-            },
             "default_dart": null,
             "default_client_dart": null,
-            "dsl_features": [
-              {
-                "foreign_key": {
-                  "to": {
-                    "table": "person_entity",
-                    "column": "id"
-                  },
-                  "initially_deferred": false,
-                  "on_update": null,
-                  "on_delete": "setNull"
-                }
-              }
-            ]
+            "dsl_features": []
           },
           {
             "name": "image_width",
@@ -3231,7 +3206,7 @@
       "sql": [
         {
           "dialect": "sqlite",
-          "sql": "CREATE TABLE IF NOT EXISTS \"local_asset_entity\" (\"name\" TEXT NOT NULL, \"type\" INTEGER NOT NULL, \"created_at\" TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP), \"updated_at\" TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP), \"width\" INTEGER NULL, \"height\" INTEGER NULL, \"duration_ms\" INTEGER NULL, \"id\" TEXT NOT NULL, \"checksum\" TEXT NULL, \"is_favorite\" INTEGER NOT NULL DEFAULT 0 CHECK (\"is_favorite\" IN (0, 1)), \"orientation\" INTEGER NOT NULL DEFAULT 0, \"i_cloud_id\" TEXT NULL, \"adjustment_time\" TEXT NULL, \"latitude\" REAL NULL, \"longitude\" REAL NULL, \"playback_style\" INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (\"id\")) WITHOUT ROWID, STRICT;"
+          "sql": "CREATE TABLE IF NOT EXISTS \"local_asset_entity\" (\"name\" TEXT NOT NULL, \"type\" INTEGER NOT NULL, \"created_at\" TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP), \"updated_at\" TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP), \"width\" INTEGER NULL, \"height\" INTEGER NULL, \"duration_ms\" INTEGER NULL, \"id\" TEXT NOT NULL, \"checksum\" TEXT NULL, \"is_favorite\" INTEGER NOT NULL DEFAULT 0 CHECK (\"is_favorite\" IN (0, 1)), \"orientation\" INTEGER NOT NULL DEFAULT 0, \"i_cloud_id\" TEXT NULL, \"adjustment_time\" TEXT NULL, \"latitude\" REAL NULL, \"longitude\" REAL NULL, \"playback_style\" INTEGER NOT NULL DEFAULT 0, \"previous_checksum\" TEXT NULL, PRIMARY KEY (\"id\")) WITHOUT ROWID, STRICT;"
         }
       ]
     },
@@ -3456,7 +3431,7 @@
       "sql": [
         {
           "dialect": "sqlite",
-          "sql": "CREATE TABLE IF NOT EXISTS \"asset_face_entity\" (\"id\" TEXT NOT NULL, \"asset_id\" TEXT NOT NULL REFERENCES remote_asset_entity (id) ON DELETE CASCADE, \"person_id\" TEXT NULL REFERENCES person_entity (id) ON DELETE SET NULL, \"image_width\" INTEGER NOT NULL, \"image_height\" INTEGER NOT NULL, \"bounding_box_x1\" INTEGER NOT NULL, \"bounding_box_y1\" INTEGER NOT NULL, \"bounding_box_x2\" INTEGER NOT NULL, \"bounding_box_y2\" INTEGER NOT NULL, \"source_type\" TEXT NOT NULL, \"is_visible\" INTEGER NOT NULL DEFAULT 1 CHECK (\"is_visible\" IN (0, 1)), \"deleted_at\" TEXT NULL, PRIMARY KEY (\"id\")) WITHOUT ROWID, STRICT;"
+          "sql": "CREATE TABLE IF NOT EXISTS \"asset_face_entity\" (\"id\" TEXT NOT NULL, \"asset_id\" TEXT NOT NULL, \"person_id\" TEXT NULL, \"image_width\" INTEGER NOT NULL, \"image_height\" INTEGER NOT NULL, \"bounding_box_x1\" INTEGER NOT NULL, \"bounding_box_y1\" INTEGER NOT NULL, \"bounding_box_x2\" INTEGER NOT NULL, \"bounding_box_y2\" INTEGER NOT NULL, \"source_type\" TEXT NOT NULL, \"is_visible\" INTEGER NOT NULL DEFAULT 1 CHECK (\"is_visible\" IN (0, 1)), \"deleted_at\" TEXT NULL, PRIMARY KEY (\"id\")) WITHOUT ROWID, STRICT;"
         }
       ]
     },
