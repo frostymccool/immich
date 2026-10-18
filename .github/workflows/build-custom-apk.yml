@@ -24,15 +24,15 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Flutter 3.47.1
+      - name: Set up Flutter 3.47.2
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.47.1'
+          flutter-version: '3.47.2'
           channel: stable
           cache: true
 
       - name: Install openapi-generator-cli
-        run: npm install -g @openapitools/openapi-generator-cli@2.40.1
+        run: npm install -g @openapitools/openapi-generator-cli@2.41.0
 
       - name: Generate OpenAPI Dart client
         working-directory: open-api
