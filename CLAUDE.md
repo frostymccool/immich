@@ -12,13 +12,27 @@ Personal fork of immich-app/immich. Custom features stack on
 is identifiable on-device. Increment BOTH numbers by 1 together (the build
 code runs 3048 ahead of the custom number):
 ```
-3.2.0-custom.N+<3048+N>  →  3.2.0-custom.(N+1)+<3049+N>
+3.3.3-custom.N+<3048+N>  →  3.3.3-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.2.0-custom.126+3174** (next push → `127+3175`).
+Latest pushed: **3.3.3-custom.129+3177** (next push → `130+3178`).
 
-The `3.1.0` base tracks the upstream immich-app/immich release this fork is
+The `3.3.3` base tracks the upstream immich-app/immich release this fork is
 synced to — bump it (and re-derive the offset if upstream's own build number
 shifted) the next time upstream gets pulled in, not on every push.
+
+Upstream's release-branch process does NOT keep `main` as a clean linear
+history across releases — e.g. v3.2.0 and v3.3.3 weren't a fast-forward of
+each other (40 commits unique to the old v3.2.0 path, 288 new on v3.3.3's).
+When the next sync hits this, `git merge --ff-only <tag>` on `main` will fail;
+don't try a real 3-way merge either (it surfaces dozens of synthetic
+conflicts in files like pnpm-lock.yaml/package.json/server-* with no real
+fork content to resolve, since `main` has zero fork-specific commits). Just
+confirm with the user, then `git reset --hard <tag>` + force-push `main` to
+exactly match the new tag. When merging that into
+`feature/custom-upload-settings` afterward, most conflicts will similarly be
+upstream-only churn — diff each conflicted file against the PREVIOUS sync
+point (not some ancient merge-base) to tell which ones the fork actually
+touched; take "theirs" wholesale for the rest.
 
 ### Local Dart toolchain now available for formatting
 A standalone Dart SDK can be fetched directly (bypasses the "no local Dart
@@ -157,8 +171,8 @@ verification + cleanup workflow. Grown well beyond the original 5-step import.
 `flutter_secure_storage` (key `copyparty_password`, NOT in `SettingsKey`/`AppConfig`).
 (`writeReceipts` still exists but is unused — the `.cpreceipt` sidecar was dropped.)
 
-**DB** schema **v33**: `copyparty_upload_receipts` (v32) + `upload_confirmed` /
-`immich_asset_id` columns (v33). Raw SQL, outside the Drift entity model.
+**DB** schema **v36**: `copyparty_upload_receipts` (v35) + `upload_confirmed` /
+`immich_asset_id` columns (v36). Raw SQL, outside the Drift entity model.
 
 **Import** — directory picker → scan → options (per-file live name/size/partial
 verification + Immich-by-checksum axis, destination CP-only / Both / Immich) →
@@ -182,7 +196,7 @@ links hidden in normal use; a "Download log" button stays on the main settings.
 
 ## Mobile project structure
 
-- Flutter 3.47.1 / Dart SDK ≥3.12.0
+- Flutter 3.47.2 / Dart SDK ≥3.12.0
 - State management: Riverpod (`StateNotifierProvider`, `FutureProvider`, `Provider`)
 - ORM: Drift for all standard entities; raw SQL for non-Drift tables
 - Navigation: auto_route for most pages; `MaterialPageRoute` push for modal flows
@@ -209,27 +223,33 @@ As of v3.2.0, moved from `lib/infrastructure/repositories/` to `lib/data/db/`
 |------|---------|
 | `mobile/lib/data/db/main/database.dart` | `Drift` class — schema version, migrations, `beforeOpen` |
 | `mobile/lib/data/db/main/database.steps.dart` | Generated (gitignored) via `dart run drift_dev make-migrations` — provides `migrationSteps(...)` |
-| `mobile/drift_schemas/main/*.json` | Schema snapshots, one per drift-tracked version (currently up to v31 — see below) |
+| `mobile/drift_schemas/main/*.json` | Schema snapshots, one per drift-tracked version (currently up to v34 — see below) |
 | `mobile/test/drift/main/generated/` | Generated (gitignored) via `dart run drift_dev schema generate ...` |
 
 Migration rules:
-- Bump `schemaVersion` (currently 33 — see note below on why it's ahead of the last drift snapshot)
+- Bump `schemaVersion` (currently 36 — see note below on why it's ahead of the last drift snapshot)
 - Add raw-SQL migration in `onUpgrade` guarded by version range
 - Mirror the same `CREATE TABLE/INDEX IF NOT EXISTS` in `beforeOpen` for fresh installs
 - `Drift` is a singleton accessed via `driftProvider`; test files create it directly with `NativeDatabase.memory()`
+- Upstream's `onUpgrade` re-reads the actual `PRAGMA user_version` as `current` inside the
+  transaction (race-safety fix, added in the v3.3.3 sync) rather than trusting the `from`
+  parameter — the copyparty raw-SQL guards below use `current` too, for the same reason.
 
 **copyparty's schema versions are raw SQL, not drift-tracked.** `copyparty_upload_receipts`
-isn't a Drift entity, so its v31→v32 (table) and v32→v33 (columns) migrations are hand-written
-`customStatement(...)` calls in `onUpgrade`, gated by `if (from < N && to >= N)` — NOT part of
-the generated `migrationSteps(...)` helper. This means `schemaVersion` can be (and is) ahead of
-the highest real drift-schema version (v31): `dart run drift_dev make-migrations` still requires
-a `from31To33` (or whatever the gap is) parameter on `migrationSteps(...)` once it notices the
-version jump and auto-creates a matching (structurally-identical) `drift_schema_v33.json`
-snapshot — provide it as a no-op, since the actual work happens in the raw-SQL block below it.
-**Always guard column-adding ALTER TABLEs with a `pragma_table_info` check, not just `from`/`to`**
-— a prior renumbering (during the v3.1.0 sync) taught this the hard way: devices already on an
-older numbering scheme can have `from` values that don't mean what the current code assumes,
-causing a `duplicate column name` crash on upgrade (fixed in build 121).
+isn't a Drift entity, so its table-creation and column-adding migrations are hand-written
+`customStatement(...)` calls in `onUpgrade`, gated by `if (current < N && to >= N)` — NOT part
+of the generated `migrationSteps(...)` helper. This means `schemaVersion` can be (and is) ahead
+of the highest real drift-schema version (currently v34): `dart run drift_dev make-migrations`
+still requires a `from34To36` (or whatever the gap is) parameter on `migrationSteps(...)` once
+it notices the version jump and auto-creates a matching (structurally-identical) placeholder
+schema snapshot — provide it as a no-op, since the actual work happens in the raw-SQL block
+below it. **This raw-SQL ceiling gets renumbered on every sync that adds real upstream schema
+versions** — it's been v31→v32→v33 (after the v3.1.0 sync), then v34→v35→v36 (after v3.3.3,
+once upstream's own schema grew from v31 to v34). Expect to renumber it again next time.
+**Always guard column-adding ALTER TABLEs with a `pragma_table_info` check, not just a version
+number** — a prior renumbering (during the v3.1.0 sync) taught this the hard way: devices
+already on an older numbering scheme can have stored versions that don't mean what the current
+code assumes, causing a `duplicate column name` crash on upgrade (fixed in build 121).
 
 ### Copyparty feature files
 | File | Purpose |
@@ -249,20 +269,28 @@ causing a `duplicate column name` crash on upgrade (fixed in build 121).
 Navigation note: `CopypartyImportPage` is NOT registered in `router.dart` (auto_route).
 It is pushed directly: `Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CopypartyImportPage()))`.
 
+Shared settings widgets note: `SettingGroupTitle`/`SettingListTile`/
+`SettingsSubPageScaffold` (used by `copyparty_settings.dart`) moved from
+`mobile/lib/widgets/settings/*.dart` into the `immich_ui` package
+(`import 'package:immich_ui/immich_ui.dart';`) as of the v3.3.3 sync — check
+that import path first if either of these ever goes missing again after a
+sync, rather than assuming the class itself was renamed/removed.
+
 ### Local Flutter SDK also available (not just standalone Dart)
 Beyond the standalone-Dart-for-`dart format` trick above, the FULL Flutter SDK is
 also fetchable in this environment (`storage.googleapis.com` isn't blocked) —
 enough for real `dart analyze`/`flutter pub get`, not just formatting:
 ```
-curl -sS -o /tmp/flutter.tar.xz https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.47.1-stable.tar.xz
+curl -sS -o /tmp/flutter.tar.xz https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.47.2-stable.tar.xz
 tar -xf /tmp/flutter.tar.xz -C /tmp/flutter-sdk   # ~1.5GB download, ~12GB extracted
 git config --global --add safe.directory /tmp/flutter-sdk/flutter   # needed when running as root
 export PATH="/tmp/flutter-sdk/flutter/bin:$PATH"
 ```
 Check `mobile/pubspec.yaml`'s `environment.flutter` on every sync — it's bumped
-almost every upstream release, and `build-custom-apk.yml`'s `flutter-version`
-must be kept in lockstep with it (a mismatch fails `flutter pub get` in CI with
-"version solving failed").
+almost every upstream release (3.47.2 as of the v3.3.3 sync), and
+`build-custom-apk.yml`'s `flutter-version` must be kept in lockstep with it (a
+mismatch fails `flutter pub get` in CI with "version solving failed"). Swap
+the version in the curl URL above for whatever `pubspec.yaml` currently says.
 
 As of v3.2.0 the openapi Dart client (`mobile/generated/openapi`, imported by
 `mobile/pubspec.yaml` as a path dependency) is no longer checked in — it must be
@@ -272,7 +300,7 @@ platform code is also no longer checked in** (`lib/platform/*.g.dart`,
 generated code", landed in this same v3.1.0→v3.2.0 window): a fresh checkout
 won't compile at all (`'NativeSyncApi' isn't a type`, etc.) until pigeon runs.
 ```
-npm install -g @openapitools/openapi-generator-cli@2.40.1   # generate-dart-sdk.sh expects a real binary on PATH, not just npx
+npm install -g @openapitools/openapi-generator-cli@2.41.0   # generate-dart-sdk.sh expects a real binary on PATH, not just npx — version must match the root mise.toml pin
 cd open-api && bash ./bin/generate-dart-sdk.sh   # also needs java (both present here)
 cd ../mobile && flutter pub get   # ~90s; run once per fresh session/container
 dart run drift_dev make-migrations   # regenerates lib/data/db/main/database.steps.dart (gitignored)
