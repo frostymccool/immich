@@ -160,7 +160,7 @@ class Drift extends $Drift {
   }
 
   @override
-  int get schemaVersion => 36;
+  int get schemaVersion => 37;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -176,12 +176,32 @@ class Drift extends $Drift {
             return;
           }
 
+          // Devices that installed a pre-v3.3.3-sync custom build may have a stored
+          // user_version of 32 or 33 under this fork's OLD copyparty raw-SQL numbering
+          // (v31->v32->v33, pre-sync), which collided with upstream's own schema growing
+          // into that same numeric range in this release (real upstream v32 adds
+          // previous_checksum, v33 drops an asset_face foreign key). Those devices' actual
+          // drift-schema content never advanced past real upstream v31, so trusting
+          // `current` here would silently skip those two real steps. Detect this directly,
+          // the same way the copyparty column guards below do, instead of trusting the
+          // version number: if the real v32 marker column is missing, genuine progress is
+          // capped at v31 regardless of what the stored version claims.
+          var generatedStepsCurrent = current;
+          if (generatedStepsCurrent > 31) {
+            final hasPreviousChecksum = await customSelect(
+              "SELECT 1 FROM pragma_table_info('local_asset_entity') WHERE name = 'previous_checksum'",
+            ).getSingleOrNull();
+            if (hasPreviousChecksum == null) {
+              generatedStepsCurrent = 31;
+            }
+          }
+
           // The generated migrationSteps only knows versions 1-34.
           // Handle v35+ migrations below, separately (raw SQL, not drift-tracked).
           final stepsTarget = to < 35 ? to : 34;
-          if (current < stepsTarget) {
+          if (generatedStepsCurrent < stepsTarget) {
             await m.runMigrationSteps(
-              from: current,
+              from: generatedStepsCurrent,
               to: stepsTarget,
               steps: migrationSteps(
                 from1To2: (m, v2) async {
@@ -384,6 +404,11 @@ class Drift extends $Drift {
                   // No drift-tracked schema changes between v34 and v36 — the
                   // copyparty_upload_receipts table and its columns are raw SQL,
                   // handled below (outside the generated migration steps).
+                },
+                from36To37: (m, v37) async {
+                  // No drift-tracked schema changes — v37 exists only to force onUpgrade to
+                  // run again for devices stuck in the broken v36 state (see the
+                  // generatedStepsCurrent repair above and the v3.3.3-sync-regression note).
                 },
               ),
             );

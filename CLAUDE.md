@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.3.3-custom.N+<3048+N>  →  3.3.3-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.3.3-custom.129+3177** (next push → `130+3178`).
+Latest pushed: **3.3.3-custom.130+3178** (next push → `131+3179`).
 
 The `3.3.3` base tracks the upstream immich-app/immich release this fork is
 synced to — bump it (and re-derive the offset if upstream's own build number
@@ -223,11 +223,11 @@ As of v3.2.0, moved from `lib/infrastructure/repositories/` to `lib/data/db/`
 |------|---------|
 | `mobile/lib/data/db/main/database.dart` | `Drift` class — schema version, migrations, `beforeOpen` |
 | `mobile/lib/data/db/main/database.steps.dart` | Generated (gitignored) via `dart run drift_dev make-migrations` — provides `migrationSteps(...)` |
-| `mobile/drift_schemas/main/*.json` | Schema snapshots, one per drift-tracked version (currently up to v34 — see below) |
+| `mobile/drift_schemas/main/*.json` | Schema snapshots, one per drift-tracked version (real content up to v34 — v36/v37 are auto-generated placeholders, see below) |
 | `mobile/test/drift/main/generated/` | Generated (gitignored) via `dart run drift_dev schema generate ...` |
 
 Migration rules:
-- Bump `schemaVersion` (currently 36 — see note below on why it's ahead of the last drift snapshot)
+- Bump `schemaVersion` (currently 37 — see note below on why it's ahead of the last drift snapshot)
 - Add raw-SQL migration in `onUpgrade` guarded by version range
 - Mirror the same `CREATE TABLE/INDEX IF NOT EXISTS` in `beforeOpen` for fresh installs
 - `Drift` is a singleton accessed via `driftProvider`; test files create it directly with `NativeDatabase.memory()`
@@ -250,6 +250,32 @@ once upstream's own schema grew from v31 to v34). Expect to renumber it again ne
 number** — a prior renumbering (during the v3.1.0 sync) taught this the hard way: devices
 already on an older numbering scheme can have stored versions that don't mean what the current
 code assumes, causing a `duplicate column name` crash on upgrade (fixed in build 121).
+
+**Build 129 regression (v3.3.3 sync), fixed in build 130 — `schemaVersion` is now 37.** The
+`pragma_table_info` lesson above was only applied to the copyparty-specific column guards, not
+to the *generated* `migrationSteps(...)` call itself, and that gap bit for real: devices still
+on the OLD pre-sync raw-SQL numbering (stored `user_version` 32 or 33, meaning real upstream v31
+content + copyparty's old table/columns) collided with upstream's own schema growing into that
+same 32/33 range in the v3.3.3 release (real v32 adds `local_asset_entity.previous_checksum`,
+real v33 drops an `asset_face` foreign key). The code trusted the stored version number, assumed
+those two real steps were already applied, and silently skipped them — every local-asset hash
+and sync call then crashed with `no such column: local_asset_entity.previous_checksum`, which
+meant **zero files were ever selected for backup** (confirmed via the in-app log, not guessed —
+see the engineering-discipline section above). Fix: `database.dart`'s `onUpgrade` now computes a
+separate `generatedStepsCurrent` for the generated-steps call — if `current > 31` but
+`previous_checksum` doesn't actually exist on `local_asset_entity`, real progress is clamped
+back to 31 regardless of what the stored version claims, so the real v31→32→33→34 steps run for
+real. `schemaVersion` was bumped 36→37 purely to force `onUpgrade` to fire again for devices
+already stuck in the broken state (their stored version was already 36, so without a bump
+`onUpgrade` wouldn't even run) — `from36To37` is a drift-tracked no-op, same pattern as
+`from34To36`. Devices affected by build 129 self-heal automatically on the next launch after
+updating; no reinstall or data loss. Covered by
+`test/drift/main/v3_3_3_sync_regression_test.dart`, which simulates both the not-yet-broken
+(stored v33) and already-broken (stored v36) device states against a real file-backed DB built
+from the genuine v31 schema snapshot plus the old copyparty raw SQL, and asserts both repair to
+a complete v37. **Lesson generalized: the pragma_table_info guard has to cover anything the
+generated migration steps assume is already done, not just this fork's own raw-SQL columns** —
+a renumbering collision can silently invalidate upstream's own steps just as easily.
 
 ### Copyparty feature files
 | File | Purpose |
@@ -324,16 +350,17 @@ hide a missing-codegen-step bug that only a truly clean checkout exposes —
 CI's checkout is always clean, so re-verify against a state that mirrors that
 when a "no code changed, just CI config" fix keeps failing.)
 
-Known limitation: `flutter test` currently fails in this sandbox with a
-`sqlite3` native-asset build-hook hash mismatch (`Bad state: Hash of downloaded
-file libsqlite3...`) — a pre-existing environment/proxy artifact, not caused by
-any app code. Plain `dart run <script>` (build_runner, drift_dev, pigeon,
-easy_localization, the test harness) works fine and does NOT hit this — it's
-specific to the `flutter test`/`dart test` runner's native-asset build hook.
-`flutter pub get` and `dart analyze` both work fine and are the two checks that
-matter most (they mirror CI). Don't waste time trying to fix the sqlite3 hook —
-it's out of scope; just rely on analyze + format for verification and note the
-limitation if a script genuinely needs a live `flutter test` run.
+Previously-noted limitation now resolved: earlier sessions saw `flutter test` fail in this
+sandbox with a `sqlite3` native-asset build-hook hash mismatch (`Bad state: Hash of downloaded
+file libsqlite3...`). As of the build-130 fix verification, `flutter test` runs cleanly
+end-to-end (confirmed: full suite + a new migration regression test using a real file-backed
+`NativeDatabase`, ~1625 tests, all passing) — whatever proxy/environment artifact caused it
+before is no longer present. Don't assume it's broken; try a real `flutter test` run before
+falling back to analyze-only verification. (Plain `dart run <script>` — build_runner, drift_dev,
+pigeon, easy_localization, the test harness — still won't work for anything that imports
+`package:flutter/...` transitively, e.g. `database.dart`: it needs the Flutter engine, not just
+the Dart SDK, so use `flutter test` for DB/migration-level checks instead of a bare `dart run`
+script.)
 
 ### copyparty up2k — verified protocol facts (from logs + `u2c.py`)
 - **Chunk SIZE must match the server EXACTLY** (this was THE upload bug — builds
