@@ -18,6 +18,7 @@ import 'package:immich_mobile/services/copyparty/copyparty_foreground_service.da
 import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_staging.service.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
+import 'package:immich_mobile/services/copyparty/immich_bridge_status.service.dart';
 import 'package:openapi/api.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
@@ -104,6 +105,36 @@ final copypartyStagingProvider = Provider<CopypartyStagingService>((ref) {
       return Directory('${docs.path}/copyparty_staging');
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// Optional copyparty-immich-bridge status (informational only)
+// ---------------------------------------------------------------------------
+
+final immichBridgeStatusServiceProvider = Provider.autoDispose<ImmichBridgeStatusService>((ref) {
+  final service = ImmichBridgeStatusService();
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+/// Live status of the optional bridge. autoDispose: it only runs (and polls
+/// every 15s) while a widget is actually watching it — never in the background,
+/// never at app start — and never throws, so the bridge being down or
+/// unconfigured cannot affect any other app function.
+final immichBridgeStatusProvider = FutureProvider.autoDispose<BridgeStatus>((ref) async {
+  final url = ref.watch(appConfigProvider.select((c) => c.copyparty.bridgeUrl));
+  final service = ref.watch(immichBridgeStatusServiceProvider);
+  var disposed = false;
+  Timer? timer;
+  ref.onDispose(() {
+    disposed = true;
+    timer?.cancel();
+  });
+  final result = await service.fetch(url);
+  if (!disposed && result.health != BridgeHealth.disabled && result.health != BridgeHealth.invalidUrl) {
+    timer = Timer(const Duration(seconds: 15), ref.invalidateSelf);
+  }
+  return result;
 });
 
 // ---------------------------------------------------------------------------

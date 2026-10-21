@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.3.3-custom.N+<3048+N>  →  3.3.3-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.3.4-custom.201+3249** (next push → `202+3250`). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
+Latest pushed: **3.3.4-custom.202+3250** (next push → `203+3251`). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
 
 Note: another Claude Code session may also be working on this fork in parallel on branch
 `claude/auto-immich-copyparty-upload-eq80lh` (not `feature/copyparty-up2k-import` itself — it
@@ -220,6 +220,16 @@ vars (see its README). Known gap: `/hook` has no auth — keep port 8099 on the 
 network only. Tests: `cd copyparty-immich-bridge && python -m pytest tests/` (44 tests); CI is
 `.github/workflows/bridge-tests.yml`, path-scoped to that directory. Originally built by a
 parallel Claude session (branch `claude/auto-immich-copyparty-upload-eq80lh`, now retired).
+
+**App-side status display (build 202):** Settings → copyparty → "Import Bridge (optional)" has a
+`bridgeUrl` setting (`SettingsKey.copypartyBridgeUrl`, blank = feature off) and a live status tile.
+`ImmichBridgeStatusService` (`lib/services/copyparty/immich_bridge_status.service.dart`) reads the
+bridge's `/healthz` + `/status` and maps EVERY failure (blank/bad URL, down, timeout, garbage
+JSON) to a `BridgeStatus` — it never throws. `immichBridgeStatusProvider` is autoDispose, so it
+only runs (4s timeouts, 15s refresh) while the settings page is open; nothing polls at app start
+or in the background. **Hard rule: no other app function may read `bridgeUrl` or depend on the
+bridge** — the APK must work identically with the bridge absent. Tests:
+`test/services/immich_bridge_status_service_test.dart`.
 
 ---
 

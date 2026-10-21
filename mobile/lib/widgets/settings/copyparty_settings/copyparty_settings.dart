@@ -11,6 +11,7 @@ import 'package:immich_mobile/pages/copyparty/copyparty_import.page.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/repositories/secure_storage.repository.dart';
+import 'package:immich_mobile/services/copyparty/immich_bridge_status.service.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:immich_mobile/utils/disk_space.dart';
 import 'package:immich_ui/immich_ui.dart';
@@ -60,6 +61,10 @@ class CopypartySettings extends ConsumerWidget {
           if (showServerConfig) ...[
             const SettingGroupTitle(title: 'File Matching', icon: Icons.link_rounded),
             const _TriggerExtensionsTile(),
+            const Divider(),
+            const SettingGroupTitle(title: 'Import Bridge (optional)', icon: Icons.sync_alt_rounded),
+            const _BridgeUrlTile(),
+            const _BridgeStatusTile(),
             const Divider(),
           ],
           const SettingGroupTitle(title: 'Import', icon: Icons.sd_card_rounded),
@@ -902,6 +907,160 @@ class _PendingCleanupTile extends HookConsumerWidget {
           ),
         );
       },
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Optional import bridge: URL + live status (purely informational — nothing in
+// the app depends on it, and an unreachable/unconfigured bridge is not an error)
+// ---------------------------------------------------------------------------
+
+class _BridgeUrlTile extends ConsumerWidget {
+  const _BridgeUrlTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final url = ref.watch(appConfigProvider.select((c) => c.copyparty.bridgeUrl));
+    return Padding(
+      padding: const EdgeInsets.only(left: 8.0),
+      child: SettingListTile(
+        title: 'Bridge status URL',
+        subtitle: url.isEmpty
+            ? 'Optional. A server-side service that auto-imports copyparty uploads into Immich. '
+                  'Leave blank if you do not run it — the app works fully without it.'
+            : url,
+        leading: const Icon(Icons.dns_outlined),
+        onTap: () => _showTextDialog(
+          context,
+          title: 'Bridge status URL',
+          hint: 'http://192.168.5.21:8099',
+          initialValue: url,
+          onSave: (value) => ref.read(settingsProvider).write(SettingsKey.copypartyBridgeUrl, value.trim()),
+        ),
+      ),
+    );
+  }
+}
+
+String _bridgeAgo(DateTime time, DateTime now) {
+  final d = now.difference(time);
+  if (d.inSeconds < 60) {
+    return 'just now';
+  }
+  if (d.inMinutes < 60) {
+    return '${d.inMinutes} min ago';
+  }
+  if (d.inHours < 48) {
+    return '${d.inHours} h ago';
+  }
+  return '${d.inDays} d ago';
+}
+
+class _BridgeStatusTile extends ConsumerWidget {
+  const _BridgeStatusTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(immichBridgeStatusProvider);
+    final scheme = Theme.of(context).colorScheme;
+    return async.when(
+      loading: () => const Padding(
+        padding: EdgeInsets.only(left: 8.0),
+        child: SettingListTile(
+          title: 'Import bridge',
+          subtitle: 'Checking…',
+          leading: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)),
+        ),
+      ),
+      // The provider never throws, but never let a status tile break the page.
+      error: (_, _) => const SizedBox.shrink(),
+      data: (status) {
+        void refresh() => ref.invalidate(immichBridgeStatusProvider);
+        switch (status.health) {
+          case BridgeHealth.disabled:
+            return const SizedBox.shrink();
+          case BridgeHealth.invalidUrl:
+            return Padding(
+              padding: const EdgeInsets.only(left: 8.0),
+              child: SettingListTile(
+                title: 'Import bridge: invalid URL',
+                subtitle: 'Enter an address like http://192.168.5.21:8099',
+                leading: Icon(Icons.error_outline, color: scheme.error),
+              ),
+            );
+          case BridgeHealth.unreachable:
+            return Padding(
+              padding: const EdgeInsets.only(left: 8.0),
+              child: SettingListTile(
+                title: 'Import bridge: not reachable',
+                subtitle:
+                    'Uploads to copyparty and Immich are unaffected. Anything uploaded meanwhile is '
+                    'picked up automatically when the bridge is back. Tap to retry.',
+                leading: Icon(Icons.cloud_off_outlined, color: scheme.outline),
+                onTap: refresh,
+              ),
+            );
+          case BridgeHealth.running:
+            final lines = <String>[
+              '${status.imported} imported · ${status.duplicates} already in Immich · ${status.queue} queued',
+              if (status.failed > 0) '${status.failed} failed (retried automatically)',
+              if (status.lastActivity != null) 'Last activity ${_bridgeAgo(status.lastActivity!, status.checkedAt)}',
+            ];
+            return Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(left: 8.0),
+                  child: SettingListTile(
+                    title: status.version == null
+                        ? 'Import bridge: running'
+                        : 'Import bridge: running (v${status.version})',
+                    subtitle: lines.join('\n'),
+                    leading: Icon(
+                      status.failed > 0 ? Icons.warning_amber_rounded : Icons.check_circle_outline,
+                      color: status.failed > 0 ? scheme.tertiary : scheme.primary,
+                    ),
+                    onTap: refresh,
+                  ),
+                ),
+                if (status.recent.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 8.0),
+                    child: ExpansionTile(
+                      title: const Text('Recent activity'),
+                      leading: const Icon(Icons.history_rounded),
+                      children: [for (final item in status.recent) _BridgeRecentRow(item: item, now: status.checkedAt)],
+                    ),
+                  ),
+              ],
+            );
+        }
+      },
+    );
+  }
+}
+
+class _BridgeRecentRow extends StatelessWidget {
+  final BridgeRecentItem item;
+  final DateTime now;
+  const _BridgeRecentRow({required this.item, required this.now});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final (icon, color) = switch (item.status) {
+      'imported' => (Icons.cloud_done_outlined, scheme.primary),
+      'duplicate' => (Icons.content_copy_rounded, scheme.outline),
+      'failed' => (Icons.error_outline, scheme.error),
+      _ => (Icons.skip_next_rounded, scheme.outline),
+    };
+    final when = item.updatedAt == null ? '' : ' · ${_bridgeAgo(item.updatedAt!, now)}';
+    final detail = item.status == 'failed' && item.error != null ? '\n${item.error}' : '';
+    return ListTile(
+      dense: true,
+      leading: Icon(icon, color: color, size: 20),
+      title: Text(item.fileName, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text('${item.status}$when$detail', maxLines: 3, overflow: TextOverflow.ellipsis),
     );
   }
 }

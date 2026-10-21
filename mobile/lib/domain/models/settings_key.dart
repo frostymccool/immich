@@ -88,6 +88,7 @@ enum SettingsKey<T> {
   copypartyStageToLocalBeforeUpload<bool>(),
   copypartyCacheSizeMb<int>(),
   copypartyDefaultDestination<String>(),
+  copypartyBridgeUrl<String>(),
 
   // Slideshow
   slideshowRepeat<bool>(),

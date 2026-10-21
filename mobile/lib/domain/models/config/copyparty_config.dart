@@ -41,6 +41,11 @@ class CopypartyConfig {
   /// larger than the budget is still staged one-at-a-time. Default 4096 MiB.
   final int cacheSizeMb;
 
+  /// Optional base URL of the copyparty-immich-bridge status endpoint (e.g.
+  /// http://192.168.5.21:8099). Empty = feature off. Purely informational: the
+  /// app never requires the bridge, and nothing else reads this value.
+  final String bridgeUrl;
+
   const CopypartyConfig({
     this.hostUrl = '',
     this.uploadPath = '/uploads',
@@ -55,6 +60,7 @@ class CopypartyConfig {
     this.stageToLocalBeforeUpload = true,
     this.cacheSizeMb = 4096,
     this.defaultDestination = 'both',
+    this.bridgeUrl = '',
   });
 
   CopypartyConfig copyWith({
@@ -71,6 +77,7 @@ class CopypartyConfig {
     bool? stageToLocalBeforeUpload,
     int? cacheSizeMb,
     String? defaultDestination,
+    String? bridgeUrl,
   }) => CopypartyConfig(
     hostUrl: hostUrl ?? this.hostUrl,
     uploadPath: uploadPath ?? this.uploadPath,
@@ -85,6 +92,7 @@ class CopypartyConfig {
     stageToLocalBeforeUpload: stageToLocalBeforeUpload ?? this.stageToLocalBeforeUpload,
     cacheSizeMb: cacheSizeMb ?? this.cacheSizeMb,
     defaultDestination: defaultDestination ?? this.defaultDestination,
+    bridgeUrl: bridgeUrl ?? this.bridgeUrl,
   );
 
   @override
@@ -103,7 +111,8 @@ class CopypartyConfig {
           other.debugMode == debugMode &&
           other.stageToLocalBeforeUpload == stageToLocalBeforeUpload &&
           other.cacheSizeMb == cacheSizeMb &&
-          other.defaultDestination == defaultDestination);
+          other.defaultDestination == defaultDestination &&
+          other.bridgeUrl == bridgeUrl);
 
   @override
   int get hashCode => Object.hash(
@@ -120,6 +129,7 @@ class CopypartyConfig {
     stageToLocalBeforeUpload,
     cacheSizeMb,
     defaultDestination,
+    bridgeUrl,
   );
 
   @override
@@ -131,7 +141,7 @@ class CopypartyConfig {
       'recreateFolderStructure: $recreateFolderStructure, '
       'sortSmallestFirst: $sortSmallestFirst, debugMode: $debugMode, '
       'stageToLocalBeforeUpload: $stageToLocalBeforeUpload, cacheSizeMb: $cacheSizeMb, '
-      'defaultDestination: $defaultDestination)';
+      'defaultDestination: $defaultDestination, bridgeUrl: $bridgeUrl)';
 
   static bool _listEquals(List<String> a, List<String> b) {
     if (a.length != b.length) {
