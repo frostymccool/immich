@@ -14,7 +14,14 @@ code runs 3048 ahead of the custom number):
 ```
 3.3.3-custom.N+<3048+N>  →  3.3.3-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.3.3-custom.131+3179** (next push → `132+3180`).
+Latest pushed: **3.3.4-custom.133+3181** (next push → `134+3182`).
+
+Note: another Claude Code session may also be working on this fork in parallel on branch
+`claude/auto-immich-copyparty-upload-eq80lh` (not `feature/copyparty-up2k-import` itself — it
+rebases its own branch on top of this one). It bumps `mobile/pubspec.yaml`'s version independently
+too, so the custom build number here can skip ahead non-sequentially if that session pushed since
+this file was last read — always check the actual latest pushed commit's `pubspec.yaml`, not just
+this note, before picking the next number.
 
 The `3.3.3` base tracks the upstream immich-app/immich release this fork is
 synced to — bump it (and re-derive the offset if upstream's own build number
@@ -192,35 +199,12 @@ server section hidden, URL in the title).
 **Diagnostics** gated behind `debugMode` (off by default): self-test / share-log
 links hidden in normal use; a "Download log" button stays on the main settings.
 
----
-
-## copyparty-immich-bridge (server-side, NOT mobile)
-
-`copyparty-immich-bridge/` — standalone Docker service for the Proxmox VM that
-hosts the immich + copyparty containers. Auto-imports media uploaded to
-copyparty (by ANY device) into Immich via its API. Branch
-`claude/auto-immich-copyparty-upload-eq80lh`, based on
-`feature/copyparty-up2k-import`.
-
-- **Trigger**: copyparty `xau` event hook (`--xau f,j,t30,/hooks/immich_bridge_hook.py`,
-  hook script in `hook/`; `IMMICH_BRIDGE_URL` env on the copyparty container)
-  POSTs the upload JSON (`ap`/`vp`/`sz`/`mt`/`wark`) to the bridge's `/hook`.
-  Hook facts verified from copyparty source (`util.py _runhook`): `f`=fork,
-  `j`=JSON argv, per-volume volflag `c,xau=...` also works.
-- **Reliability**: periodic sweep (startup + `SWEEP_INTERVAL_SECONDS`) over the
-  shared read-only volume reconciles anything missed. Skips `.hist`, dotfiles,
-  `*.PARTIAL`, empty and too-young (`MIN_FILE_AGE_SECONDS`) files.
-- **Import**: extensions from Immich's `GET /api/server/media-types` (fallback
-  route `/api/server-info/media-types` for older servers); streaming SHA-1 →
-  `POST /api/assets/bulk-upload-check` (hex accepted) → `POST /api/assets`
-  multipart with `x-immich-checksum` (200=duplicate, 201=created). SQLite state
-  DB keyed by path+size+mtime; per-version retry budget (`MAX_ATTEMPTS`).
-- **Options**: `POST_IMPORT_ACTION` keep|move|delete (default keep; move/delete
-  only run AFTER Immich confirms), `IMMICH_ALBUM_NAME` (optional album),
-  `PATH_MAP` for differing mount prefixes.
-- **Tests**: `python3 -m pytest tests/` in the bridge dir (stub Immich server,
-  44+ tests); CI workflow `.github/workflows/bridge-tests.yml` (path-filtered).
-  Python 3.11+, only dep is `requests`.
+**"All files access" permission prompt** (`copyparty_import.page.dart`,
+`_DirectoryPickerStepState`): when MANAGE_EXTERNAL_STORAGE isn't granted, the "Open Settings"
+button calls `Permission.manageExternalStorage.request()` (opens the dedicated "All files access"
+screen directly) and auto-starts the scan if granted — NOT `openAppSettings()`, which only opens
+the generic app-info page where that permission isn't listed. Fixed by the parallel
+`claude/auto-immich-copyparty-upload-eq80lh` session and merged in during the v3.3.4 sync.
 
 ---
 
