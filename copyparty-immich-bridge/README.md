@@ -43,6 +43,9 @@ uploader ──► copyparty ──(xau event hook: JSON POST)──► bridge �
 
 ## Setup
 
+**Easiest: run the one-line installer in [INSTALL.md](INSTALL.md)** (finds your copyparty, builds and
+starts the bridge, asks only for the Immich API key). The manual steps below are for reference.
+
 1. Create an API key in Immich: **Account Settings → API Keys**.
 2. Mount copyparty's data directory into the bridge **at the same container
    path** copyparty sees, read-only (see `docker-compose.example.yml`). If the

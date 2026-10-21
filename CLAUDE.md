@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.3.3-custom.N+<3048+N>  →  3.3.3-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.3.4-custom.204+3252** (next push → `205+3253`). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
+Latest pushed: **3.3.4-custom.205+3253** (next push → `206+3254`). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
 
 Note: another Claude Code session may also be working on this fork in parallel on branch
 `claude/auto-immich-copyparty-upload-eq80lh` (not `feature/copyparty-up2k-import` itself — it
@@ -219,7 +219,7 @@ re-imported; default `POST_IMPORT_ACTION=keep` never touches source files. Confi
 vars (see its README). `PRIORITY_DIRS` (inside `WATCH_DIRS`) are imported first via a priority
 queue — set it to the folder the phone app uploads into; the rest of the copyparty base is still
 imported afterwards, and `/status` reports both so the app tile can show them. Known gap: `/hook` has no auth (it now ignores any path outside `WATCH_DIRS`) — keep port 8099 on the internal Docker
-network only. Tests: `cd copyparty-immich-bridge && python -m pytest tests/` (44 tests); CI is
+network only. **Install: `copyparty-immich-bridge/install.sh`** (documented in its `INSTALL.md`) is a one-line `curl | bash` that auto-detects the copyparty container/data mount, validates the Immich API key, clones the sparse bridge source, writes a separate `docker-compose.override.yml` (never edits the user's compose; delete it to undo), builds/starts, falls back to sweep-only if the hook stops copyparty starting, and supports `WIDE=1`, `HOOK=0`, `--uninstall`. It was tested only against stubbed docker/git/curl (no Docker daemon in the sandbox) — if the VM run misbehaves, check that first. Tests: `cd copyparty-immich-bridge && python -m pytest tests/` (48 tests); CI is
 `.github/workflows/bridge-tests.yml`, path-scoped to that directory. Originally built by a
 parallel Claude session (branch `claude/auto-immich-copyparty-upload-eq80lh`, now retired).
 
