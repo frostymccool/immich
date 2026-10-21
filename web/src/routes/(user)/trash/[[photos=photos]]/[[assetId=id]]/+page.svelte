@@ -32,13 +32,15 @@
   }
 
   const handleEscape = () => {
-    if (assetMultiSelectManager.selectionActive) {
-      assetMultiSelectManager.clear();
+    if (!assetMultiSelectManager.selectionActive) {
       return;
     }
+
+    assetMultiSelectManager.clear();
+    return;
   };
 
-  const { Empty, RestoreAll } = $derived(getTrashActions($t));
+  const { Empty, RestoreAll } = $derived(getTrashActions($t, timelineManager?.assetCount ?? 0));
 </script>
 
 {#if featureFlagsManager.value.trash}

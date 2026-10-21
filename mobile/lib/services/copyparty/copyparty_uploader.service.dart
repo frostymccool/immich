@@ -16,17 +16,48 @@ import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
 ///   2. Handshake POST — tell server about the file, receive needed chunk list
 ///   3. Upload needed chunks in parallel, then re-handshake to confirm
 class CopypartyUploaderService {
-  final http.Client _client;
+  http.Client _client;
   final CopypartyLogger? _log;
+  final bool _acceptSelfSignedCert;
+  // False when the caller injected their own client (e.g. tests) — we don't
+  // know how to rebuild an opaque client we didn't create, so resetConnection
+  // is a no-op in that case.
+  final bool _ownsClient;
 
-  CopypartyUploaderService({http.Client? client, CopypartyLogger? logger})
-    : _client = client ?? _createClient(),
-      _log = logger;
+  CopypartyUploaderService({http.Client? client, CopypartyLogger? logger, bool acceptSelfSignedCert = true})
+    : _client = client ?? _createClient(acceptSelfSignedCert),
+      _log = logger,
+      _acceptSelfSignedCert = acceptSelfSignedCert,
+      _ownsClient = client == null;
 
-  // Build an HTTP client that accepts self-signed certs (common for home servers).
-  static http.Client _createClient() {
+  // Build an HTTP client, optionally accepting self-signed certs (common for
+  // home servers).
+  static http.Client _createClient(bool acceptSelfSignedCert) {
+    if (!acceptSelfSignedCert) {
+      return http.Client();
+    }
     final inner = HttpClient()..badCertificateCallback = (cert, host, port) => true;
     return IOClient(inner);
+  }
+
+  /// Closes the current connection pool and opens a fresh one. A dart:io
+  /// HttpClient can keep trying to reuse sockets/routes bound to a network
+  /// path that no longer exists (e.g. after connecting a VPN, a wifi handoff,
+  /// or a cellular/wifi switch) rather than establishing a new connection —
+  /// observed as every request failing with the same "connection abort"/
+  /// "no route to host" even once a working route exists again. Safe to call
+  /// anytime; in-flight requests on the old client are unaffected (they keep
+  /// running against the closed client's still-open sockets until they finish
+  /// or themselves fail — closing a Client doesn't cancel in-flight sends).
+  void resetConnection() {
+    if (!_ownsClient) {
+      return;
+    }
+    final old = _client;
+    _client = _createClient(_acceptSelfSignedCert);
+    try {
+      old.close();
+    } catch (_) {}
   }
 
   void dispose() => _client.close();
@@ -155,7 +186,7 @@ class CopypartyUploaderService {
     fileHasher.close();
     final fileHash = fileSink.value!.toString();
 
-    final stat = await file.stat();
+    final stat = file.statSync();
     final lastModifiedMs = stat.modified.millisecondsSinceEpoch;
 
     _log?.log(
@@ -345,7 +376,18 @@ class CopypartyUploaderService {
     final uri = folderUri.replace(queryParameters: params);
 
     _log?.request('GET', uri, const {'Accept': 'application/json'});
-    final resp = await _client.get(uri, headers: {'Accept': 'application/json'});
+    // Confirmed via a field log: this GET had no timeout at all, unlike the
+    // handshake POST — a degraded connection left one hanging for 17 MINUTES
+    // before the OS itself gave up with a raw connection-timeout, during
+    // which the import picker's verify pass / cleanup page / self-test that
+    // called it just sat there with no feedback. Same 60s stall guard as the
+    // handshake POST.
+    final resp = await _client
+        .get(uri, headers: {'Accept': 'application/json'})
+        .timeout(
+          const Duration(seconds: 60),
+          onTimeout: () => throw const CopypartyUploadException('Folder listing stalled (no response in 60s)'),
+        );
     _log?.response(
       resp.statusCode,
       headers: resp.headers,
@@ -383,6 +425,24 @@ class CopypartyUploaderService {
   /// picker to verify many files against the server with a single request.
   Future<Map<String, int>> listUploadFolder(String hostUrl, String uploadPath, String password) =>
       listFolderSizes(_buildUri(hostUrl, uploadPath, ''), password);
+
+  /// Deletes [filename] from the server via a plain HTTP DELETE. copyparty
+  /// accepts standard HTTP verbs on a file's own URL; auth is the same `?pw=`
+  /// query param used everywhere else in this file. NOT used by any normal
+  /// app flow (imports/cleanup only ever delete the LOCAL source, never
+  /// anything server-side) — this exists solely for the scripted test
+  /// harness (bin/copyparty_test_harness.dart) to clean up after itself using
+  /// a separate, delete-capable credential.
+  Future<void> deleteFile(String hostUrl, String uploadPath, String filename, String password) async {
+    final folderUri = _buildUri(hostUrl, uploadPath, password);
+    final fileUri = folderUri.replace(pathSegments: [...folderUri.pathSegments.where((s) => s.isNotEmpty), filename]);
+    _log?.request('DELETE', fileUri, const {});
+    final response = await _client.delete(fileUri);
+    _log?.response(response.statusCode, headers: response.headers, body: response.body);
+    if (response.statusCode >= 300) {
+      throw CopypartyUploadException('DELETE $filename failed: HTTP ${response.statusCode}');
+    }
+  }
 
   /// Builds a name/size/partial verification for [filename] from an already
   /// fetched folder listing (no network). Hash axis stays unchecked.
@@ -513,7 +573,14 @@ class CopypartyUploaderService {
     // X-Up2k-Stat is optional progress telemetry (u2c.py only sends it "if
     // stats"); omit it rather than risk a malformed value confusing the server.
     final headers = {'Content-Type': 'application/octet-stream', 'X-Up2k-Wark': wark, 'X-Up2k-Hash': chunkHash};
-    _log?.request('POST', chunkUri, headers, body: 'chunk #$chunkIdx (${chunkBytes.length} bytes)');
+    // One compact line rather than the general request()/response() dump (a
+    // separate log() call per header): this runs on every chunk, at up to
+    // `parallelism` concurrency, so the per-line print()/file-write overhead of
+    // the full multi-line form adds up fast on large uploads. The wark/headers
+    // don't vary per chunk (already logged once at handshake) so nothing
+    // diagnostically useful is lost. Failures still get their own full log
+    // line below/in the retry loop regardless of this. (jank fix)
+    _log?.log('>>> chunk #$chunkIdx (${chunkBytes.length}B) hash=$chunkHash');
 
     final request = http.Request('POST', chunkUri);
     request.headers.addAll(headers);
@@ -547,7 +614,11 @@ class CopypartyUploaderService {
     }
     final statusCode = response.statusCode;
     final respBody = await response.stream.bytesToString();
-    _log?.response(statusCode, headers: response.headers, body: respBody);
+    // Compact form (see the matching request log above) — response headers
+    // for a chunk POST carry nothing beyond what the handshake already logged.
+    _log?.log(
+      '<<< chunk #$chunkIdx HTTP $statusCode  body: ${respBody.length > 200 ? respBody.substring(0, 200) : respBody}',
+    );
 
     if (statusCode < 400) {
       return; // 200/204 = accepted.
@@ -582,12 +653,24 @@ class CopypartyUploaderService {
     String purl,
     String password, {
     int parallelism = 2,
-    void Function(int chunksDone, int chunksTotal)? onProgress,
+    // BYTES done/total across just the NEEDED chunks (not the whole file —
+    // uploadHashedFile adds the already-confirmed baseline before forwarding
+    // to its own caller). Byte-based rather than chunk-count-based so the
+    // last (possibly shorter) chunk doesn't skew the fraction.
+    void Function(int bytesDone, int bytesTotal)? onProgress,
     Completer<void>? cancelToken,
   }) async {
     if (neededChunkIndices.isEmpty) {
       return;
     }
+
+    int chunkByteLength(int idx) {
+      final start = idx * file.chunkSizeBytes;
+      final end = (start + file.chunkSizeBytes).clamp(0, file.totalBytes);
+      return end - start;
+    }
+
+    final neededBytesTotal = neededChunkIndices.fold<int>(0, (s, idx) => s + chunkByteLength(idx));
 
     final chunkUri = _buildChunkUri(hostUrl, purl, password);
     _log?.log(
@@ -609,7 +692,7 @@ class CopypartyUploaderService {
       );
     }
 
-    int done = 0;
+    int bytesDone = 0;
     final semaphore = _Semaphore(effParallelism);
 
     final futures = neededChunkIndices.map((chunkIdx) async {
@@ -621,9 +704,37 @@ class CopypartyUploaderService {
         final start = chunkIdx * file.chunkSizeBytes;
         final end = (start + file.chunkSizeBytes).clamp(0, file.totalBytes);
         final chunkBytes = await _readChunk(file.path, start, end - start);
-        await _uploadChunk(chunkUri, wark, file.chunkHashes[chunkIdx], chunkBytes, chunkIdx, cancelToken: cancelToken);
-        done++;
-        onProgress?.call(done, neededChunkIndices.length);
+        // Retry transient chunk failures (stall timeout, dropped socket, 5xx)
+        // with a short backoff before failing the whole file — the reference
+        // u2c.py client retries chunks rather than aborting. A user cancel is
+        // never retried. (batch3 item 9)
+        const maxAttempts = 3;
+        for (var attempt = 1; ; attempt++) {
+          try {
+            await _uploadChunk(
+              chunkUri,
+              wark,
+              file.chunkHashes[chunkIdx],
+              chunkBytes,
+              chunkIdx,
+              cancelToken: cancelToken,
+            );
+            break;
+          } on CopypartyCancelledException {
+            rethrow;
+          } catch (e) {
+            if (attempt >= maxAttempts || (cancelToken?.isCompleted ?? false)) {
+              rethrow;
+            }
+            _log?.log('    chunk #$chunkIdx attempt $attempt failed ($e) — retrying in ${2 * attempt}s');
+            await Future<void>.delayed(Duration(seconds: 2 * attempt));
+            if (cancelToken?.isCompleted ?? false) {
+              throw const CopypartyCancelledException();
+            }
+          }
+        }
+        bytesDone += end - start;
+        onProgress?.call(bytesDone, neededBytesTotal);
       } finally {
         semaphore.release();
       }
@@ -793,7 +904,7 @@ class CopypartyUploaderService {
     String password, {
     int parallelism = 2,
     void Function(int bytesHashed, int totalBytes)? onHashProgress,
-    void Function(int chunksDone, int chunksTotal)? onUploadProgress,
+    void Function(int bytesDone, int bytesTotal)? onUploadProgress,
     Completer<void>? cancelToken,
   }) async {
     _log?.section('UPLOAD ${filePath.split('/').last}');
@@ -832,7 +943,12 @@ class CopypartyUploaderService {
     String uploadPath,
     String password, {
     int parallelism = 2,
-    void Function(int chunksDone, int chunksTotal)? onUploadProgress,
+    // BYTES done/total across the WHOLE file (not just the needed chunks) —
+    // chunks the server already had (e.g. resuming after a pause/interrupted
+    // upload) count as immediately done, so a mostly-complete resume shows
+    // close to its true % right away instead of restarting the bar from 0
+    // and racing to 100% over just the few remaining chunks.
+    void Function(int bytesDone, int bytesTotal)? onUploadProgress,
     Completer<void>? cancelToken,
   }) async {
     void throwIfCancelled() {
@@ -858,41 +974,105 @@ class CopypartyUploaderService {
       return (handshakeResult, true);
     }
 
-    // Step 3: upload the missing chunks to purl (matches u2c.py).
-    await uploadChunks(
-      hashed,
-      handshakeResult.wark,
-      handshakeResult.neededChunks,
-      hostUrl,
-      handshakeResult.purl,
-      password,
-      parallelism: parallelism,
-      onProgress: onUploadProgress,
-      cancelToken: cancelToken,
-    );
-
-    throwIfCancelled();
-    // Step 4: confirmation handshake — triggers server finalization
-    // (.PARTIAL → file). Only needed because we actually uploaded chunks.
-    final confirmed = await handshake(
-      hashed,
-      hostUrl,
-      uploadPath,
-      password,
-      label: 'confirm',
-      cancelToken: cancelToken,
-    );
-    if (!confirmed.fullyConfirmed) {
-      final detail = confirmed.unmatchedHashes.isNotEmpty
-          ? 'server needs ${confirmed.unmatchedHashes.length} chunk(s) whose '
-                'hashes do not match what we computed — likely a hashing or '
-                'partial-file mismatch (see diagnostic log)'
-          : 'server still needs ${confirmed.neededChunks.length} chunk(s)';
-      _log?.log('!! CONFIRM FAILED: $detail');
-      throw CopypartyUploadException('Upload confirmation failed: $detail');
+    int chunkByteLength(int idx) {
+      final start = idx * hashed.chunkSizeBytes;
+      final end = (start + hashed.chunkSizeBytes).clamp(0, hashed.totalBytes);
+      return end - start;
     }
-    _log?.log('✓ confirmed: wark=${confirmed.wark}');
-    return (confirmed, false);
+
+    // Step 3+4: upload the needed chunks, then confirm. If the CONFIRM
+    // handshake still reports missing chunks, retry by uploading exactly
+    // those and re-confirming, instead of failing the whole file after one
+    // round — observed after a pause/resume: the confirm handshake can
+    // report chunks the upload pass didn't know about (e.g. a chunk POST
+    // that "succeeded" client-side but the server's up2k.snap didn't end up
+    // recording, or a resume racing a stale needed-list) as a hard failure
+    // even though a second round would fix it with no re-hash needed. A
+    // genuine hash MISMATCH is NOT retried — that's a content problem retry
+    // can't fix, not a transient one.
+    const maxConfirmAttempts = 3;
+    var neededChunks = handshakeResult.neededChunks;
+    var confirmed = handshakeResult;
+    for (var attempt = 1; attempt <= maxConfirmAttempts; attempt++) {
+      if (neededChunks.isNotEmpty) {
+        final neededBytesTotal = neededChunks.fold<int>(0, (s, idx) => s + chunkByteLength(idx));
+        final alreadyConfirmedBytes = hashed.totalBytes - neededBytesTotal;
+        // Report the resume baseline immediately, before the first new chunk
+        // completes, so a mostly-done resume doesn't sit at 0% for however
+        // long the first remaining chunk takes.
+        onUploadProgress?.call(alreadyConfirmedBytes, hashed.totalBytes);
+        await uploadChunks(
+          hashed,
+          confirmed.wark,
+          neededChunks,
+          hostUrl,
+          confirmed.purl,
+          password,
+          parallelism: parallelism,
+          onProgress: onUploadProgress == null
+              ? null
+              : (bytesDoneInNeeded, _) =>
+                    onUploadProgress(alreadyConfirmedBytes + bytesDoneInNeeded, hashed.totalBytes),
+          cancelToken: cancelToken,
+        );
+      }
+
+      throwIfCancelled();
+      // Confirmation handshake — triggers server finalization (.PARTIAL →
+      // file). Also tells us whether anything is STILL missing.
+      //
+      // The POST itself (not just its response) can hit a transient network
+      // error — confirmed in the field: a file whose all 503/503 chunks had
+      // already gotten "thank" responses still ended up FAILED because the
+      // confirm POST's own socket hit a broken pipe. At that point every byte
+      // is already safely on the server; retrying this cheap, idempotent
+      // re-check costs nothing, so a raw network exception here gets the same
+      // bounded retry as an incomplete-chunk response, instead of failing the
+      // whole file over the very last, already-redundant request.
+      for (var netAttempt = 1; ; netAttempt++) {
+        try {
+          confirmed = await handshake(
+            hashed,
+            hostUrl,
+            uploadPath,
+            password,
+            label: 'confirm',
+            cancelToken: cancelToken,
+          );
+          break;
+        } on CopypartyCancelledException {
+          rethrow;
+        } catch (e) {
+          if (netAttempt >= maxConfirmAttempts) {
+            rethrow;
+          }
+          _log?.log('confirm POST attempt $netAttempt/$maxConfirmAttempts failed ($e) — retrying in 2s');
+          await Future<void>.delayed(const Duration(seconds: 2));
+          throwIfCancelled();
+        }
+      }
+      if (confirmed.fullyConfirmed) {
+        _log?.log('✓ confirmed: wark=${confirmed.wark}');
+        return (confirmed, false);
+      }
+      if (confirmed.unmatchedHashes.isNotEmpty || confirmed.neededChunks.isEmpty) {
+        // Unmatched-hash mismatch: not retryable. Empty neededChunks despite
+        // !fullyConfirmed shouldn't happen, but don't loop forever on it either.
+        break;
+      }
+      _log?.log(
+        'confirm attempt $attempt/$maxConfirmAttempts: server still needs '
+        '${confirmed.neededChunks.length} chunk(s) — retrying',
+      );
+      neededChunks = confirmed.neededChunks;
+    }
+    final detail = confirmed.unmatchedHashes.isNotEmpty
+        ? 'server needs ${confirmed.unmatchedHashes.length} chunk(s) whose '
+              'hashes do not match what we computed — likely a hashing or '
+              'partial-file mismatch (see diagnostic log)'
+        : 'server still needs ${confirmed.neededChunks.length} chunk(s) after $maxConfirmAttempts attempt(s)';
+    _log?.log('!! CONFIRM FAILED: $detail');
+    throw CopypartyUploadException('Upload confirmation failed: $detail');
   }
 
   /// Copies [sourcePath] → [stagedPath] while computing the up2k chunk hashes
@@ -909,7 +1089,12 @@ class CopypartyUploaderService {
   Future<HashedFile> stageAndHash(
     String sourcePath,
     String stagedPath, {
-    void Function(int bytesProcessed, int totalBytes)? onProgress,
+    // `verifying` is true while re-hashing an already-on-disk partial to
+    // resume it (fast, local-only, no new bytes) and false during an actual
+    // USB copy — callers need this to label the two honestly, since both
+    // otherwise look identical (numerator climbing from 0), and a "verifying"
+    // pass was mistaken for the copy restarting from scratch.
+    void Function(int bytesProcessed, int totalBytes, bool verifying)? onProgress,
     Completer<void>? cancelToken,
   }) async {
     final source = File(sourcePath);
@@ -920,13 +1105,103 @@ class CopypartyUploaderService {
     final fileSink = _DigestSink();
     final fileHasher = sha512.startChunkedConversion(fileSink);
 
-    final readHandle = await source.open(mode: FileMode.read);
-    // Truncating write handle — a stale partial from a previous aborted attempt
-    // must not leave trailing bytes past what we write now.
     final dest = File(stagedPath);
     await dest.parent.create(recursive: true);
-    final writeHandle = await dest.open(mode: FileMode.writeOnly);
+
+    // Resume from a partial copy left by a previous paused/skipped attempt
+    // instead of always re-reading the whole (slow, USB) source from byte 0.
+    // Only whole already-written CHUNKS are trusted, replayed from the fast
+    // LOCAL partial (never the USB source) through the same hasher the main
+    // loop below continues using — replaying identical bytes through SHA-512
+    // is deterministic, so the resulting running state is indistinguishable
+    // from having hashed them in one continuous pass. Any doubt at all falls
+    // back to wiping and starting clean, exactly like before this existed.
+    int resumeOffset = 0;
+    if (dest.existsSync()) {
+      try {
+        final existingLen = await dest.length();
+        final candidateOffset = (existingLen ~/ chunkSize) * chunkSize;
+        if (candidateOffset > 0 && candidateOffset <= fileSize) {
+          final replayHandle = await dest.open(mode: FileMode.read);
+          try {
+            int replayed = 0;
+            while (replayed < candidateOffset) {
+              // The replay itself never checked for cancellation — a pause
+              // request had to wait for the ENTIRE partial to finish replaying
+              // (minutes, for a large one) before it took effect, even though
+              // the yield above kept the UI/heartbeat alive throughout. Confirmed
+              // in the field: pause requested 32s into a 6880MiB/215-chunk
+              // replay, but CANCELLED didn't land until the replay's own log
+              // line ~5.5 minutes later.
+              if (cancelToken?.isCompleted ?? false) {
+                throw const CopypartyCancelledException();
+              }
+              final chunkExpected = (candidateOffset - replayed).clamp(0, chunkSize);
+              final chunkBuf = BytesBuilder(copy: false);
+              while (chunkBuf.length < chunkExpected) {
+                final slice = await replayHandle.read(chunkExpected - chunkBuf.length);
+                if (slice.isEmpty) {
+                  break;
+                }
+                chunkBuf.add(slice);
+              }
+              final chunkBytes = chunkBuf.takeBytes();
+              if (chunkBytes.length != chunkExpected) {
+                break; // short read — don't trust the partial, fall through to wipe.
+              }
+              fileHasher.add(chunkBytes);
+              chunkHashes.add(_chunkId(chunkBytes));
+              replayed += chunkBytes.length;
+              // Report replay progress too — otherwise the progress bar sits
+              // frozen at whatever it showed before the pause for as long as
+              // the replay takes (minutes, for a multi-GiB partial), which
+              // reads as a hang even though the app is actually responsive.
+              onProgress?.call(replayed, fileSize, true);
+              // Yield after every chunk — each chunk's SHA-512 pass is
+              // synchronous CPU work (up to 32 MiB) and a large partial can
+              // have hundreds of them; without this the isolate never returns
+              // to the event loop, starving UI frames and the heartbeat timer
+              // for tens of seconds (confirmed via a missing heartbeat tick
+              // spanning a 6880MiB/215-chunk replay in the field).
+              await Future<void>.delayed(Duration.zero);
+            }
+            if (replayed == candidateOffset) {
+              resumeOffset = candidateOffset;
+              _log?.log(
+                'staging: resuming ${sourcePath.split('/').last} from '
+                '${(resumeOffset / (1024 * 1024)).round()}MiB '
+                '(${chunkHashes.length} chunk(s) already copied)',
+              );
+            }
+          } finally {
+            await replayHandle.close();
+          }
+        }
+      } on CopypartyCancelledException {
+        // A genuine pause mid-replay, not an untrustworthy partial — the
+        // replay only READS dest to re-verify it, never writes, so nothing on
+        // disk needs wiping. Propagate so the caller sees the cancellation
+        // instead of this falling through to "resumeOffset == 0 → wipe".
+        rethrow;
+      } catch (_) {}
+      if (resumeOffset == 0) {
+        chunkHashes.clear();
+        try {
+          await dest.delete();
+        } catch (_) {}
+      }
+    }
+
+    final readHandle = await source.open(mode: FileMode.read);
+    if (resumeOffset > 0) {
+      await readHandle.setPosition(resumeOffset);
+    }
+    // Append when resuming (the partial's already-written bytes must survive);
+    // truncate when starting clean (a stale partial must not leave trailing
+    // bytes past what we write now).
+    final writeHandle = await dest.open(mode: resumeOffset > 0 ? FileMode.writeOnlyAppend : FileMode.writeOnly);
     var ok = false;
+    var cancelledCleanly = false;
     // Measure where the copy wall-clock actually goes: USB read vs hashing vs
     // local write. These run in series per chunk, so the sum ≈ total copy time,
     // and the split tells us whether hashing is throttling the USB drain (→ worth
@@ -935,7 +1210,7 @@ class CopypartyUploaderService {
     final hashSw = Stopwatch();
     final writeSw = Stopwatch();
     try {
-      int bytesRead = 0;
+      int bytesRead = resumeOffset;
       // Force a real fsync periodically so a multi-GB copy doesn't leave GBs of
       // dirty pages sitting in RAM waiting for the single flush at the end — on a
       // big import that dirty-page backlog adds to system memory pressure (the
@@ -977,10 +1252,19 @@ class CopypartyUploaderService {
         chunkHashes.add(_chunkId(chunkBytes));
         hashSw.stop();
         bytesRead += chunkBytes.length;
-        onProgress?.call(bytesRead, fileSize);
+        onProgress?.call(bytesRead, fileSize, false);
       }
       await writeHandle.flush();
       ok = true;
+    } on CopypartyCancelledException {
+      // Clean user cancel (pause/skip) — KEEP the partial (flushed up through
+      // the last COMPLETE chunk above) so a future resume can replay it
+      // instead of re-reading everything from the USB source again.
+      try {
+        await writeHandle.flush();
+      } catch (_) {}
+      cancelledCleanly = true;
+      rethrow;
     } finally {
       // A dead mount (USB unplugged mid-copy) makes readHandle.close() itself
       // throw — guard both closes so the write handle still closes and the
@@ -991,9 +1275,9 @@ class CopypartyUploaderService {
       try {
         await writeHandle.close();
       } catch (_) {}
-      if (!ok) {
-        // Leave nothing usable behind on failure/cancel — the caller treats a
-        // missing marker as "not staged", but delete the bytes too to reclaim space.
+      if (!ok && !cancelledCleanly) {
+        // A genuine failure (IO error, out of space, dead mount) — never
+        // trust a partial that didn't end at a clean, deliberate cancel.
         try {
           await dest.delete();
         } catch (_) {}
@@ -1014,7 +1298,7 @@ class CopypartyUploaderService {
 
     fileHasher.close();
     final fileHash = fileSink.value!.toString();
-    final stat = await source.stat();
+    final stat = source.statSync();
 
     String mbps(int bytes, int ms) => ms <= 0 ? '∞' : (bytes / (ms / 1000) / (1024 * 1024)).toStringAsFixed(1);
     final rd = readSw.elapsedMilliseconds;

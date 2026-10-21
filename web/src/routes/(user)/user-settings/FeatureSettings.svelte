@@ -3,7 +3,7 @@
   import SettingAccordion from '$lib/components/shared-components/settings/SettingAccordion.svelte';
   import { authManager } from '$lib/managers/auth-manager.svelte';
   import { handleError } from '$lib/utils/handle-error';
-  import { AssetOrder, updateMyPreferences } from '@immich/sdk';
+  import { AssetOrder, PersonUpdateStrategy, updateMyPreferences } from '@immich/sdk';
   import { Button, Field, NumberInput, Select, Switch, toastManager } from '@immich/ui';
   import { t } from 'svelte-i18n';
   import { fade } from 'svelte/transition';
@@ -18,11 +18,13 @@
   // Memories
   let memoriesEnabled = $state(authManager.preferences.memories?.enabled ?? true);
   let memoriesDuration = $state(authManager.preferences.memories?.duration ?? 5);
+  let memoriesSidebar = $state(authManager.preferences.memories?.sidebarWeb ?? false);
 
   // People
   let peopleEnabled = $state(authManager.preferences.people?.enabled ?? false);
   let peopleSidebar = $state(authManager.preferences.people?.sidebarWeb ?? false);
   let peopleMinFaces = $state(authManager.preferences.people?.minimumFaces ?? serverConfigManager.value.minFaces);
+  let peopleUpdateStrategy = $state(authManager.preferences.people?.updateStrategy ?? PersonUpdateStrategy.Everyone);
 
   // Ratings
   let ratingsEnabled = $state(authManager.preferences.ratings?.enabled ?? false);
@@ -38,18 +40,27 @@
   // Cast
   let gCastEnabled = $state(authManager.preferences.cast?.gCastEnabled ?? false);
 
+  // Recently added
+  let recentlyAddedSidebar = $state(authManager.preferences.recentlyAdded?.sidebarWeb ?? false);
+
   const handleSave = async () => {
     try {
       const response = await updateMyPreferences({
         userPreferencesUpdateDto: {
           albums: { defaultAssetOrder },
           folders: { enabled: foldersEnabled, sidebarWeb: foldersSidebar },
-          memories: { enabled: memoriesEnabled, duration: memoriesDuration },
-          people: { enabled: peopleEnabled, sidebarWeb: peopleSidebar, minimumFaces: peopleMinFaces },
+          memories: { enabled: memoriesEnabled, duration: memoriesDuration, sidebarWeb: memoriesSidebar },
+          people: {
+            enabled: peopleEnabled,
+            sidebarWeb: peopleSidebar,
+            minimumFaces: peopleMinFaces,
+            updateStrategy: peopleUpdateStrategy,
+          },
           ratings: { enabled: ratingsEnabled },
           sharedLinks: { enabled: sharedLinksEnabled, sidebarWeb: sharedLinkSidebar },
           tags: { enabled: tagsEnabled, sidebarWeb: tagsSidebar },
           cast: { gCastEnabled },
+          recentlyAdded: { sidebarWeb: recentlyAddedSidebar },
         },
       });
 
@@ -103,6 +114,12 @@
               <Switch bind:checked={memoriesEnabled} />
             </Field>
 
+            {#if memoriesEnabled}
+              <Field label={$t('sidebar')} description={$t('sidebar_display_description')}>
+                <Switch bind:checked={memoriesSidebar} />
+              </Field>
+            {/if}
+
             <Field label={$t('duration')} description={$t('time_based_memories_duration')}>
               <NumberInput bind:value={memoriesDuration} />
             </Field>
@@ -121,6 +138,15 @@
               </Field>
               <Field label={$t('minFaces')} description={$t('minFaces_description')}>
                 <NumberInput bind:value={peopleMinFaces} />
+              </Field>
+              <Field label={$t('person_update_strategy')} description={$t('person_update_strategy_description')}>
+                <Select
+                  options={[
+                    { label: $t('person_update_strategy_everyone'), value: PersonUpdateStrategy.Everyone },
+                    { label: $t('person_update_strategy_self'), value: PersonUpdateStrategy.Self },
+                  ]}
+                  bind:value={peopleUpdateStrategy}
+                />
               </Field>
             {/if}
           </div>
@@ -166,6 +192,14 @@
           <div class="mt-4 flex flex-col gap-4 sm:ms-4">
             <Field label={$t('gcast_enabled')} description={$t('gcast_enabled_description')}>
               <Switch bind:checked={gCastEnabled} />
+            </Field>
+          </div>
+        </SettingAccordion>
+
+        <SettingAccordion key="recentlyAdded" title={$t('recently_added')} subtitle={$t('recently_added_description')}>
+          <div class="mt-4 flex flex-col gap-4 sm:ms-4">
+            <Field label={$t('sidebar')} description={$t('sidebar_display_description')}>
+              <Switch bind:checked={recentlyAddedSidebar} />
             </Field>
           </div>
         </SettingAccordion>

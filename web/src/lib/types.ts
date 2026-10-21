@@ -3,7 +3,6 @@ import type { ActionItem } from '@immich/ui';
 import type { DateTime } from 'luxon';
 import type { SvelteSet } from 'svelte/reactivity';
 import { MediaType } from '$lib/constants';
-import type { TimelineAsset } from '$lib/managers/timeline-manager/types';
 
 export type LatLng = { lng: number; lat: number };
 
@@ -38,13 +37,6 @@ export enum OnboardingRole {
   SERVER = 'server',
   USER = 'user',
 }
-
-export type AssetControlContext = {
-  // Wrap assets in a function, because context isn't reactive.
-  getAssets: () => TimelineAsset[]; // All assets includes partners' assets
-  getOwnedAssets: () => TimelineAsset[]; // Only assets owned by the user
-  clearSelect: () => void;
-};
 
 export type SearchCameraFilter = {
   make?: string;
@@ -84,6 +76,14 @@ export type SearchFilter = {
   rating?: number | null;
 };
 
+export type PeopleFilter = {
+  sharedById?: string;
+  sharedWithId?: string;
+  isFavorite?: boolean;
+  isHidden?: boolean;
+  name?: string;
+};
+
 export type JSONSchemaType = 'string' | 'number' | 'integer' | 'boolean' | 'object';
 
 export type JSONSchemaProperty = {
@@ -93,10 +93,16 @@ export type JSONSchemaProperty = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   default?: any;
   enum?: string[];
+  minimum?: number;
+  maximum?: number;
+  precision?: number;
   array?: boolean;
   properties?: Record<string, JSONSchemaProperty>;
   required?: string[];
-  uiHint?: 'AlbumId' | 'AssetId' | 'PersonId';
+  uiHint?: {
+    type?: 'AlbumId' | 'AssetId' | 'PersonId' | 'TagId';
+    order?: number;
+  };
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

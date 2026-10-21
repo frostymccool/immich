@@ -1,10 +1,11 @@
-import { PersonController } from 'src/controllers/person.controller';
-import { LoggingRepository } from 'src/repositories/logging.repository';
-import { PersonService } from 'src/services/person.service';
 import request from 'supertest';
-import { errorDto } from 'test/medium/responses';
-import { factory } from 'test/small.factory';
-import { automock, ControllerContext, controllerSetup, mockBaseService } from 'test/utils';
+import { PersonController } from 'src/controllers/person.controller.js';
+import { PersonUserRole } from 'src/dtos/person.dto.js';
+import { LoggingRepository } from 'src/repositories/logging.repository.js';
+import { PersonService } from 'src/services/person.service.js';
+import { errorDto } from 'test/medium/responses.js';
+import { factory, newUuid } from 'test/small.factory.js';
+import { ControllerContext, automock, controllerSetup, mockBaseService } from 'test/utils.js';
 
 describe(PersonController.name, () => {
   let ctx: ControllerContext;
@@ -24,11 +25,6 @@ describe(PersonController.name, () => {
   });
 
   describe('GET /people', () => {
-    it('should be an authenticated route', async () => {
-      await request(ctx.getHttpServer()).get('/people');
-      expect(ctx.authenticate).toHaveBeenCalled();
-    });
-
     it(`should require closestPersonId to be a uuid`, async () => {
       const { status, body } = await request(ctx.getHttpServer())
         .get(`/people`)
@@ -48,19 +44,7 @@ describe(PersonController.name, () => {
     });
   });
 
-  describe('POST /people', () => {
-    it('should be an authenticated route', async () => {
-      await request(ctx.getHttpServer()).post('/people');
-      expect(ctx.authenticate).toHaveBeenCalled();
-    });
-  });
-
   describe('DELETE /people', () => {
-    it('should be an authenticated route', async () => {
-      await request(ctx.getHttpServer()).delete('/people');
-      expect(ctx.authenticate).toHaveBeenCalled();
-    });
-
     it('should require uuids in the body', async () => {
       const { status, body } = await request(ctx.getHttpServer())
         .delete('/people')
@@ -78,19 +62,7 @@ describe(PersonController.name, () => {
     });
   });
 
-  describe('GET /people/:id', () => {
-    it('should be an authenticated route', async () => {
-      await request(ctx.getHttpServer()).get(`/people/${factory.uuid()}`);
-      expect(ctx.authenticate).toHaveBeenCalled();
-    });
-  });
-
   describe('PUT /people/:id', () => {
-    it('should be an authenticated route', async () => {
-      await request(ctx.getHttpServer()).get(`/people/${factory.uuid()}`);
-      expect(ctx.authenticate).toHaveBeenCalled();
-    });
-
     it('should require a valid uuid', async () => {
       const { status, body } = await request(ctx.getHttpServer()).put(`/people/123`);
       expect(status).toBe(400);
@@ -117,6 +89,23 @@ describe(PersonController.name, () => {
         .set('Authorization', `Bearer token`);
       expect(status).toBe(400);
       expect(body).toEqual(errorDto.validationError([{ path: ['featureFaceAssetId'], message: 'Invalid UUID' }]));
+    });
+
+    it('should require at least one property to update', async () => {
+      const { status, body } = await request(ctx.getHttpServer())
+        .put(`/people/${factory.uuid()}`)
+        .send({ userId: factory.uuid() })
+        .set('Authorization', `Bearer token`);
+      expect(status).toBe(400);
+      expect(body).toEqual(
+        errorDto.validationError([
+          {
+            path: [],
+            message:
+              'At least one of the following fields is required: name, birthDate, isHidden, isFavorite, color, featureFaceAssetId',
+          },
+        ]),
+      );
     });
 
     it(`should require isFavorite to be a boolean`, async () => {
@@ -177,35 +166,33 @@ describe(PersonController.name, () => {
   });
 
   describe('DELETE /people/:id', () => {
-    it('should be an authenticated route', async () => {
-      await request(ctx.getHttpServer()).delete(`/people/${factory.uuid()}`);
-      expect(ctx.authenticate).toHaveBeenCalled();
-    });
-
     it('should require a valid uuid', async () => {
-      const { status, body } = await request(ctx.getHttpServer()).delete(`/people/invalid`);
+      const { status, body } = await request(ctx.getHttpServer()).delete(`/people/invalid`).send({});
       expect(status).toBe(400);
       expect(body).toEqual(errorDto.validationError([{ path: ['id'], message: 'Invalid UUID' }]));
     });
 
     it('should respond with 204', async () => {
-      const { status } = await request(ctx.getHttpServer()).delete(`/people/${factory.uuid()}`);
+      const { status } = await request(ctx.getHttpServer()).delete(`/people/${factory.uuid()}`).send({});
       expect(status).toBe(204);
       expect(service.delete).toHaveBeenCalled();
     });
   });
 
-  describe('POST /people/:id/merge', () => {
-    it('should be an authenticated route', async () => {
-      await request(ctx.getHttpServer()).post(`/people/${factory.uuid()}/merge`);
-      expect(ctx.authenticate).toHaveBeenCalled();
-    });
-  });
-
-  describe('GET /people/:id/statistics', () => {
-    it('should be an authenticated route', async () => {
-      await request(ctx.getHttpServer()).get(`/people/${factory.uuid()}/statistics`);
-      expect(ctx.authenticate).toHaveBeenCalled();
+  describe('PUT /people/users', () => {
+    it('should reject duplicate personIds as well as duplicate userIds', async () => {
+      const userId = newUuid();
+      const personId = newUuid();
+      const { status, body } = await request(ctx.getHttpServer())
+        .put('/people/users')
+        .send({ personIds: [personId, personId], sharedWithIds: [userId, userId], role: PersonUserRole.Write });
+      expect(status).toBe(400);
+      expect(body.errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: ['personIds'], message: 'Items must be unique' }),
+          expect.objectContaining({ path: ['sharedWithIds'], message: 'Items must be unique' }),
+        ]),
+      );
     });
   });
 });

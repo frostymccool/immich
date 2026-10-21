@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/providers/api.provider.dart';
@@ -14,7 +13,34 @@ import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:immich_mobile/utils/upload_speed_calculator.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
+
+/// Pick a folder via SAF and push the "Add folders" selection page for it —
+/// the same flow the active-import progress screen's "Add folders" button
+/// uses, but callable from anywhere (e.g. the settings page's own "Add"
+/// button, so adding more folders to a running background import doesn't
+/// require first opening the progress screen). Safe to call even when
+/// [context] isn't inside a live [CopypartyImportPage] — appendSelectedSets
+/// on the notifier is what actually queues the work, not page state.
+Future<void> pickAndAddFoldersToImport(BuildContext context) async {
+  const safChannel = MethodChannel('immich/saf_picker');
+  String? path;
+  try {
+    path = await safChannel.invokeMethod<String?>('pickDirectory');
+  } on PlatformException catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Picker error: ${e.message}')));
+    }
+    return;
+  }
+  if (path == null || !context.mounted) {
+    return;
+  }
+  await Navigator.of(
+    context,
+  ).push(MaterialPageRoute<void>(builder: (_) => _AddFoldersSelectionPage(directoryPath: path!)));
+}
 
 /// The full multi-step "Import from Memory Card" flow.
 ///
@@ -27,28 +53,6 @@ class CopypartyImportPage extends ConsumerStatefulWidget {
 }
 
 class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
-  static const _safChannel = MethodChannel('immich/saf_picker');
-
-  /// Item 4: pick another folder, scan it, then show a selection page so the
-  /// user can pick files as normal BEFORE they're appended to the active task.
-  Future<void> _pickAndAddFolder() async {
-    String? path;
-    try {
-      path = await _safChannel.invokeMethod<String?>('pickDirectory');
-    } on PlatformException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Picker error: ${e.message}')));
-      }
-      return;
-    }
-    if (path == null || !mounted) {
-      return;
-    }
-    await Navigator.of(
-      context,
-    ).push(MaterialPageRoute<void>(builder: (_) => _AddFoldersSelectionPage(directoryPath: path!)));
-  }
-
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(importSessionProvider);
@@ -76,7 +80,7 @@ class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
             ImportSessionStep.uploading => _UploadProgressStep(
               session,
               onCancel: () => ref.read(importSessionProvider.notifier).cancelUpload(),
-              onAddFolders: _pickAndAddFolder,
+              onAddFolders: () => pickAndAddFoldersToImport(context),
             ),
             ImportSessionStep.complete => _CompletionStep(session),
           },
@@ -108,6 +112,11 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
   final Set<String> _selectedPaths = {};
   final Map<String, UploadDestination> _destinationOverrides = {};
   bool _adding = false;
+  // Tracks manual selection changes so the post-verify smart-default below
+  // never clobbers a choice the user already made. (staged-preference sweep
+  // follow-up: this page was defaulting to "select everything" and never
+  // revising it once server verification landed, unlike the initial picker.)
+  bool _userTouched = false;
 
   @override
   void initState() {
@@ -128,6 +137,29 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
           ..clear()
           ..addAll(sets.expand((s) => s.files).map((f) => f.localPath));
       });
+      // Resolve live server status for the scanned groups — without this the
+      // summaries sat on "checking server…" forever. (batch3 item 13)
+      unawaited(
+        ref.read(importSessionProvider.notifier).verifySetsAgainstServer(sets).then((_) {
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            // Same smart default as the initial picker (_OptionsStepState):
+            // once we actually know what's already on the server, untick the
+            // files that are already there instead of leaving every file
+            // (including ones already fully uploaded) selected forever.
+            // Skipped if the user already changed the selection by hand.
+            if (!_userTouched) {
+              _selectedPaths
+                ..clear()
+                ..addAll(
+                  sets.expand((s) => s.files).where((f) => !_OptionsStepState._looksPresent(f)).map((f) => f.localPath),
+                );
+            }
+          });
+        }),
+      );
     } catch (e) {
       if (!mounted) {
         return;
@@ -140,6 +172,7 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
 
   void _toggleGroup(UploadSet set, bool select) {
     setState(() {
+      _userTouched = true;
       for (final f in set.files) {
         if (select) {
           _selectedPaths.add(f.localPath);
@@ -152,6 +185,7 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
 
   void _toggleFile(String path, bool select) {
     setState(() {
+      _userTouched = true;
       if (select) {
         _selectedPaths.add(path);
       } else {
@@ -235,6 +269,7 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
               ),
               TextButton(
                 onPressed: () => setState(() {
+                  _userTouched = true;
                   if (allSelected) {
                     _selectedPaths.clear();
                   } else {
@@ -503,6 +538,36 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     // verification lands (unless the user has already changed it).
     _selectedPaths = _allPaths(widget.session.uploadSets);
     WidgetsBinding.instance.addPostFrameCallback((_) => _verify());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkLocalCache());
+  }
+
+  /// Purely local, no-network check for whether each file already has bytes
+  /// sitting in the phone's staging cache (partial or complete) — e.g. from
+  /// an earlier session, or after re-adding a folder mid-import. Runs
+  /// independently of (and faster than) the server _verify() pass so it
+  /// doesn't wait on the network.
+  Future<void> _checkLocalCache() async {
+    final staging = ref.read(copypartyStagingProvider);
+    final files = widget.session.uploadSets.expand((s) => s.files).toList();
+    // Throttle rebuilds for a large batch — this is a fast local disk check,
+    // but a rebuild per file would still jank a many-hundred-file import.
+    final throttle = Stopwatch()..start();
+    for (var i = 0; i < files.length; i++) {
+      if (_disposed) {
+        return;
+      }
+      final f = files[i];
+      try {
+        f.stagedBytesOnPhone = await staging.stagedBytesFor(f.localPath);
+      } catch (_) {
+        f.stagedBytesOnPhone = 0;
+      }
+      final isLast = i == files.length - 1;
+      if (mounted && (isLast || throttle.elapsedMilliseconds >= 200)) {
+        throttle.reset();
+        setState(() {});
+      }
+    }
   }
 
   /// True when live verification says a file with this name AND size is already
@@ -567,6 +632,18 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
           immichApplicable: CopypartyFilePairer.isNativeImmichFilename(f.filename),
         );
       }
+      // A file already on the server (by name+size) might still have no local
+      // Pending Cleanup record — e.g. it was put there outside this app, or a
+      // previous import's receipt was already cleaned up. Surface that so the
+      // user can choose to add it (tick it) and let the normal pipeline write
+      // a receipt for it (fast — the handshake finds it fully confirmed and
+      // skips the byte transfer entirely).
+      final receiptRepo = ref.read(copypartyReceiptRepositoryProvider);
+      for (final f in files.where(_looksPresent)) {
+        try {
+          f.existingReceipt = await receiptRepo.findByLocalPath(f.localPath);
+        } catch (_) {}
+      }
       if (!mounted) {
         return;
       }
@@ -590,6 +667,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     // Background Immich-by-checksum pass for native-Immich files (FB4); rows
     // update as each completes. Skipped if the listing failed above.
     final api = ref.read(apiServiceProvider).assetsApi;
+    final staging = ref.read(copypartyStagingProvider);
     for (final f in files) {
       // Bail immediately if disposed or a newer _verify run superseded us — do
       // NOT start hashing the next (possibly multi-GB) file.
@@ -600,7 +678,12 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
         continue;
       }
       try {
-        final id = await immichAssetIdByChecksum(api, f.localPath);
+        // A staged copy can already exist here (e.g. resuming a prior partial
+        // session) — prefer it over the card path for the same reason as the
+        // cleanup/completion-screen checks: byte-identical, faster, and
+        // doesn't require the card.
+        final staged = await staging.findValidStaged(f.localPath);
+        final id = await immichAssetIdByChecksum(api, staged?.path ?? f.localPath);
         // Re-check after the await: the user may have left or refreshed while
         // this file was hashing. Don't mutate shared state for a stale run.
         if (_disposed || generation != _verifyGeneration) {
@@ -658,6 +741,44 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
 
   void _setDestination(String path, UploadDestination dest) {
     setState(() => _destinationOverrides[path] = dest);
+  }
+
+  // batch3 item 24: expand/collapse all groups. Bumping the generation renews
+  // each ExpansionTile's key so `initiallyExpanded` is re-applied.
+  bool _expandAll = false;
+  int _expandGen = 0;
+
+  void _setExpandAll(bool v) {
+    setState(() {
+      _expandAll = v;
+      _expandGen++;
+    });
+  }
+
+  /// batch3 item 21: set the destination for EVERY file at once. Non-Immich-
+  /// native files (e.g. .OSV/.LRV) can't go to Immich, so "Both"/"Immich"
+  /// applies to native files only and the rest stay CP-only.
+  void _setDestinationForAll(UploadDestination dest) {
+    setState(() {
+      for (final set in widget.session.uploadSets) {
+        for (final f in set.files) {
+          _destinationOverrides[f.localPath] = (dest != UploadDestination.copypartyOnly && !f.isNativeImmichFile)
+              ? UploadDestination.copypartyOnly
+              : dest;
+        }
+      }
+    });
+  }
+
+  Widget _destAllButton(BuildContext context, String label, UploadDestination dest) {
+    return TextButton(
+      style: TextButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+      ),
+      onPressed: () => _setDestinationForAll(dest),
+      child: Text(label),
+    );
   }
 
   UploadDestination _destinationFor(UploadFile file) => _destinationOverrides[file.localPath] ?? file.destination;
@@ -720,6 +841,9 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
           TextButton(
             onPressed: () async {
               final path = await ref.read(copypartyLoggerProvider).flush();
+              if (!ctx.mounted) {
+                return;
+              }
               final box = ctx.findRenderObject() as RenderBox?;
               await Share.shareXFiles(
                 [XFile(path)],
@@ -817,6 +941,9 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
             onPressed: () async {
               final logger = ref.read(copypartyLoggerProvider);
               final path = await logger.flush();
+              if (!ctx.mounted) {
+                return;
+              }
               final box = ctx.findRenderObject() as RenderBox?;
               await Share.shareXFiles(
                 [XFile(path)],
@@ -906,6 +1033,33 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
             ],
           ),
         ),
+        // batch3 items 21+24: destination-for-all quick actions + expand/collapse all.
+        Container(
+          color: context.colorScheme.surfaceContainer,
+          padding: const EdgeInsets.fromLTRB(16, 0, 8, 4),
+          child: Row(
+            children: [
+              Text('Send all to:', style: context.textTheme.labelMedium),
+              const SizedBox(width: 4),
+              _destAllButton(context, 'CP only', UploadDestination.copypartyOnly),
+              _destAllButton(context, 'Both', UploadDestination.both),
+              _destAllButton(context, 'Immich', UploadDestination.immichNative),
+              const Spacer(),
+              IconButton(
+                tooltip: 'Collapse all',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.unfold_less_rounded, size: 20),
+                onPressed: () => _setExpandAll(false),
+              ),
+              IconButton(
+                tooltip: 'Expand all',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.unfold_more_rounded, size: 20),
+                onPressed: () => _setExpandAll(true),
+              ),
+            ],
+          ),
+        ),
         // FB3/FB4: lazy verify status banner — checking / offline + Refresh.
         if (_verifying)
           Container(
@@ -943,10 +1097,16 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
           ),
         Builder(
           builder: (ctx) {
-            final alreadyCount = sets.expand((s) => s.files).where(_OptionsStepState._looksPresent).length;
-            if (alreadyCount == 0) {
+            final alreadyPresent = sets.expand((s) => s.files).where(_OptionsStepState._looksPresent).toList();
+            if (alreadyPresent.isEmpty) {
               return const SizedBox.shrink();
             }
+            // Present on the server but with no active Pending Cleanup record —
+            // e.g. put there outside this app, or an old receipt was already
+            // cleaned up. "Adding" one just ticks it: the normal pipeline will
+            // hash it, find it fully confirmed at the handshake (no bytes to
+            // transfer), and write the receipt exactly like any other upload.
+            final untracked = alreadyPresent.where((f) => !f.alreadyUploaded).toList();
             return Container(
               margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -954,16 +1114,45 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                 color: ctx.colorScheme.secondaryContainer,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.check_circle_outline, size: 16, color: ctx.colorScheme.onSecondaryContainer),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      '$alreadyCount file${alreadyCount == 1 ? '' : 's'} already on the server by name+size (hash not checked) — unchecked by default.',
-                      style: ctx.textTheme.bodySmall?.copyWith(color: ctx.colorScheme.onSecondaryContainer),
-                    ),
+                  Row(
+                    children: [
+                      Icon(Icons.check_circle_outline, size: 16, color: ctx.colorScheme.onSecondaryContainer),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '${alreadyPresent.length} file${alreadyPresent.length == 1 ? '' : 's'} already on the '
+                          'server by name+size (hash not checked) — unchecked by default.',
+                          style: ctx.textTheme.bodySmall?.copyWith(color: ctx.colorScheme.onSecondaryContainer),
+                        ),
+                      ),
+                    ],
                   ),
+                  if (untracked.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4, left: 24),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${untracked.length} of those aren\'t tracked in Pending Cleanup.',
+                              style: ctx.textTheme.bodySmall?.copyWith(color: ctx.colorScheme.onSecondaryContainer),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () => setState(() {
+                              _userTouched = true;
+                              for (final f in untracked) {
+                                _selectedPaths.add(f.localPath);
+                              }
+                            }),
+                            child: Text('Add all ${untracked.length}'),
+                          ),
+                        ],
+                      ),
+                    ),
                 ],
               ),
             );
@@ -980,6 +1169,8 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
               onToggleGroup: (select) => _toggleGroup(sets[i], select),
               onToggleFile: _toggleFile,
               onDestinationChange: _setDestination,
+              expansionKey: ValueKey('${sets[i].id}-$_expandGen'),
+              initiallyExpanded: _expandAll,
             ),
           ),
         ),
@@ -997,9 +1188,11 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                     onPressed: selectedCount > 0
                         ? () {
                             _applyDestinations();
-                            ref
-                                .read(importSessionProvider.notifier)
-                                .startUpload(selectedFilePaths: Set.of(_selectedPaths));
+                            unawaited(
+                              ref
+                                  .read(importSessionProvider.notifier)
+                                  .startUpload(selectedFilePaths: Set.of(_selectedPaths)),
+                            );
                           }
                         : null,
                     icon: const Icon(Icons.upload_rounded),
@@ -1008,8 +1201,18 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                   ),
                 ),
                 // Self-test/diagnostic actions only when debug mode is on. (item 5)
+                // Captions stay on-screen (not just in a dialog after tapping) so
+                // it's obvious what each one does without having to remember.
                 if (debugMode) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Uploads each selected file several times under controlled '
+                    'variations (renamed, new content, new folder) and reports '
+                    'the server identity (wark) for each — a protocol diagnostic '
+                    'for dedup/identity bugs, not a normal upload.',
+                    style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 4),
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
@@ -1018,6 +1221,15 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                       label: const Text('Run upload self-test (diagnostics)'),
                     ),
                   ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Re-runs the SAME name/size/hash/Immich checks the delete '
+                    'flow uses against the server, right now, and prints the raw '
+                    'result — for checking why a file is (or isn\'t) considered '
+                    'safe to delete. Read-only, nothing is uploaded or deleted.',
+                    style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 4),
                   SizedBox(
                     width: double.infinity,
                     child: TextButton.icon(
@@ -1044,6 +1256,9 @@ class _SelectableUploadSetTile extends StatelessWidget {
   final void Function(bool) onToggleGroup;
   final void Function(String, bool) onToggleFile;
   final void Function(String, UploadDestination) onDestinationChange;
+  // batch3 item 24: a renewed key re-applies initiallyExpanded (expand/collapse all).
+  final Key? expansionKey;
+  final bool initiallyExpanded;
 
   const _SelectableUploadSetTile({
     required this.set,
@@ -1053,6 +1268,8 @@ class _SelectableUploadSetTile extends StatelessWidget {
     required this.onToggleGroup,
     required this.onToggleFile,
     required this.onDestinationChange,
+    this.expansionKey,
+    this.initiallyExpanded = false,
   });
 
   Widget _relPathLine(BuildContext context, String relPath) => Text(
@@ -1093,6 +1310,8 @@ class _SelectableUploadSetTile extends StatelessWidget {
     final bool? groupChecked = filesSelected == 0 ? false : (filesSelected == total ? true : null);
 
     return ExpansionTile(
+      key: expansionKey,
+      initiallyExpanded: initiallyExpanded,
       leading: Checkbox(tristate: true, value: groupChecked, onChanged: (v) => onToggleGroup(v == true)),
       // Item 3: show the file count right in the group entry.
       title: Text('${set.displayName}  ·  $total files'),
@@ -1185,6 +1404,12 @@ class _GroupSummary extends StatelessWidget {
   ) {
     final known = pool.where((f) => f.verification != null && get(f.verification!) != VerifyState.unknown).toList();
     if (known.isEmpty) {
+      // Applicable files exist but none resolved yet (checksum pass pending or
+      // interrupted) — show a neutral pending chip instead of NOTHING, so a
+      // group with a valid Immich file always surfaces the axis. (item 23)
+      if (pool.isNotEmpty) {
+        return _rawChip(context, '$label ?', context.colorScheme.onSurfaceVariant, Icons.help_outline);
+      }
       return null;
     }
     final yes = known.where((f) => get(f.verification!) == VerifyState.yes).length;
@@ -1235,12 +1460,24 @@ class _SelectableFileTile extends StatelessWidget {
           trailing: file.isTriggerFile ? Icon(Icons.star_rounded, color: context.primaryColor, size: 20) : null,
           dense: true,
         ),
+        // Purely local (no network) — independent of and usually faster than
+        // the server verify pass below, so it can show up first. Only worth
+        // surfacing when there's actually something cached; every other file
+        // showing "not cached" would be pure noise.
+        if ((file.stagedBytesOnPhone ?? 0) > 0)
+          Padding(
+            padding: const EdgeInsets.only(left: 72, bottom: 4),
+            child: _CachedOnPhoneChip(cachedBytes: file.stagedBytesOnPhone!, totalBytes: file.sizeBytes),
+          ),
         // Live server state (Issue 3): name/size from copyparty, NOT a stored
         // receipt. Hash is honestly shown as unchecked until upload/verify.
         if (file.verification != null)
           Padding(
             padding: const EdgeInsets.only(left: 72, bottom: 6),
-            child: _LiveChips(v: file.verification!),
+            child: _LiveChips(
+              v: file.verification!,
+              trackedInCleanup: _OptionsStepState._looksPresent(file) ? file.alreadyUploaded : null,
+            ),
           ),
         // Destination selector — only for files Immich handles natively
         if (file.isNativeImmichFile && selected)
@@ -1278,11 +1515,44 @@ class _SelectableFileTile extends StatelessWidget {
   }
 }
 
+/// "Already cached on phone" — a purely local disk fact (partial or complete
+/// staged copy from an earlier session), shown independent of server state so
+/// re-adding a folder honestly reflects what doesn't need a fresh USB read.
+class _CachedOnPhoneChip extends StatelessWidget {
+  final int cachedBytes;
+  final int totalBytes;
+  const _CachedOnPhoneChip({required this.cachedBytes, required this.totalBytes});
+
+  @override
+  Widget build(BuildContext context) {
+    final complete = totalBytes > 0 && cachedBytes >= totalBytes;
+    final color = complete ? Colors.green.shade600 : Colors.orange.shade700;
+    final cachedStr = formatHumanReadableBytes(cachedBytes, 1);
+    final totalStr = formatHumanReadableBytes(totalBytes, 1);
+    final label = complete ? 'cached on phone' : 'partially cached on phone ($cachedStr of $totalStr)';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.phonelink_ring_rounded, size: 12, color: color),
+        const SizedBox(width: 3),
+        Flexible(
+          child: Text(label, style: context.textTheme.labelSmall?.copyWith(color: color)),
+        ),
+      ],
+    );
+  }
+}
+
 /// Compact live name/size/partial chips + honest "hash not checked" for the
 /// import picker (Issue 3/4). Mirrors the cleanup-page evidence model.
 class _LiveChips extends StatelessWidget {
   final ServerFileVerification v;
-  const _LiveChips({required this.v});
+  // Only meaningful (non-null) when the file already looks present on the
+  // server: whether it has an active Pending Cleanup record. Lets the user
+  // spot files that are duplicated server-side but not yet tracked for
+  // cleanup — e.g. uploaded outside this app — and choose to add them.
+  final bool? trackedInCleanup;
+  const _LiveChips({required this.v, this.trackedInCleanup});
 
   Widget _chip(BuildContext context, IconData icon, Color color, String label) => Row(
     mainAxisSize: MainAxisSize.min,
@@ -1315,6 +1585,10 @@ class _LiveChips extends StatelessWidget {
         if (v.partialExists == VerifyState.yes)
           _chip(context, Icons.cancel, context.colorScheme.error, 'partial exists'),
         _chip(context, Icons.help_outline, grey, 'hash not checked'),
+        if (trackedInCleanup == true)
+          _chip(context, Icons.cleaning_services_rounded, Colors.green.shade600, 'in Pending Cleanup'),
+        if (trackedInCleanup == false)
+          _chip(context, Icons.cleaning_services_outlined, Colors.orange.shade700, 'not tracked — tick to add'),
         if (v.immichApplicable)
           switch (v.immich) {
             VerifyState.yes => _chip(context, Icons.photo_library_rounded, Colors.green.shade600, 'Immich ✓'),
@@ -1439,6 +1713,36 @@ class _UploadProgressStep extends ConsumerWidget {
     if (sortSmallest) {
       visibleSets.sort((a, b) => a.totalBytes.compareTo(b.totalBytes));
     }
+    // Pin groups with ACTIVE work (uploading/copying/hashing) to the top, then
+    // still-pending groups, done/failed groups last — so the current upload is
+    // always visible even after more folders are appended. Decorate-sort keeps
+    // the order stable within each band (List.sort is not stable). (item 10)
+    int setRank(UploadSet s) {
+      var rank = 2;
+      for (final f in s.files.where(keep)) {
+        final active =
+            f.staging ||
+            (f.status != UploadFileStatus.pending &&
+                f.status != UploadFileStatus.receiptWritten &&
+                f.status != UploadFileStatus.failed &&
+                f.status != UploadFileStatus.skipped &&
+                !(f.status == UploadFileStatus.confirmed && !f.needsImmich));
+        if (active) {
+          return 0;
+        }
+        if (f.status == UploadFileStatus.pending) {
+          rank = 1;
+        }
+      }
+      return rank;
+    }
+
+    final decorated = [for (var i = 0; i < visibleSets.length; i++) (i: i, set: visibleSets[i])];
+    decorated.sort((a, b) {
+      final r = setRank(a.set).compareTo(setRank(b.set));
+      return r != 0 ? r : a.i.compareTo(b.i);
+    });
+    final orderedSets = decorated.map((d) => d.set).toList();
     final allFiles = session.uploadSets.expand((s) => s.files).where(keep).toList();
     final totalBytes = allFiles.fold<int>(0, (s, f) => s + f.sizeBytes);
     // Bytes actually UPLOADED to a backend. `uploadedBytes` doubles as the
@@ -1487,6 +1791,26 @@ class _UploadProgressStep extends ConsumerWidget {
       }
     }
 
+    // Cache-fill indicator: only meaningful when staging-to-phone is enabled,
+    // and only during the actual upload run (session.cacheUsedBytes is 0 once
+    // idle/complete). Shows the cache rising as files are copied ahead of the
+    // upload and dropping again as each finished file's staged copy is discarded.
+    final stagingEnabled = ref.watch(appConfigProvider.select((c) => c.copyparty.stageToLocalBeforeUpload));
+    final cacheBudgetBytes = ref.watch(appConfigProvider.select((c) => c.copyparty.cacheSizeMb)) * 1024 * 1024;
+    final cacheFraction = cacheBudgetBytes > 0 ? (session.cacheUsedBytes / cacheBudgetBytes).clamp(0.0, 1.0) : 0.0;
+    // Files that couldn't be cached (e.g. the phone ran out of storage, not
+    // just hit the configured cache budget) and quietly fell back to reading
+    // straight from the card — without this, a user who sees "mostly staged"
+    // has no way to know one of these still needs the card connected.
+    final fallbackCount = allFiles
+        .where(
+          (f) =>
+              f.stagingFallback &&
+              f.status != UploadFileStatus.receiptWritten &&
+              !(f.status == UploadFileStatus.confirmed && !f.needsImmich),
+        )
+        .length;
+
     return Column(
       children: [
         LinearProgressIndicator(value: opsTotal > 0 ? opsDone / opsTotal : null, minHeight: 4),
@@ -1507,12 +1831,78 @@ class _UploadProgressStep extends ConsumerWidget {
             ],
           ),
         ),
+        if (stagingEnabled)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.sd_storage_outlined,
+                      size: 14,
+                      color: context.colorScheme.onSurface.withValues(alpha: 0.6),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Phone cache: ${formatHumanReadableBytes(session.cacheUsedBytes, 1)} / '
+                      '${formatHumanReadableBytes(cacheBudgetBytes, 1)} '
+                      '(${(cacheFraction * 100).round()}%)',
+                      style: context.textTheme.bodySmall?.copyWith(
+                        color: context.colorScheme.onSurface.withValues(alpha: 0.6),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: LinearProgressIndicator(
+                    value: cacheFraction,
+                    minHeight: 3,
+                    backgroundColor: context.colorScheme.surfaceContainerHighest,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (fallbackCount > 0)
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: context.colorScheme.errorContainer.withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.warning_amber_rounded, size: 16, color: context.colorScheme.error),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '$fallbackCount file${fallbackCount == 1 ? '' : 's'} could not be cached (phone storage '
+                    'full) and ${fallbackCount == 1 ? 'is' : 'are'} reading straight from the card — keep it '
+                    'connected until ${fallbackCount == 1 ? 'it finishes' : 'they finish'}.',
+                    style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.error),
+                  ),
+                ),
+              ],
+            ),
+          ),
         const Divider(height: 1),
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            itemCount: visibleSets.length,
-            itemBuilder: (ctx, i) => _ProgressSetSection(set: visibleSets[i], selectedPaths: selected),
+            itemCount: orderedSets.length,
+            itemBuilder: (ctx, i) => _ProgressSetSection(
+              set: orderedSets[i],
+              selectedPaths: selected,
+              rootPath: orderedSets[i].rootPath ?? session.directoryPath,
+              onSkipFile: (f) => ref.read(importSessionProvider.notifier).skipCurrentFile(f.localPath),
+              onRetryFile: (f) => ref.read(importSessionProvider.notifier).retrySkippedFile(f.localPath),
+            ),
           ),
         ),
         SafeArea(
@@ -1529,6 +1919,24 @@ class _UploadProgressStep extends ConsumerWidget {
                     label: const Text('Add folders'),
                     style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
                   ),
+                ),
+                const SizedBox(width: 12),
+                // batch3 item 6: Pause halts the queue in place (this page stays;
+                // Resume re-handshakes so sent chunks aren't re-uploaded).
+                Expanded(
+                  child: session.paused
+                      ? FilledButton.icon(
+                          onPressed: () => ref.read(importSessionProvider.notifier).resumeUpload(),
+                          icon: const Icon(Icons.play_arrow_rounded),
+                          label: const Text('Resume'),
+                          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                        )
+                      : OutlinedButton.icon(
+                          onPressed: () => ref.read(importSessionProvider.notifier).pauseUpload(),
+                          icon: const Icon(Icons.pause_rounded),
+                          label: const Text('Pause'),
+                          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                        ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -1584,7 +1992,10 @@ class _SectionBadge extends StatelessWidget {
 class _ProgressSetSection extends StatelessWidget {
   final UploadSet set;
   final Set<String>? selectedPaths;
-  const _ProgressSetSection({required this.set, this.selectedPaths});
+  final String? rootPath;
+  final void Function(UploadFile)? onSkipFile;
+  final void Function(UploadFile)? onRetryFile;
+  const _ProgressSetSection({required this.set, this.selectedPaths, this.rootPath, this.onSkipFile, this.onRetryFile});
 
   @override
   Widget build(BuildContext context) {
@@ -1592,6 +2003,8 @@ class _ProgressSetSection extends StatelessWidget {
         ? set.files
         : set.files.where((f) => selectedPaths!.contains(f.localPath)).toList();
     final setBytes = files.fold<int>(0, (s, f) => s + f.sizeBytes);
+    // Show the subfolder the group came from, like the picker does. (item 14)
+    final relPath = _relPathUtil(rootPath, set.directoryPath);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1600,10 +2013,24 @@ class _ProgressSetSection extends StatelessWidget {
           child: Row(
             children: [
               Expanded(
-                child: Text(
-                  set.displayName,
-                  style: context.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600),
-                  overflow: TextOverflow.ellipsis,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      set.displayName,
+                      style: context.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (relPath.isNotEmpty)
+                      Text(
+                        relPath,
+                        style: context.textTheme.labelSmall?.copyWith(
+                          color: context.colorScheme.onSurface.withValues(alpha: 0.5),
+                          fontFamily: 'monospace',
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                  ],
                 ),
               ),
               Text(
@@ -1618,7 +2045,11 @@ class _ProgressSetSection extends StatelessWidget {
         ...files.map(
           (f) => Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: _ProgressFileCard(file: f),
+            child: CopypartyProgressFileCard(
+              file: f,
+              onSkip: onSkipFile == null ? null : () => onSkipFile!(f),
+              onRetry: onRetryFile == null ? null : () => onRetryFile!(f),
+            ),
           ),
         ),
         const SizedBox(height: 4),
@@ -1654,52 +2085,75 @@ String? _doneTimingSuffix(UploadFile f) {
   return '${_formatTransferDuration(el)} · avg $avg';
 }
 
-class _ProgressFileCard extends StatefulWidget {
-  final UploadFile file;
-  const _ProgressFileCard({required this.file});
-
-  @override
-  State<_ProgressFileCard> createState() => _ProgressFileCardState();
+/// Same idea as [_doneTimingSuffix] but for the copy-to-phone (staging) phase
+/// — null when staging timing wasn't captured (e.g. an already-valid cached
+/// copy was reused instead of a fresh copy).
+String? _stageTimingSuffix(UploadFile f) {
+  final el = f.stageElapsed;
+  if (el == null) {
+    return null;
+  }
+  final secs = el.inMilliseconds / 1000.0;
+  final avg = _formatTransferSpeed(secs > 0 ? f.sizeBytes / secs : 0);
+  return '${_formatTransferDuration(el)} · avg $avg';
 }
 
-class _ProgressFileCardState extends State<_ProgressFileCard> {
+class CopypartyProgressFileCard extends StatefulWidget {
+  final UploadFile file;
+  // batch3 item 6: invoked to skip this file while it's the one being worked on.
+  final VoidCallback? onSkip;
+  // Invoked from the skipped-file card's retry icon to requeue it.
+  final VoidCallback? onRetry;
+  const CopypartyProgressFileCard({super.key, required this.file, this.onSkip, this.onRetry});
+
+  @override
+  State<CopypartyProgressFileCard> createState() => _ProgressFileCardState();
+}
+
+class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
   final _speedCalc = UploadSpeedCalculator();
   String _speed = '-- MiB/s';
   String _eta = '--:--';
-  UploadFileStatus? _prevStatus;
+  String? _prevPhase;
 
-  // Copyparty chunk upload OR Immich upload — the network-transfer phases.
-  static bool _isTransfer(UploadFileStatus? s) =>
-      s == UploadFileStatus.uploading || s == UploadFileStatus.immichUploading;
+  // Every phase whose uploadedBytes ticks: copying-to-phone, hashing, chunk
+  // upload, Immich upload. The meter resets at each phase boundary because the
+  // byte counter restarts. (batch3 item 7 — speed/eta for copy+hash too)
+  String? _phaseKey(UploadFile f) {
+    if (f.staging) {
+      return 'copy';
+    }
+    return switch (f.status) {
+      UploadFileStatus.hashing => 'hash',
+      UploadFileStatus.uploading => 'up',
+      UploadFileStatus.immichUploading => 'immich',
+      _ => null,
+    };
+  }
 
   @override
-  void didUpdateWidget(_ProgressFileCard old) {
+  void didUpdateWidget(CopypartyProgressFileCard old) {
     super.didUpdateWidget(old);
     final f = widget.file;
-    final s = f.status;
-    final transferring = _isTransfer(s);
+    final phase = _phaseKey(f);
 
-    // Reset the live speed meter at every phase boundary (hashing→copyparty,
-    // copyparty→immich) because uploadedBytes restarts — otherwise the byte
-    // counter going backwards produces a bogus reading. Hashing is never fed,
-    // so the speed reflects network transfer only. The FROZEN elapsed/avg now
-    // live on the model (set in the upload loop), so they survive list
-    // recycling and no longer depend on this card observing every tick. (item 2)
-    if (transferring && s != _prevStatus) {
+    if (phase != null && phase != _prevPhase) {
       _speedCalc.reset();
     }
-    if (transferring) {
+    if (phase != null) {
       _speedCalc.update(f.uploadedBytes, f.sizeBytes);
       _speed = _speedCalc.speedAsString;
       _eta = _speedCalc.timeRemainingAsString;
     }
-    _prevStatus = s;
+    _prevPhase = phase;
   }
 
   /// "22.3 / 27.9 MiB" (unit shown once when both share it), else "980 KiB / 27.9 MiB".
   static String _pairBytes(int done, int total) {
     final totalStr = formatHumanReadableBytes(total, 1);
-    final doneStr = formatHumanReadableBytes(done, 1);
+    // 3 decimals on the LIVE value once it reaches GiB — at slow speeds a
+    // 1-decimal GiB value doesn't visibly move between refreshes. (item 8)
+    final doneStr = formatHumanReadableBytes(done, done >= 1024 * 1024 * 1024 ? 3 : 1);
     final totalUnit = totalStr.split(' ').last;
     final doneParts = doneStr.split(' ');
     if (doneParts.length == 2 && doneParts.last == totalUnit) {
@@ -1714,7 +2168,12 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
     // Copying to local phone storage (batch item 4). A prefetched file copies
     // ahead while still `pending`, so key this off the transient flag, not status.
     if (file.staging) {
-      return _chip(context, 'Copying', Icons.phone_android_rounded, context.colorScheme.secondary);
+      // A resumed partial re-hashes what's already on disk before any new
+      // bytes are copied — same byte counter climbing from 0 as a real copy,
+      // so label it honestly or it reads as the copy restarting from scratch.
+      return file.verifyingResume
+          ? _chip(context, 'Verifying', Icons.fact_check_outlined, context.colorScheme.tertiary)
+          : _chip(context, 'Copying', Icons.phone_android_rounded, context.colorScheme.secondary);
     }
     // Copy-ahead finished (copied AND hashed) — waiting for its upload turn.
     if (file.stagedReady) {
@@ -1762,7 +2221,9 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
         file.status == UploadFileStatus.receiptWritten ||
         (file.status == UploadFileStatus.confirmed && !file.needsImmich);
     final isFailed = file.status == UploadFileStatus.failed;
-    final isActive = !isDone && !isFailed;
+    // User-skipped (batch3 item 6) is terminal on this card too.
+    final isSkipped = file.status == UploadFileStatus.skipped;
+    final isActive = !isDone && !isFailed && !isSkipped;
     // Copying to phone (staging, batch item 4) can happen while status is still
     // `pending` (a prefetched file copies ahead but must stay pickable by the
     // loop), so it's driven by the transient flag, not the status.
@@ -1814,12 +2275,35 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                         ),
                       ),
                       if (isActive) ...[const SizedBox(width: 8), _phaseChip(context, file)],
+                      // Copying-to-phone deliberately keeps status `pending`
+                      // (so the upload loop can still pick the file up — see
+                      // isCopying above), which meant the mid-work condition
+                      // below (status != pending) hid the skip button for the
+                      // entire copy phase. isCopying is the actual "is real
+                      // work happening on this file right now" signal for
+                      // that phase. (fixes: skip missing while copying)
+                      if (widget.onSkip != null &&
+                          isActive &&
+                          (file.status != UploadFileStatus.pending || isCopying)) ...[
+                        const SizedBox(width: 4),
+                        // batch3 item 6: skip THIS file and move on to the next.
+                        InkWell(
+                          onTap: widget.onSkip,
+                          borderRadius: BorderRadius.circular(10),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                            child: Icon(Icons.skip_next_rounded, size: 18, color: context.colorScheme.onSurfaceVariant),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 2),
                   Text(
                     isFailed
                         ? file.errorMessage ?? 'Upload failed'
+                        : isSkipped
+                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · skipped'
                         : isDone
                         ? (file.alreadyOnServer
                               ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · already on server (hash verified)'
@@ -1830,16 +2314,26 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
                         : isCopying
                         // Copying to phone (staging, batch item 4) % on the full
                         // bar so a large file being staged isn't a frozen 0%.
-                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · copying to phone '
-                              '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}%'
+                        // Copying/hashing now show bytes + speed like uploads,
+                        // with the est time in the right column. (items 7+8)
+                        // A resumed partial re-verifies what's already on disk
+                        // before any new copying — label it "verifying", not
+                        // "copying", or it reads as restarting from scratch.
+                        ? '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · '
+                              '${file.verifyingResume ? 'verifying' : 'copying'} '
+                              '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}% · $_speed'
                         : isCopied
-                        // Fully staged, waiting for its upload turn.
-                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · copied to phone · waiting to upload'
+                        // Fully staged, waiting for its upload turn. Include the
+                        // copy's own elapsed/avg speed when captured — was
+                        // silently dropped before, unlike the analogous "Done"
+                        // (upload) timing line.
+                        ? (_stageTimingSuffix(file) != null
+                              ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · copied in '
+                                    '${_stageTimingSuffix(file)} · waiting to upload'
+                              : '${formatHumanReadableBytes(file.sizeBytes, 1)} · copied to phone · waiting to upload')
                         : isHashing
-                        // Hashing % on the full bar so progress is legible on
-                        // large files (item 3).
-                        ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · hashing '
-                              '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}%'
+                        ? '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · hashing '
+                              '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}% · $_speed'
                         // transferred / total · speed
                         : '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · $_speed',
                     style: context.textTheme.labelLarge?.copyWith(
@@ -1870,6 +2364,23 @@ class _ProgressFileCardState extends State<_ProgressFileCard> {
               width: 56,
               child: isFailed
                   ? Icon(Icons.error_rounded, color: context.colorScheme.error, size: 28)
+                  : isSkipped
+                  // Tappable when a retry handler is wired up: requeue this
+                  // ONE file instead of only being able to retry via a bulk
+                  // "failed files" action or waiting for the whole session.
+                  ? (widget.onRetry == null
+                        ? Icon(Icons.skip_next_rounded, color: context.colorScheme.onSurfaceVariant, size: 26)
+                        : Tooltip(
+                            message: 'Retry this file',
+                            child: InkWell(
+                              onTap: widget.onRetry,
+                              borderRadius: BorderRadius.circular(20),
+                              child: Padding(
+                                padding: const EdgeInsets.all(4),
+                                child: Icon(Icons.replay_rounded, color: context.colorScheme.primary, size: 26),
+                              ),
+                            ),
+                          ))
                   : isDone
                   ? const Icon(Icons.check_circle_rounded, color: Colors.green, size: 28)
                   : isCopied
@@ -1969,8 +2480,12 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
 
     // Only files that were actually part of THIS upload count toward the
     // success/error tally. Files left as `pending` were skipped (unselected)
-    // and must not turn a clean run into "Completed with errors". (Issue 1)
-    final attempted = allFiles.where((f) => f.status != UploadFileStatus.pending).toList();
+    // and user-skipped files (batch3 item 6) are a deliberate choice — neither
+    // must turn a clean run into "Completed with errors". (Issue 1)
+    final attempted = allFiles
+        .where((f) => f.status != UploadFileStatus.pending && f.status != UploadFileStatus.skipped)
+        .toList();
+    final userSkipped = allFiles.where((f) => f.status == UploadFileStatus.skipped).length;
     final cpSucceeded = attempted.where((f) => f.copypartyConfirmed).length;
     final cpNeeded = attempted.where((f) => f.needsCopyparty).length;
     final imSucceeded = attempted.where((f) => f.immichConfirmed).length;
@@ -2043,6 +2558,7 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
                   ok: imSucceeded == imNeeded,
                 ),
               if (failed > 0) _StatChip(icon: Icons.error_outline_rounded, label: '$failed failed', ok: false),
+              if (userSkipped > 0) _StatChip(icon: Icons.skip_next_rounded, label: '$userSkipped skipped', ok: true),
               if (remaining > 0)
                 _StatChip(icon: Icons.pause_circle_outline_rounded, label: '$remaining remaining', ok: false),
             ],
@@ -2055,7 +2571,12 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
           child: Builder(
             builder: (ctx) {
               final selected = session.selectedPaths;
-              bool keep(UploadFile f) => selected == null || selected.contains(f.localPath);
+              // Show every file that was ATTEMPTED this session, not just the
+              // current selection — after "Retry failed" narrows the selection
+              // to the failed files, the earlier-succeeded ones must still be
+              // listed (their checkboxes feed the delete count). (batch3 item 1)
+              bool keep(UploadFile f) =>
+                  f.status != UploadFileStatus.pending || selected == null || selected.contains(f.localPath);
               final visibleSets = session.uploadSets.where((s) => s.files.any(keep)).toList();
               return ListView.builder(
                 itemCount: visibleSets.length,
@@ -2166,6 +2687,9 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
   Future<void> _shareDiagnosticLog(BuildContext context, WidgetRef ref) async {
     final logger = ref.read(copypartyLoggerProvider);
     final path = await logger.flush();
+    if (!context.mounted) {
+      return;
+    }
     final box = context.findRenderObject() as RenderBox?;
     await Share.shareXFiles(
       [XFile(path)],
@@ -2186,10 +2710,14 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
     // anyway" that loses the only local copy while offline. (Review C1/C2/BLOCKER1)
     final config = ref.read(appConfigProvider).copyparty;
     final uploader = ref.read(copypartyUploaderProvider);
+    final staging = ref.read(copypartyStagingProvider);
     String password = '';
     try {
       password = await ref.read(copypartyPasswordProvider.future);
     } catch (_) {}
+    if (!context.mounted) {
+      return;
+    }
     final cleanPath = config.uploadPath.replaceAll(RegExp(r'^/+|/+$'), '');
     final base = config.hostUrl.replaceAll(RegExp(r'/+$'), '');
 
@@ -2240,10 +2768,16 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
           progress.value++;
           continue;
         }
-        // Reachable → re-validate the content hash (the strong proof).
+        // Reachable → re-validate the content hash (the strong proof). Prefer
+        // an existing staged (phone-cached) copy over the ORIGINAL card path —
+        // hashing the source here would be slower, require the card to still
+        // be inserted, and risk the exact class of USB-unmount access this
+        // project has hit before. The staged copy is byte-identical (it's what
+        // was actually uploaded) so this is strictly equivalent, never weaker.
+        final stagedCopy = await staging.findValidStaged(f.localPath);
         final v = await uploader.verifyHash(
           fileUrl: fileUrl,
-          localPath: f.localPath,
+          localPath: stagedCopy?.path ?? f.localPath,
           password: password,
           base: presence,
           now: now,
@@ -2381,9 +2915,13 @@ class _CompletionSetSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final relPath = _relPathUtil(rootPath, set.directoryPath);
-    final files = selectedPaths == null
-        ? set.files
-        : set.files.where((f) => selectedPaths!.contains(f.localPath)).toList();
+    // Keep every attempted file visible (matches the parent's keep()) so a
+    // retry-narrowed selection can't hide succeeded-but-checked rows. (item 1)
+    final files = set.files
+        .where(
+          (f) => f.status != UploadFileStatus.pending || selectedPaths == null || selectedPaths!.contains(f.localPath),
+        )
+        .toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2430,7 +2968,8 @@ class _CompletionFileTile extends StatelessWidget {
     final cpOk = file.copypartyConfirmed;
     final imOk = file.immichConfirmed;
     final failed = file.status == UploadFileStatus.failed;
-    final skipped = file.status == UploadFileStatus.pending;
+    // Not-attempted rows: unselected (pending) or user-skipped (batch3 item 6).
+    final skipped = file.status == UploadFileStatus.pending || file.status == UploadFileStatus.skipped;
 
     Widget cpIcon = const SizedBox.shrink();
     if (file.needsCopyparty) {

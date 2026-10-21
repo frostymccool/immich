@@ -2,7 +2,20 @@ import 'package:uuid/uuid.dart';
 
 enum UploadSetStatus { pending, hashing, uploading, verified, failed, deleted }
 
-enum UploadFileStatus { pending, hashing, handshaking, uploading, confirmed, immichUploading, receiptWritten, failed }
+enum UploadFileStatus {
+  pending,
+  hashing,
+  handshaking,
+  uploading,
+  confirmed,
+  immichUploading,
+  receiptWritten,
+  failed,
+
+  /// User chose to skip this file mid-run (batch3 item 6). Not an error and not
+  /// pending — the queue moves on and it is not auto-retried.
+  skipped,
+}
 
 /// Where the file should be sent during import.
 enum UploadDestination { copypartyOnly, immichNative, both }
@@ -41,6 +54,18 @@ class UploadFile {
   // live in ephemeral card state and vanished when the list scrolled. (Batch: item 2)
   int? transferStartMs;
   int? transferEndMs;
+  // Copy-to-phone (staging) timing, same idea as transferStartMs/EndMs but for
+  // the USB-read+hash pass rather than the network transfer — so "Copied,
+  // waiting to upload" can show how long the copy took and its avg speed
+  // instead of going silent on that phase.
+  int? stageStartMs;
+  int? stageEndMs;
+  // When set, the upload loop sends this file to EXACTLY this server folder
+  // instead of deriving one from config/mirroring — used when re-uploading a
+  // receipt from the cleanup page, whose original folder must be preserved
+  // (review L1). (batch3 item 18)
+  String? uploadPathOverride;
+
   // Transient (not persisted): true while the file is being COPIED to local
   // phone storage before hashing/upload, so the card can show "Copying" instead
   // of "Hashing". (batch: item 4)
@@ -49,6 +74,38 @@ class UploadFile {
   // hashed — the hash is computed during the copy) and just waiting for its
   // upload turn. Shown as "Copied", not a stuck "Copying 100%". (feedback)
   bool stagedReady;
+
+  // Transient (not persisted): the file's hash from an EARLIER attempt this
+  // session, kept so a paused/cancelled-then-resumed file doesn't force a
+  // full USB re-read + re-hash pass when staging is off (or unavailable for
+  // this file) — a staged file already gets this via its on-disk staged
+  // copy, but the direct-read path had no equivalent, so every resume
+  // re-hashed the entire file from the card before upload could continue,
+  // even though the server-side chunk state was already preserved. For a
+  // multi-GB file that re-hash alone can take many minutes, which is
+  // indistinguishable from "starting over" even though it isn't.
+  HashedFile? cachedHash;
+
+  // Transient: true once staging has failed for this file at least once this
+  // session (e.g. the phone ran out of storage) and it fell back to reading
+  // directly from the card. Surfaced as a banner on the progress screen —
+  // without it a user who sees "everything's staged" has no way to know THIS
+  // file quietly still needs the card connected until it finishes.
+  bool stagingFallback = false;
+
+  // Transient: true while a resumed partial is being RE-HASHED (verified)
+  // from byte 0 up to the resume point, before any new bytes are copied. The
+  // byte counter climbs from 0 exactly like a real copy, so without this flag
+  // it's indistinguishable from "the copy restarted from scratch" even though
+  // no data was lost — the card should show "Verifying" instead of "Copying".
+  bool verifyingResume = false;
+
+  // Transient: bytes already sitting in the local phone cache for this file
+  // (partial or complete), checked at picker/scan time — null until checked,
+  // 0 if nothing is cached. Lets the picker show "already cached on phone"
+  // BEFORE the file is even selected for upload, e.g. after re-adding a
+  // folder whose files were partly staged in an earlier session.
+  int? stagedBytesOnPhone;
 
   UploadFile({
     required this.localPath,
@@ -91,6 +148,10 @@ class UploadFile {
   Duration? get transferElapsed => (transferStartMs != null && transferEndMs != null)
       ? Duration(milliseconds: transferEndMs! - transferStartMs!)
       : null;
+
+  /// Frozen copy-to-phone (staging) duration (null until staging finishes).
+  Duration? get stageElapsed =>
+      (stageStartMs != null && stageEndMs != null) ? Duration(milliseconds: stageEndMs! - stageStartMs!) : null;
 }
 
 class UploadSet {

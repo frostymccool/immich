@@ -1,14 +1,14 @@
 import { BadRequestException } from '@nestjs/common';
-import { BulkIdErrorReason } from 'src/dtos/asset-ids.response.dto';
-import { MapAsset } from 'src/dtos/asset-response.dto';
-import { AssetType, AssetVisibility, JobName, JobStatus } from 'src/enum';
-import { DuplicateService } from 'src/services/duplicate.service';
-import { AssetFactory } from 'test/factories/asset.factory';
-import { authStub } from 'test/fixtures/auth.stub';
-import { getForDuplicate } from 'test/mappers';
-import { newUuid } from 'test/small.factory';
-import { makeStream, newTestService, ServiceMocks } from 'test/utils';
 import { beforeEach, describe, expect, it, vitest } from 'vitest';
+import { BulkIdErrorReason } from 'src/dtos/asset-ids.response.dto.js';
+import { MapAsset } from 'src/dtos/asset-response.dto.js';
+import { AssetType, AssetVisibility, JobName, JobStatus } from 'src/enum.js';
+import { DuplicateService } from 'src/services/duplicate.service.js';
+import { AssetFactory } from 'test/factories/asset.factory.js';
+import { authStub } from 'test/fixtures/auth.stub.js';
+import { getForDuplicate } from 'test/mappers.js';
+import { newUuid } from 'test/small.factory.js';
+import { ServiceMocks, makeStream, newTestService } from 'test/utils.js';
 
 vitest.useFakeTimers();
 
@@ -367,6 +367,26 @@ describe(DuplicateService.name, () => {
 
       // Verify SidecarWrite was queued (to write tags to sidecar)
       expect(mocks.job.queueAll).toHaveBeenCalledWith([{ name: JobName.SidecarWrite, data: { id: asset1.id } }]);
+    });
+
+    it('should not merge metadata when multiple assets are kept', async () => {
+      const asset1 = AssetFactory.create({ isFavorite: true });
+      const asset2 = AssetFactory.create();
+      mocks.access.duplicate.checkOwnerAccess.mockResolvedValue(new Set(['group-1']));
+      mocks.duplicateRepository.get.mockResolvedValue({
+        duplicateId: 'group-1',
+        assets: [asset1 as unknown as MapAsset, asset2 as unknown as MapAsset],
+      });
+
+      const result = await sut.resolve(authStub.admin, {
+        groups: [{ duplicateId: 'group-1', keepAssetIds: [asset1.id, asset2.id], trashAssetIds: [] }],
+      });
+
+      expect(result[0].success).toBe(true);
+      expect(mocks.album.addAssetIdsToAlbums).not.toHaveBeenCalled();
+      expect(mocks.tag.replaceAssetTags).not.toHaveBeenCalled();
+      expect(mocks.asset.updateAllExif).not.toHaveBeenCalled();
+      expect(mocks.asset.updateAll).toHaveBeenCalledWith([asset1.id, asset2.id], { duplicateId: null });
     });
 
     // NOTE: The following integration-style tests are covered by E2E tests instead

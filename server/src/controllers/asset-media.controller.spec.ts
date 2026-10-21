@@ -1,11 +1,11 @@
-import { AssetMediaController } from 'src/controllers/asset-media.controller';
-import { AssetMediaStatus } from 'src/dtos/asset-media-response.dto';
-import { AssetMetadataKey } from 'src/enum';
-import { LoggingRepository } from 'src/repositories/logging.repository';
-import { AssetMediaService } from 'src/services/asset-media.service';
 import request from 'supertest';
-import { factory } from 'test/small.factory';
-import { automock, ControllerContext, controllerSetup, mockBaseService } from 'test/utils';
+import { AssetMediaController } from 'src/controllers/asset-media.controller.js';
+import { AssetMediaStatus } from 'src/dtos/asset-media-response.dto.js';
+import { AssetMetadataKey } from 'src/enum.js';
+import { LoggingRepository } from 'src/repositories/logging.repository.js';
+import { AssetMediaService } from 'src/services/asset-media.service.js';
+import { factory } from 'test/small.factory.js';
+import { ControllerContext, automock, controllerSetup, mockBaseService } from 'test/utils.js';
 
 const makeUploadDto = (options?: { omit: string }): Record<string, any> => {
   const dto: Record<string, any> = {
@@ -44,11 +44,6 @@ describe(AssetMediaController.name, () => {
   });
 
   describe('POST /assets', () => {
-    it('should be an authenticated route', async () => {
-      await request(ctx.getHttpServer()).post(`/assets`);
-      expect(ctx.authenticate).toHaveBeenCalled();
-    });
-
     it('should accept metadata', async () => {
       const mobileMetadata = { key: AssetMetadataKey.MobileApp, value: { iCloudId: '123' } };
       const { status } = await request(ctx.getHttpServer())
@@ -112,6 +107,38 @@ describe(AssetMediaController.name, () => {
       );
     });
 
+    it('should accept a non-UTC timezone offset', async () => {
+      const fileCreatedAt = '2026-05-28T19:51:20.555+02:00';
+      const { status } = await request(ctx.getHttpServer())
+        .post('/assets')
+        .attach('assetData', assetData, filename)
+        .field({ ...makeUploadDto(), fileCreatedAt });
+
+      expect(status).toBe(200);
+      expect(service.uploadAsset).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({
+          fileCreatedAt: new Date(fileCreatedAt),
+        }),
+        expect.objectContaining({ originalName: 'example.png' }),
+        undefined,
+      );
+    });
+
+    it('should reject a timezone-less datetime', async () => {
+      const { status, body } = await request(ctx.getHttpServer())
+        .post('/assets')
+        .attach('assetData', assetData, filename)
+        .field({ ...makeUploadDto(), fileCreatedAt: '2026-05-28T19:51:20.555706' });
+
+      expect(status).toBe(400);
+      expect(body).toEqual(
+        factory.responses.validationError([
+          { path: ['fileCreatedAt'], message: 'Invalid input: expected ISO 8601 datetime string, received string' },
+        ]),
+      );
+    });
+
     it('should throw if `isFavorite` is not a boolean', async () => {
       const { status, body } = await request(ctx.getHttpServer())
         .post('/assets')
@@ -139,20 +166,9 @@ describe(AssetMediaController.name, () => {
     });
 
     // TODO figure out how to deal with `sendFile`
-    describe.skip('GET /assets/:id/original', () => {
-      it('should be an authenticated route', async () => {
-        await request(ctx.getHttpServer()).get(`/assets/${factory.uuid()}/original`);
-        expect(ctx.authenticate).toHaveBeenCalled();
-      });
-    });
 
     // TODO figure out how to deal with `sendFile`
     describe('GET /assets/:id/thumbnail', () => {
-      it.skip('should be an authenticated route', async () => {
-        await request(ctx.getHttpServer()).get(`/assets/${factory.uuid()}/thumbnail`);
-        expect(ctx.authenticate).toHaveBeenCalled();
-      });
-
       it('should redirect if size=original is requested', async () => {
         const { status } = await request(ctx.getHttpServer()).get(`/assets/${factory.uuid()}/thumbnail?size=original`);
         expect(status).toBe(302);

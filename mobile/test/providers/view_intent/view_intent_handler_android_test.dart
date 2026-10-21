@@ -5,19 +5,21 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/domain/models/timeline.model.dart';
+import 'package:immich_mobile/domain/services/asset.service.dart';
 import 'package:immich_mobile/domain/services/timeline.service.dart';
 import 'package:immich_mobile/domain/services/user.service.dart';
 import 'package:immich_mobile/models/auth/auth_state.model.dart';
 import 'package:immich_mobile/platform/view_intent_api.g.dart';
 import 'package:immich_mobile/providers/auth.provider.dart';
+import 'package:immich_mobile/providers/infrastructure/asset.provider.dart';
 import 'package:immich_mobile/providers/view_intent/view_intent_handler_android.dart';
 import 'package:immich_mobile/providers/view_intent/view_intent_pending.provider.dart';
 import 'package:immich_mobile/routing/router.dart';
+import 'package:immich_mobile/services/api.service.dart';
+import 'package:immich_mobile/services/auth.service.dart';
+import 'package:immich_mobile/services/secure_storage.service.dart';
 import 'package:immich_mobile/services/view_intent.service.dart';
 import 'package:immich_mobile/services/view_intent_asset_resolver.service.dart';
-import 'package:immich_mobile/services/auth.service.dart';
-import 'package:immich_mobile/services/api.service.dart';
-import 'package:immich_mobile/services/secure_storage.service.dart';
 import 'package:immich_mobile/services/widget.service.dart';
 import 'package:mocktail/mocktail.dart';
 
@@ -41,11 +43,14 @@ class FakePageRouteInfo extends Fake implements PageRouteInfo<dynamic> {}
 
 class FakeTimelineService extends Fake implements TimelineService {}
 
+class FakeAssetService extends Fake implements AssetService {
+  @override
+  Stream<BaseAsset?> watchAsset(BaseAsset asset) => const Stream.empty();
+}
+
 class TestViewIntentService extends ViewIntentService {
   ViewIntentPayload? consumedAttachment;
   int cleanupStaleTempFilesCalls = 0;
-  int cleanupManagedTempFileCalls = 0;
-  final List<String> managedTempPaths = [];
 
   TestViewIntentService() : super(MockViewIntentHostApi());
 
@@ -55,16 +60,6 @@ class TestViewIntentService extends ViewIntentService {
   @override
   Future<void> cleanupStaleTempFiles() async {
     cleanupStaleTempFilesCalls++;
-  }
-
-  @override
-  Future<void> cleanupManagedTempFile() async {
-    cleanupManagedTempFileCalls++;
-  }
-
-  @override
-  Future<void> setManagedTempFilePath(String path) async {
-    managedTempPaths.add(path);
   }
 }
 
@@ -129,6 +124,7 @@ void main() {
           authNotifier = TestAuthNotifier(ref, _authState(isAuthenticated: true));
           return authNotifier;
         }),
+        assetServiceProvider.overrideWithValue(FakeAssetService()),
       ],
     );
 
@@ -195,9 +191,9 @@ void main() {
 
   testWidgets('onAppResumed handles attachment immediately when authenticated', (tester) async {
     viewIntentService.consumedAttachment = payload;
-    when(() => resolver.resolve(payload)).thenAnswer(
-      (_) async => ViewIntentResolvedAsset(asset: deepLinkAsset, timelineService: deepLinkTimelineService),
-    );
+    when(
+      () => resolver.resolve(payload),
+    ).thenAnswer((_) async => ViewIntentResolvedAsset(asset: deepLinkAsset, timelineService: deepLinkTimelineService));
 
     unawaited(handler.onAppResumed());
     await tester.pump();

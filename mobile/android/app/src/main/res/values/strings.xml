@@ -10,4 +10,7 @@
   <string name="bg_downloader_notification_channel_description">Progress updates for uploads and downloads</string>
 
   <string name="background_worker_notification_channel_name">Background backup</string>
+  <string name="copyparty_foreground_notification_channel_name">Memory card import</string>
+  <string name="copyparty_foreground_notification_title">Importing from memory card</string>
+  <string name="copyparty_foreground_notification_text">Uploading files via copyparty…</string>
 </resources>

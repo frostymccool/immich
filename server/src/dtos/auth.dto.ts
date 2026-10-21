@@ -1,9 +1,9 @@
 import { createZodDto } from 'nestjs-zod';
-import { AuthApiKey, AuthSession, AuthSharedLink, AuthUser, UserAdmin } from 'src/database';
-import { ImmichCookie, UserMetadataKey } from 'src/enum';
-import { UserMetadataItem } from 'src/types';
-import { toEmail } from 'src/validation';
 import z from 'zod';
+import type { UserMetadataItem } from 'src/types.js';
+import { AuthApiKey, AuthSession, AuthSharedLink, AuthUser, UserAdmin } from 'src/database.js';
+import { ImmichCookie, UserMetadataKey } from 'src/enum.js';
+import { toEmail } from 'src/validation.js';
 
 export type CookieResponse = {
   isSecure: boolean;
@@ -29,7 +29,7 @@ const LoginCredentialSchema = z
 const LoginResponseSchema = z
   .object({
     accessToken: z.string().describe('Access token'),
-    userId: z.string().describe('User ID'),
+    userId: z.uuidv4().describe('User ID'),
     userEmail: toEmail.describe('User email'),
     name: z.string().describe('User name'),
     profileImagePath: z.string().describe('Profile image path'),

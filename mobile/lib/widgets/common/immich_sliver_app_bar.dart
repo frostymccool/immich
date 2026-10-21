@@ -1,19 +1,21 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:auto_route/auto_route.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
+import 'package:immich_mobile/generated/translations.g.dart';
 import 'package:immich_mobile/models/server_info/server_info.model.dart';
-import 'package:immich_mobile/providers/backup/drift_backup.provider.dart';
-import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
+import 'package:immich_mobile/pages/common/settings.page.dart';
+import 'package:immich_mobile/providers/backup/backup.provider.dart';
 import 'package:immich_mobile/providers/cast.provider.dart';
-import 'package:immich_mobile/widgets/settings/copyparty_settings/copyparty_settings.dart';
-import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
+import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/readonly_mode.provider.dart';
+import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/providers/server_info.provider.dart';
 import 'package:immich_mobile/providers/sync_status.provider.dart';
 import 'package:immich_mobile/providers/timeline/multiselect.provider.dart';
@@ -22,6 +24,7 @@ import 'package:immich_mobile/routing/router.dart';
 import 'package:immich_mobile/widgets/asset_viewer/cast_dialog.dart';
 import 'package:immich_mobile/widgets/common/app_bar_dialog/app_bar_dialog.dart';
 import 'package:immich_mobile/widgets/common/user_circle_avatar.dart';
+import 'package:immich_mobile/widgets/settings/copyparty_settings/copyparty_settings.dart';
 
 class ImmichSliverAppBar extends ConsumerWidget {
   final List<Widget>? actions;
@@ -74,7 +77,7 @@ class ImmichSliverAppBar extends ConsumerWidget {
                 onPressed: () => showDialog(context: context, builder: (context) => const CastDialog()),
                 icon: Icon(isCasting ? Icons.cast_connected_rounded : Icons.cast_rounded),
               ),
-            if (actions != null) ...actions!,
+            ...?actions,
             if (showUploadButton && !isReadonlyModeEnabled) const _CopypartyIndicator(),
             if (showUploadButton && !isReadonlyModeEnabled) const _BackupIndicator(),
             const _ProfileIndicator(),
@@ -115,14 +118,14 @@ class _ProfileIndicator extends ConsumerWidget {
     final isIpad = defaultTargetPlatform == TargetPlatform.iOS && !context.isMobile;
 
     void toggleReadonlyMode() {
-      final isReadonlyModeEnabled = ref.watch(readonlyModeProvider);
+      final isReadonlyModeEnabled = ref.read(readonlyModeProvider);
       ref.read(readonlyModeProvider.notifier).toggleReadonlyMode();
 
       context.scaffoldMessenger.showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 2),
           content: Text(
-            (isReadonlyModeEnabled ? "readonly_mode_disabled" : "readonly_mode_enabled").tr(),
+            isReadonlyModeEnabled ? context.t.readonly_mode_disabled : context.t.readonly_mode_enabled,
             style: context.textTheme.bodyLarge?.copyWith(color: context.primaryColor),
           ),
         ),
@@ -145,7 +148,7 @@ class _ProfileIndicator extends ConsumerWidget {
                 ? context.colorScheme.error
                 : context.primaryColor,
             size: widgetSize / 2 - 3,
-            semanticLabel: 'new_version_available'.tr(),
+            semanticLabel: context.t.new_version_available,
           ),
         ),
         backgroundColor: Colors.transparent,
@@ -155,7 +158,7 @@ class _ProfileIndicator extends ConsumerWidget {
         child: user == null
             ? const Icon(Icons.face_outlined, size: widgetSize)
             : Semantics(
-                label: "logged_in_as".tr(namedArgs: {"user": user.name}),
+                label: context.t.logged_in_as(user: user.name),
                 child: AbsorbPointer(
                   child: Builder(
                     builder: (context) => UserCircleAvatar(
@@ -183,16 +186,7 @@ class _CopypartyIndicator extends ConsumerStatefulWidget {
   ConsumerState<_CopypartyIndicator> createState() => _CopypartyIndicatorState();
 }
 
-class _CopypartyIndicatorState extends ConsumerState<_CopypartyIndicator> with SingleTickerProviderStateMixin {
-  late final AnimationController _spin = AnimationController(vsync: this, duration: const Duration(seconds: 2))
-    ..repeat();
-
-  @override
-  void dispose() {
-    _spin.dispose();
-    super.dispose();
-  }
-
+class _CopypartyIndicatorState extends ConsumerState<_CopypartyIndicator> {
   void _open(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -202,7 +196,21 @@ class _CopypartyIndicatorState extends ConsumerState<_CopypartyIndicator> with S
             final host = cp.hostUrl.replaceAll(RegExp(r'/+$'), '');
             final path = '/${cp.uploadPath.replaceAll(RegExp(r'^/+|/+$'), '')}';
             return Scaffold(
-              appBar: AppBar(title: Text('Copyparty ($host$path)'), centerTitle: false),
+              appBar: AppBar(
+                title: Text('Copyparty ($host$path)'),
+                centerTitle: false,
+                actions: [
+                  IconButton(
+                    // Same flow as the rest of the app (e.g. asset viewer/
+                    // free-up-space settings jump straight to their own
+                    // section) — this embedded page hides server config, so
+                    // give it a direct way to the full Copyparty settings.
+                    onPressed: () => ctx.pushRoute(SettingsSubRoute(section: SettingSection.copyparty)),
+                    icon: const Icon(Icons.settings_outlined),
+                    tooltip: 'Copyparty settings',
+                  ),
+                ],
+              ),
               body: const CopypartySettings(showServerConfig: false),
             );
           },
@@ -214,24 +222,54 @@ class _CopypartyIndicatorState extends ConsumerState<_CopypartyIndicator> with S
   @override
   Widget build(BuildContext context) {
     final uploading = ref.watch(importSessionProvider.select((s) => s.step == ImportSessionStep.uploading));
-    final icon = Icon(Icons.sd_card_rounded, size: _kBadgeWidgetSize, color: context.primaryColor);
+    // Any file left failed (e.g. can't reach the copyparty server) is a
+    // persistent signal — it stays true across app restarts/navigation until
+    // the file is retried successfully or a fresh import replaces the set,
+    // same lifetime as the backup indicator's error badge below.
+    final hasError = ref.watch(
+      importSessionProvider.select(
+        (s) => s.uploadSets.any((set) => set.files.any((f) => f.status == UploadFileStatus.failed)),
+      ),
+    );
+    final iconColor = context.isDarkTheme ? Colors.white : Colors.black;
+    // Match the backup indicator exactly: a small circular-progress badge at the
+    // bottom-right of the icon while uploads are active, or the same red warning
+    // badge Immich's own backup indicator uses when it can't reach the server.
+    Widget? badge;
+    if (hasError) {
+      badge = _BadgeLabel(
+        Icon(Icons.warning_rounded, size: 12, color: context.colorScheme.error, semanticLabel: 'Copyparty import'),
+        backgroundColor: context.colorScheme.errorContainer,
+      );
+    } else if (uploading) {
+      badge = _BadgeLabel(
+        Container(
+          padding: const EdgeInsets.all(3.5),
+          child: Theme(
+            data: context.themeData.copyWith(
+              progressIndicatorTheme: context.themeData.progressIndicatorTheme.copyWith(year2023: true),
+            ),
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              strokeCap: StrokeCap.round,
+              valueColor: AlwaysStoppedAnimation<Color>(iconColor),
+              semanticsLabel: 'Copyparty import',
+            ),
+          ),
+        ),
+      );
+    }
     return IconButton(
       tooltip: 'Copyparty import',
       onPressed: () => _open(context),
-      icon: uploading
-          ? Stack(
-              alignment: Alignment.center,
-              children: [
-                icon,
-                // A rotating ring of arrows overlaid on the card to signal
-                // active uploads.
-                RotationTransition(
-                  turns: _spin,
-                  child: Icon(Icons.autorenew_rounded, size: _kBadgeWidgetSize + 8, color: context.primaryColor),
-                ),
-              ],
-            )
-          : icon,
+      icon: Badge(
+        label: badge,
+        backgroundColor: Colors.transparent,
+        alignment: Alignment.bottomRight,
+        isLabelVisible: badge != null,
+        offset: const Offset(-2, -12),
+        child: Icon(Icons.sd_card_rounded, size: _kBadgeWidgetSize, color: context.primaryColor),
+      ),
     );
   }
 }
@@ -241,10 +279,18 @@ class _BackupIndicator extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final indicatorIcon = _getBackupBadgeIcon(context, ref);
+    final backupEnabled = ref.watch(appConfigProvider.select((c) => c.backup.enabled));
+    final hasError = ref.watch(backupProvider.select((state) => state.error != BackupError.none));
+    final isUploading = ref.watch(backupProvider.select((state) => state.uploadItems.isNotEmpty));
+    final indicatorIcon = _getBackupBadgeIcon(
+      context,
+      backupEnabled: backupEnabled,
+      hasError: hasError,
+      isUploading: isUploading,
+    );
 
     return IconButton(
-      onPressed: () => context.pushRoute(const DriftBackupRoute()),
+      onPressed: () => context.pushRoute(const BackupRoute()),
       icon: Badge(
         label: indicatorIcon,
         backgroundColor: Colors.transparent,
@@ -256,16 +302,23 @@ class _BackupIndicator extends ConsumerWidget {
     );
   }
 
-  Widget? _getBackupBadgeIcon(BuildContext context, WidgetRef ref) {
-    final backupEnabled = ref.watch(appConfigProvider.select((c) => c.backup.enabled));
-    final hasError = ref.watch(driftBackupProvider.select((state) => state.error != BackupError.none));
+  Widget? _getBackupBadgeIcon(
+    BuildContext context, {
+    required bool backupEnabled,
+    required bool hasError,
+    required bool isUploading,
+  }) {
     final isDarkTheme = context.isDarkTheme;
     final iconColor = isDarkTheme ? Colors.white : Colors.black;
-    final isUploading = ref.watch(driftBackupProvider.select((state) => state.uploadItems.isNotEmpty));
 
     if (!backupEnabled) {
       return _BadgeLabel(
-        Icon(Icons.cloud_off_rounded, size: 9, color: iconColor, semanticLabel: 'backup_controller_page_backup'.tr()),
+        Icon(
+          Icons.cloud_off_rounded,
+          size: 9,
+          color: iconColor,
+          semanticLabel: context.t.backup_controller_page_backup,
+        ),
       );
     }
 
@@ -275,7 +328,7 @@ class _BackupIndicator extends ConsumerWidget {
           Icons.warning_rounded,
           size: 12,
           color: context.colorScheme.error,
-          semanticLabel: 'backup_controller_page_backup'.tr(),
+          semanticLabel: context.t.backup_controller_page_backup,
         ),
         backgroundColor: context.colorScheme.errorContainer,
       );
@@ -293,7 +346,7 @@ class _BackupIndicator extends ConsumerWidget {
               strokeWidth: 2,
               strokeCap: StrokeCap.round,
               valueColor: AlwaysStoppedAnimation<Color>(iconColor),
-              semanticsLabel: 'backup_controller_page_backup'.tr(),
+              semanticsLabel: context.t.backup_controller_page_backup,
             ),
           ),
         ),
@@ -301,7 +354,7 @@ class _BackupIndicator extends ConsumerWidget {
     }
 
     return _BadgeLabel(
-      Icon(Icons.check_outlined, size: 9, color: iconColor, semanticLabel: 'backup_controller_page_backup'.tr()),
+      Icon(Icons.check_outlined, size: 9, color: iconColor, semanticLabel: context.t.backup_controller_page_backup),
     );
   }
 }
@@ -369,13 +422,13 @@ class _SyncStatusIndicatorState extends ConsumerState<_SyncStatusIndicator> with
     // Control animations based on sync status
     if (isSyncing) {
       if (!_rotationController.isAnimating) {
-        _rotationController.repeat();
+        unawaited(_rotationController.repeat());
       }
       _dismissalController.reset();
     } else {
       _rotationController.stop();
       if (_dismissalController.status == AnimationStatus.dismissed) {
-        _dismissalController.forward();
+        unawaited(_dismissalController.forward());
       }
     }
 

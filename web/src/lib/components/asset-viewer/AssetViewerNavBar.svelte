@@ -1,31 +1,20 @@
 <script lang="ts">
-  import { goto } from '$app/navigation';
   import ActionMenuItem from '$lib/components/ActionMenuItem.svelte';
   import type { OnAction, PreAction } from '$lib/components/asset-viewer/actions/action';
-  import AddToStackAction from '$lib/components/asset-viewer/actions/AddToStackAction.svelte';
   import ArchiveAction from '$lib/components/asset-viewer/actions/ArchiveAction.svelte';
   import DeleteAction from '$lib/components/asset-viewer/actions/DeleteAction.svelte';
-  import KeepThisDeleteOthersAction from '$lib/components/asset-viewer/actions/KeepThisDeleteOthers.svelte';
-  import RatingAction from '$lib/components/asset-viewer/actions/RatingAction.svelte';
-  import RemoveAssetFromStack from '$lib/components/asset-viewer/actions/RemoveAssetFromStack.svelte';
   import RestoreAction from '$lib/components/asset-viewer/actions/RestoreAction.svelte';
-  import SetAlbumCoverAction from '$lib/components/asset-viewer/actions/SetAlbumCoverAction.svelte';
-  import SetFeaturedPhotoAction from '$lib/components/asset-viewer/actions/SetPersonFeaturedAction.svelte';
-  import SetProfilePictureAction from '$lib/components/asset-viewer/actions/SetProfilePictureAction.svelte';
-  import SetStackPrimaryAsset from '$lib/components/asset-viewer/actions/SetStackPrimaryAsset.svelte';
   import SetVisibilityAction from '$lib/components/asset-viewer/actions/SetVisibilityAction.svelte';
-  import UnstackAction from '$lib/components/asset-viewer/actions/UnstackAction.svelte';
   import LoadingDots from '$lib/components/LoadingDots.svelte';
   import ButtonContextMenu from '$lib/components/shared-components/context-menu/ButtonContextMenu.svelte';
-  import MenuOption from '$lib/components/shared-components/context-menu/MenuOption.svelte';
-  import RemoveFromAlbumAction from '$lib/components/timeline/actions/RemoveFromAlbumAction.svelte';
   import { assetViewerManager } from '$lib/managers/asset-viewer-manager.svelte';
   import { authManager } from '$lib/managers/auth-manager.svelte';
-  import { featureFlagsManager } from '$lib/managers/feature-flags-manager.svelte';
   import { languageManager } from '$lib/managers/language-manager.svelte';
-  import { Route } from '$lib/route';
+  import { getAlbumAssetActions } from '$lib/services/album.service';
   import { getGlobalActions } from '$lib/services/app.service';
   import { getAssetActions } from '$lib/services/asset.service';
+  import { getPersonAssetActions } from '$lib/services/person.service';
+  import { getStackActions } from '$lib/services/stack.service';
   import { getSharedLink, withoutIcons } from '$lib/utils';
   import type { OnUndoDelete } from '$lib/utils/actions';
   import { toTimelineAsset } from '$lib/utils/timeline-util';
@@ -38,53 +27,37 @@
     type StackResponseDto,
   } from '@immich/sdk';
   import { ActionButton, CommandPaletteDefaultProvider, Tooltip, type ActionItem } from '@immich/ui';
-  import {
-    mdiArrowLeft,
-    mdiArrowRight,
-    mdiCompare,
-    mdiDotsVertical,
-    mdiImageSearch,
-    mdiPresentationPlay,
-    mdiVideoOutline,
-  } from '@mdi/js';
+  import { mdiArrowLeft, mdiArrowRight, mdiDotsVertical, mdiVideoOutline } from '@mdi/js';
   import { t } from 'svelte-i18n';
 
   interface Props {
     asset: AssetResponseDto;
-    album?: AlbumResponseDto | null;
+    album?: AlbumResponseDto;
     person?: PersonResponseDto | null;
-    stack?: StackResponseDto | null;
-    showSlideshow?: boolean;
+    stack?: StackResponseDto;
     preAction: PreAction;
     onAction: OnAction;
     onUndoDelete?: OnUndoDelete;
-    onPlaySlideshow: () => void;
     onClose?: () => void;
-    onRemoveFromAlbum?: (assetIds: string[]) => void;
-    playOriginalVideo: boolean;
+    isPlayingOriginalVideo: boolean;
     setPlayOriginalVideo: (value: boolean) => void;
   }
 
   let {
     asset,
-    album = null,
+    album,
     person = null,
-    stack = null,
-    showSlideshow = false,
+    stack,
     preAction,
     onAction,
     onUndoDelete = undefined,
-    onPlaySlideshow,
     onClose,
-    onRemoveFromAlbum,
-    playOriginalVideo = false,
+    isPlayingOriginalVideo = false,
     setPlayOriginalVideo,
   }: Props = $props();
 
   const isOwner = $derived(authManager.authenticated && asset.ownerId === authManager.user.id);
-  const isAlbumOwner = $derived(authManager.authenticated && album?.albumUsers[0].user.id === authManager.user.id);
   const isLocked = $derived(asset.visibility === AssetVisibility.Locked);
-  const smartSearchEnabled = $derived(featureFlagsManager.value.smartSearch);
 
   const { Cast } = $derived(getGlobalActions($t));
 
@@ -96,7 +69,15 @@
     shortcuts: [{ key: 'Escape' }],
   });
 
-  const Actions = $derived(getAssetActions($t, asset));
+  const PlayOriginalVideo: ActionItem = $derived({
+    title: isPlayingOriginalVideo ? $t('play_transcoded_video') : $t('play_original_video'),
+    icon: mdiVideoOutline,
+    $if: () => asset.type === AssetTypeEnum.Video,
+    onAction: () => setPlayOriginalVideo(!isPlayingOriginalVideo),
+  });
+
+  const Actions = $derived(getAssetActions($t, { ...asset, stackPrimaryAssetId: stack?.primaryAssetId }, album));
+  const StackActions = $derived(getStackActions($t, stack, asset));
   const sharedLink = getSharedLink();
 </script>
 
@@ -134,11 +115,6 @@
     <ActionButton action={Actions.Info} />
     <ActionButton action={Actions.Favorite} />
     <ActionButton action={Actions.Unfavorite} />
-
-    {#if isOwner}
-      <RatingAction {asset} {onAction} />
-    {/if}
-
     <ActionButton action={Actions.Edit} />
 
     {#if isOwner}
@@ -147,9 +123,7 @@
 
     {#if !sharedLink}
       <ButtonContextMenu direction="left" align="top-right" color="secondary" title={$t('more')} icon={mdiDotsVertical}>
-        {#if showSlideshow && !isLocked}
-          <MenuOption icon={mdiPresentationPlay} text={$t('slideshow')} onClick={onPlaySlideshow} />
-        {/if}
+        <ActionMenuItem action={Actions.PlaySlideshow} />
 
         <ActionMenuItem action={Actions.Download} />
         <ActionMenuItem action={Actions.DownloadOriginal} />
@@ -159,64 +133,37 @@
         {/if}
 
         <ActionMenuItem action={Actions.AddToAlbum} />
-        {#if album && (isOwner || isAlbumOwner)}
-          <RemoveFromAlbumAction {album} onRemove={onRemoveFromAlbum} assetIds={[asset.id]} menuItem />
-        {/if}
+        <ActionMenuItem action={Actions.RemoveFromAlbum} />
 
-        {#if isOwner}
-          <AddToStackAction {asset} {stack} {onAction} />
-          {#if stack}
-            <UnstackAction {stack} {onAction} />
-            <KeepThisDeleteOthersAction {stack} {asset} {onAction} />
-            {#if stack?.primaryAssetId !== asset.id}
-              <SetStackPrimaryAsset {stack} {asset} {onAction} />
-              {#if stack?.assets?.length > 2}
-                <RemoveAssetFromStack {asset} {stack} {onAction} />
-              {/if}
-            {/if}
-          {/if}
-        {/if}
+        <ActionMenuItem action={StackActions.AddUploads} />
+        <ActionMenuItem action={StackActions.Unstack} />
+        <ActionMenuItem action={StackActions.KeepThisDeleteOthers} />
+        <ActionMenuItem action={StackActions.SetPrimaryAsset} />
+        <ActionMenuItem action={StackActions.RemoveAsset} />
+
         {#if album}
-          <SetAlbumCoverAction {asset} {album} />
+          {@const { SetCover } = getAlbumAssetActions($t, album, asset)}
+          <ActionMenuItem action={SetCover} />
         {/if}
         {#if person}
-          <SetFeaturedPhotoAction {asset} {person} {onAction} />
-        {/if}
-        {#if asset.type === AssetTypeEnum.Image && !isLocked}
-          <SetProfilePictureAction {asset} />
+          {@const { SetFeaturedPhoto } = getPersonAssetActions($t, person, asset)}
+          <ActionMenuItem action={SetFeaturedPhoto} />
         {/if}
 
-        {#if !isLocked}
-          {#if isOwner}
-            <ArchiveAction {asset} {onAction} {preAction} />
-            {#if !asset.isArchived && !asset.isTrashed}
-              <MenuOption
-                icon={mdiImageSearch}
-                onClick={() => goto(Route.photos({ at: stack?.primaryAssetId ?? asset.id }))}
-                text={$t('view_in_timeline')}
-              />
-            {/if}
-          {/if}
-          {#if !asset.isArchived && !asset.isTrashed && smartSearchEnabled}
-            <MenuOption
-              icon={mdiCompare}
-              onClick={() => goto(Route.search({ queryAssetId: stack?.primaryAssetId ?? asset.id }))}
-              text={$t('view_similar_photos')}
-            />
-          {/if}
+        <ActionMenuItem action={Actions.SetProfilePicture} />
+
+        {#if isOwner && !isLocked}
+          <ArchiveAction {asset} {onAction} {preAction} />
         {/if}
+        <ActionMenuItem action={Actions.ViewInTimeline} />
+        <ActionMenuItem action={Actions.ViewSimilar} />
 
         {#if !asset.isTrashed && isOwner}
           <SetVisibilityAction asset={toTimelineAsset(asset)} {onAction} {preAction} />
         {/if}
 
-        {#if asset.type === AssetTypeEnum.Video}
-          <MenuOption
-            icon={mdiVideoOutline}
-            onClick={() => setPlayOriginalVideo(!playOriginalVideo)}
-            text={playOriginalVideo ? $t('play_transcoded_video') : $t('play_original_video')}
-          />
-        {/if}
+        <ActionMenuItem action={PlayOriginalVideo} />
+
         {#if isOwner}
           <hr />
           <ActionMenuItem action={Actions.RefreshFacesJob} />

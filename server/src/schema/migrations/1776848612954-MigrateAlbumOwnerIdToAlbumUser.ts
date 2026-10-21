@@ -1,5 +1,5 @@
 import { Kysely, sql } from 'kysely';
-import { AlbumUserRole } from 'src/enum';
+import { AlbumUserRole } from 'src/enum.js';
 
 export async function up(db: Kysely<any>): Promise<void> {
   await sql`CREATE OR REPLACE FUNCTION album_user_after_insert()
@@ -26,6 +26,7 @@ export async function up(db: Kysely<any>): Promise<void> {
         .selectFrom('album')
         .select(['album.id as albumId', 'album.ownerId as userId', eb.val(AlbumUserRole.Owner).as('role')]),
     )
+    .onConflict((cb) => cb.columns(['albumId', 'userId']).doUpdateSet({ role: AlbumUserRole.Owner }))
     .execute();
   await sql`ALTER TABLE "album" DROP CONSTRAINT "album_ownerId_fkey";`.execute(db);
   await sql`ALTER TABLE "album" DROP COLUMN "ownerId";`.execute(db);

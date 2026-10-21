@@ -4,13 +4,13 @@ import 'package:drift/drift.dart' as drift;
 import 'package:drift/native.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:immich_mobile/data/db/main/database.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/domain/models/sync_event.model.dart';
 import 'package:immich_mobile/domain/services/store.service.dart';
 import 'package:immich_mobile/domain/services/sync_stream.service.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
-import 'package:immich_mobile/infrastructure/repositories/db.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/local_asset.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/store.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/sync_api.repository.dart';
@@ -36,13 +36,12 @@ class _AbortCallbackWrapper {
 
 class _MockAbortCallbackWrapper extends Mock implements _AbortCallbackWrapper {}
 
-
 void main() {
   late SyncStreamService sut;
   late SyncStreamRepository mockSyncStreamRepo;
   late SyncApiRepository mockSyncApiRepo;
-  late DriftLocalAssetRepository mockLocalAssetRepo;
-  late DriftTrashedLocalAssetRepository mockTrashedLocalAssetRepo;
+  late LocalAssetRepository mockLocalAssetRepo;
+  late TrashedLocalAssetRepository mockTrashedLocalAssetRepo;
   late AssetMediaRepository mockAssetMediaRepo;
   late MockPermissionRepository mockPermissionRepo;
   late MockApiService mockApi;
@@ -61,7 +60,7 @@ void main() {
     registerFallbackValue(const SemVer(major: 2, minor: 5, patch: 0));
 
     db = Drift(drift.DatabaseConnection(NativeDatabase.memory(), closeStreamsSynchronously: true));
-    await StoreService.init(storeRepository: DriftStoreRepository(db));
+    await StoreService.init(storeRepository: StoreRepository(db));
   });
 
   tearDownAll(() async {
@@ -70,7 +69,7 @@ void main() {
     await db.close();
   });
 
-  successHandler(Invocation _) async => true;
+  Future<bool> successHandler(Invocation _) async => true;
 
   setUp(() async {
     mockSyncStreamRepo = MockSyncStreamRepository();
@@ -132,7 +131,7 @@ void main() {
     when(
       () => mockSyncStreamRepo.updateAssetsExifV1(any(), debugLabel: any(named: 'debugLabel')),
     ).thenAnswer(successHandler);
-    when(() => mockSyncStreamRepo.updateMemoriesV1(any())).thenAnswer(successHandler);
+    when(() => mockSyncStreamRepo.updateMemoriesV2(any())).thenAnswer(successHandler);
     when(() => mockSyncStreamRepo.deleteMemoriesV1(any())).thenAnswer(successHandler);
     when(() => mockSyncStreamRepo.updateMemoryAssetsV1(any())).thenAnswer(successHandler);
     when(() => mockSyncStreamRepo.deleteMemoryAssetsV1(any())).thenAnswer(successHandler);
@@ -321,7 +320,7 @@ void main() {
       await simulateEvents(events);
 
       verifyInOrder([
-        () => mockSyncStreamRepo.updateMemoriesV1(any()),
+        () => mockSyncStreamRepo.updateMemoriesV2(any()),
         () => mockSyncApiRepo.ack(["5"]),
         () => mockSyncStreamRepo.deleteMemoriesV1(any()),
         () => mockSyncApiRepo.ack(["6"]),
@@ -350,14 +349,14 @@ void main() {
         () => mockSyncApiRepo.ack(["1"]),
         () => mockSyncStreamRepo.updateMemoryAssetsV1(any()),
         () => mockSyncApiRepo.ack(["7"]),
-        () => mockSyncStreamRepo.updateMemoriesV1(any()),
+        () => mockSyncStreamRepo.updateMemoriesV2(any()),
         () => mockSyncApiRepo.ack(["5"]),
       ]);
       verifyNever(() => mockAbortCallbackWrapper());
     });
 
     test("handles memory sync failure gracefully", () async {
-      when(() => mockSyncStreamRepo.updateMemoriesV1(any())).thenThrow(Exception("Memory sync failed"));
+      when(() => mockSyncStreamRepo.updateMemoriesV2(any())).thenThrow(Exception("Memory sync failed"));
 
       final events = [SyncStreamStub.memoryV1, SyncStreamStub.userV1Admin];
 
@@ -387,8 +386,21 @@ void main() {
 
       await simulateEvents(events);
 
-      verify(() => mockSyncStreamRepo.updateMemoriesV1(any())).called(1);
+      verify(() => mockSyncStreamRepo.updateMemoriesV2(any())).called(1);
       verify(() => mockSyncApiRepo.ack(["5"])).called(1);
+    });
+
+    test("processes memory v2 events", () async {
+      final events = [SyncStreamStub.memoryV2, SyncStreamStub.memoryToAssetV2];
+
+      await simulateEvents(events);
+
+      verifyInOrder([
+        () => mockSyncStreamRepo.updateMemoriesV2(any()),
+        () => mockSyncApiRepo.ack(["9"]),
+        () => mockSyncStreamRepo.updateMemoryAssetsV1(any()),
+        () => mockSyncApiRepo.ack(["10"]),
+      ]);
     });
   });
 

@@ -1,11 +1,11 @@
 import { createZodDto } from 'nestjs-zod';
-import { SharedLink } from 'src/database';
-import { HistoryBuilder } from 'src/decorators';
-import { AlbumResponseSchema, mapAlbum } from 'src/dtos/album.dto';
-import { AssetResponseSchema, mapAsset } from 'src/dtos/asset-response.dto';
-import { SharedLinkTypeSchema } from 'src/enum';
-import { isoDatetimeToDate } from 'src/validation';
 import z from 'zod';
+import { SharedLink } from 'src/database.js';
+import { HistoryBuilder } from 'src/decorators.js';
+import { AlbumResponseSchema, mapAlbum } from 'src/dtos/album.dto.js';
+import { AssetResponseSchema, mapAsset } from 'src/dtos/asset-response.dto.js';
+import { SharedLinkType, SharedLinkTypeSchema } from 'src/enum.js';
+import { isoDatetimeToDate } from 'src/validation.js';
 
 const SharedLinkSearchSchema = z
   .object({
@@ -31,6 +31,29 @@ const SharedLinkCreateSchema = z
     allowDownload: z.boolean().default(true).optional().describe('Allow downloads'),
     showMetadata: z.boolean().default(true).optional().describe('Show metadata'),
   })
+  .superRefine(({ type, albumId, assetIds }, ctx) => {
+    switch (type) {
+      case SharedLinkType.Album: {
+        if (!albumId) {
+          ctx.addIssue(`albumId is required for type ${SharedLinkType.Album}`);
+        }
+        if (assetIds && assetIds.length > 0) {
+          ctx.addIssue(`assetIds can only be used with type ${SharedLinkType.Individual}`);
+        }
+        return;
+      }
+      case SharedLinkType.Individual: {
+        if (!assetIds || assetIds.length === 0) {
+          ctx.addIssue(`assetIds are required for type ${SharedLinkType.Individual}`);
+        }
+
+        if (albumId) {
+          ctx.addIssue(`albumId can only be used with type ${SharedLinkType.Album}`);
+        }
+        return;
+      }
+    }
+  })
   .meta({ id: 'SharedLinkCreateDto' });
 
 const SharedLinkEditSchema = z
@@ -53,10 +76,10 @@ const SharedLinkLoginSchema = z
 
 const SharedLinkResponseSchema = z
   .object({
-    id: z.string().describe('Shared link ID'),
+    id: z.uuidv4().describe('Shared link ID'),
     description: z.string().nullable().describe('Link description'),
     password: z.string().nullable().describe('Has password'),
-    userId: z.string().describe('Owner user ID'),
+    userId: z.uuidv4().describe('Owner user ID'),
     key: z.string().describe('Encryption key (base64url)'),
     type: SharedLinkTypeSchema,
     createdAt: isoDatetimeToDate.describe('Creation date'),

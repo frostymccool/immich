@@ -12,9 +12,40 @@ Personal fork of immich-app/immich. Custom features stack on
 is identifiable on-device. Increment BOTH numbers by 1 together (the build
 code runs 3048 ahead of the custom number):
 ```
-3.0.0-custom.N+<3048+N>  →  3.0.0-custom.(N+1)+<3049+N>
+3.3.3-custom.N+<3048+N>  →  3.3.3-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.0.0-custom.97+3145** (next push → `98+3146`).
+Latest pushed: **3.3.3-custom.131+3179** (next push → `132+3180`).
+
+The `3.3.3` base tracks the upstream immich-app/immich release this fork is
+synced to — bump it (and re-derive the offset if upstream's own build number
+shifted) the next time upstream gets pulled in, not on every push.
+
+Upstream's release-branch process does NOT keep `main` as a clean linear
+history across releases — e.g. v3.2.0 and v3.3.3 weren't a fast-forward of
+each other (40 commits unique to the old v3.2.0 path, 288 new on v3.3.3's).
+When the next sync hits this, `git merge --ff-only <tag>` on `main` will fail;
+don't try a real 3-way merge either (it surfaces dozens of synthetic
+conflicts in files like pnpm-lock.yaml/package.json/server-* with no real
+fork content to resolve, since `main` has zero fork-specific commits). Just
+confirm with the user, then `git reset --hard <tag>` + force-push `main` to
+exactly match the new tag. When merging that into
+`feature/custom-upload-settings` afterward, most conflicts will similarly be
+upstream-only churn — diff each conflicted file against the PREVIOUS sync
+point (not some ancient merge-base) to tell which ones the fork actually
+touched; take "theirs" wholesale for the rest.
+
+### Local Dart toolchain now available for formatting
+A standalone Dart SDK can be fetched directly (bypasses the "no local Dart
+toolchain" limitation for `dart format`, though not for `flutter analyze`/build):
+```
+curl -sS -o /tmp/dartsdk.zip https://storage.googleapis.com/dart-archive/channels/stable/release/latest/sdk/dartsdk-linux-x64-release.zip
+unzip -q /tmp/dartsdk.zip -d /tmp/dart-sdk
+/tmp/dart-sdk/dart-sdk/bin/dart format --line-length 120 <files>
+```
+Only pass specific files or use the same exclusions CI does
+(`-not \( -name '*.g.dart' -o -name '*.drift.dart' -o -name '*.gr.dart' \)`) —
+running it over the whole `lib/` tree unfiltered reformats generated files
+that CI's format step deliberately skips, producing an unrelated diff.
 
 ### Branch targets
 - New feature branches off `feature/custom-upload-settings`, not `main`.
@@ -140,8 +171,8 @@ verification + cleanup workflow. Grown well beyond the original 5-step import.
 `flutter_secure_storage` (key `copyparty_password`, NOT in `SettingsKey`/`AppConfig`).
 (`writeReceipts` still exists but is unused — the `.cpreceipt` sidecar was dropped.)
 
-**DB** schema **v32**: `copyparty_upload_receipts` (v31) + `upload_confirmed` /
-`immich_asset_id` columns (v32). Raw SQL, outside the Drift entity model.
+**DB** schema **v36**: `copyparty_upload_receipts` (v35) + `upload_confirmed` /
+`immich_asset_id` columns (v36). Raw SQL, outside the Drift entity model.
 
 **Import** — directory picker → scan → options (per-file live name/size/partial
 verification + Immich-by-checksum axis, destination CP-only / Both / Immich) →
@@ -195,7 +226,7 @@ copyparty (by ANY device) into Immich via its API. Branch
 
 ## Mobile project structure
 
-- Flutter 3.44.1 / Dart SDK ≥3.12.0
+- Flutter 3.47.2 / Dart SDK ≥3.12.0
 - State management: Riverpod (`StateNotifierProvider`, `FutureProvider`, `Provider`)
 - ORM: Drift for all standard entities; raw SQL for non-Drift tables
 - Navigation: auto_route for most pages; `MaterialPageRoute` push for modal flows
@@ -215,18 +246,66 @@ When adding a new settings domain:
 4. Add enum values to `SettingsKey`
 
 ### Database / Drift
+As of v3.2.0, moved from `lib/infrastructure/repositories/` to `lib/data/db/`
+(upstream restructuring); the class name (`Drift`) and `driftProvider` are unchanged.
+
 | File | Purpose |
 |------|---------|
-| `mobile/lib/infrastructure/repositories/db.repository.dart` | `Drift` class — schema version, migrations, `beforeOpen` |
-| `mobile/lib/infrastructure/repositories/db.repository.steps.dart` | Generated migration steps (versions 1-30) |
-| `mobile/test/drift/main/generated/` | Generated schema snapshots (versions 1-30) |
+| `mobile/lib/data/db/main/database.dart` | `Drift` class — schema version, migrations, `beforeOpen` |
+| `mobile/lib/data/db/main/database.steps.dart` | Generated (gitignored) via `dart run drift_dev make-migrations` — provides `migrationSteps(...)` |
+| `mobile/drift_schemas/main/*.json` | Schema snapshots, one per drift-tracked version (real content up to v34 — v36/v37 are auto-generated placeholders, see below) |
+| `mobile/test/drift/main/generated/` | Generated (gitignored) via `dart run drift_dev schema generate ...` |
 
 Migration rules:
-- Bump `schemaVersion` (currently 32)
+- Bump `schemaVersion` (currently 37 — see note below on why it's ahead of the last drift snapshot)
 - Add raw-SQL migration in `onUpgrade` guarded by version range
 - Mirror the same `CREATE TABLE/INDEX IF NOT EXISTS` in `beforeOpen` for fresh installs
-- Do NOT regenerate `test/drift/main/generated/` — only covers 1-30 and tests only test to the last generated version
 - `Drift` is a singleton accessed via `driftProvider`; test files create it directly with `NativeDatabase.memory()`
+- Upstream's `onUpgrade` re-reads the actual `PRAGMA user_version` as `current` inside the
+  transaction (race-safety fix, added in the v3.3.3 sync) rather than trusting the `from`
+  parameter — the copyparty raw-SQL guards below use `current` too, for the same reason.
+
+**copyparty's schema versions are raw SQL, not drift-tracked.** `copyparty_upload_receipts`
+isn't a Drift entity, so its table-creation and column-adding migrations are hand-written
+`customStatement(...)` calls in `onUpgrade`, gated by `if (current < N && to >= N)` — NOT part
+of the generated `migrationSteps(...)` helper. This means `schemaVersion` can be (and is) ahead
+of the highest real drift-schema version (currently v34): `dart run drift_dev make-migrations`
+still requires a `from34To36` (or whatever the gap is) parameter on `migrationSteps(...)` once
+it notices the version jump and auto-creates a matching (structurally-identical) placeholder
+schema snapshot — provide it as a no-op, since the actual work happens in the raw-SQL block
+below it. **This raw-SQL ceiling gets renumbered on every sync that adds real upstream schema
+versions** — it's been v31→v32→v33 (after the v3.1.0 sync), then v34→v35→v36 (after v3.3.3,
+once upstream's own schema grew from v31 to v34). Expect to renumber it again next time.
+**Always guard column-adding ALTER TABLEs with a `pragma_table_info` check, not just a version
+number** — a prior renumbering (during the v3.1.0 sync) taught this the hard way: devices
+already on an older numbering scheme can have stored versions that don't mean what the current
+code assumes, causing a `duplicate column name` crash on upgrade (fixed in build 121).
+
+**Build 129 regression (v3.3.3 sync), fixed in build 130 — `schemaVersion` is now 37.** The
+`pragma_table_info` lesson above was only applied to the copyparty-specific column guards, not
+to the *generated* `migrationSteps(...)` call itself, and that gap bit for real: devices still
+on the OLD pre-sync raw-SQL numbering (stored `user_version` 32 or 33, meaning real upstream v31
+content + copyparty's old table/columns) collided with upstream's own schema growing into that
+same 32/33 range in the v3.3.3 release (real v32 adds `local_asset_entity.previous_checksum`,
+real v33 drops an `asset_face` foreign key). The code trusted the stored version number, assumed
+those two real steps were already applied, and silently skipped them — every local-asset hash
+and sync call then crashed with `no such column: local_asset_entity.previous_checksum`, which
+meant **zero files were ever selected for backup** (confirmed via the in-app log, not guessed —
+see the engineering-discipline section above). Fix: `database.dart`'s `onUpgrade` now computes a
+separate `generatedStepsCurrent` for the generated-steps call — if `current > 31` but
+`previous_checksum` doesn't actually exist on `local_asset_entity`, real progress is clamped
+back to 31 regardless of what the stored version claims, so the real v31→32→33→34 steps run for
+real. `schemaVersion` was bumped 36→37 purely to force `onUpgrade` to fire again for devices
+already stuck in the broken state (their stored version was already 36, so without a bump
+`onUpgrade` wouldn't even run) — `from36To37` is a drift-tracked no-op, same pattern as
+`from34To36`. Devices affected by build 129 self-heal automatically on the next launch after
+updating; no reinstall or data loss. Covered by
+`test/drift/main/v3_3_3_sync_regression_test.dart`, which simulates both the not-yet-broken
+(stored v33) and already-broken (stored v36) device states against a real file-backed DB built
+from the genuine v31 schema snapshot plus the old copyparty raw SQL, and asserts both repair to
+a complete v37. **Lesson generalized: the pragma_table_info guard has to cover anything the
+generated migration steps assume is already done, not just this fork's own raw-SQL columns** —
+a renumbering collision can silently invalidate upstream's own steps just as easily.
 
 ### Copyparty feature files
 | File | Purpose |
@@ -241,9 +320,77 @@ Migration rules:
 | `lib/pages/copyparty/copyparty_import.page.dart` | 5-step import UI + "Run upload self-test" action; pushed via `MaterialPageRoute` from `CopypartySettings` |
 | `lib/pages/copyparty/copyparty_cleanup.page.dart` | "Pending Cleanup" — multi-state live server verification before delete (never trusts a stored flag) |
 | `lib/widgets/settings/copyparty_settings/copyparty_settings.dart` | Settings widget; added as `SettingSection.copyparty` in `settings.page.dart`; Diagnostics section (share/clear log) |
+| `bin/copyparty_test_harness.dart` | Standalone CLI test harness — runs `CopypartyUploaderService` directly against a real server (`dart run bin/copyparty_test_harness.dart --help`). Scenarios: `basic`/`resume`/`broken-pipe`/`all`. Needs its own delete-capable password via `--password`/`COPYPARTY_TEST_PASSWORD` (the in-app "Test harness password" debug setting only lives in the phone's secure storage, unreachable from this process — copy it over manually) |
 
 Navigation note: `CopypartyImportPage` is NOT registered in `router.dart` (auto_route).
 It is pushed directly: `Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CopypartyImportPage()))`.
+
+Shared settings widgets note: `SettingGroupTitle`/`SettingListTile`/
+`SettingsSubPageScaffold` (used by `copyparty_settings.dart`) moved from
+`mobile/lib/widgets/settings/*.dart` into the `immich_ui` package
+(`import 'package:immich_ui/immich_ui.dart';`) as of the v3.3.3 sync — check
+that import path first if either of these ever goes missing again after a
+sync, rather than assuming the class itself was renamed/removed.
+
+### Local Flutter SDK also available (not just standalone Dart)
+Beyond the standalone-Dart-for-`dart format` trick above, the FULL Flutter SDK is
+also fetchable in this environment (`storage.googleapis.com` isn't blocked) —
+enough for real `dart analyze`/`flutter pub get`, not just formatting:
+```
+curl -sS -o /tmp/flutter.tar.xz https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.47.2-stable.tar.xz
+tar -xf /tmp/flutter.tar.xz -C /tmp/flutter-sdk   # ~1.5GB download, ~12GB extracted
+git config --global --add safe.directory /tmp/flutter-sdk/flutter   # needed when running as root
+export PATH="/tmp/flutter-sdk/flutter/bin:$PATH"
+```
+Check `mobile/pubspec.yaml`'s `environment.flutter` on every sync — it's bumped
+almost every upstream release (3.47.2 as of the v3.3.3 sync), and
+`build-custom-apk.yml`'s `flutter-version` must be kept in lockstep with it (a
+mismatch fails `flutter pub get` in CI with "version solving failed"). Swap
+the version in the curl URL above for whatever `pubspec.yaml` currently says.
+
+As of v3.2.0 the openapi Dart client (`mobile/generated/openapi`, imported by
+`mobile/pubspec.yaml` as a path dependency) is no longer checked in — it must be
+generated before `flutter pub get` will resolve at all. **Pigeon-generated
+platform code is also no longer checked in** (`lib/platform/*.g.dart`,
+`android/**/*.g.kt`, `ios/**/*.g.swift` — upstream commit "remove Pigeon
+generated code", landed in this same v3.1.0→v3.2.0 window): a fresh checkout
+won't compile at all (`'NativeSyncApi' isn't a type`, etc.) until pigeon runs.
+```
+npm install -g @openapitools/openapi-generator-cli@2.41.0   # generate-dart-sdk.sh expects a real binary on PATH, not just npx — version must match the root mise.toml pin
+cd open-api && bash ./bin/generate-dart-sdk.sh   # also needs java (both present here)
+cd ../mobile && flutter pub get   # ~90s; run once per fresh session/container
+dart run drift_dev make-migrations   # regenerates lib/data/db/main/database.steps.dart (gitignored)
+dart run build_runner build          # routes, riverpod, freezed, drift entities
+ls pigeon/*.dart | xargs -n1 -P4 -I{} dart run pigeon --input {}   # regenerates lib/platform/*.g.dart + native .g.kt/.g.swift
+dart analyze --fatal-infos <files>   # matches CI's Dart Analysis check exactly
+```
+`build-custom-apk.yml` needs the same steps (global npm install, openapi
+client, drift migrations, build_runner, pigeon) before `flutter build apk` —
+it doesn't use mise, so each was added as its own workflow step; keep them in
+that order if the DB, openapi spec, or a `pigeon/*.dart` file changes again.
+(Build 124 shipped without the `npm install -g` step and failed CI with
+`openapi-generator-cli: command not found` — the local sandbox had it on PATH
+via a manual shim during testing, which masked the gap. Build 125 fixed that
+but still omitted the pigeon step entirely — `dart analyze` passed locally
+because `.g.dart` files were left over on disk from earlier manual testing,
+but `flutter build apk` failed on a clean CI checkout with dozens of "isn't a
+type" errors for every pigeon-generated class. Build 126 added the missing
+step. Lesson: a local verification pass that reuses a dirty working tree can
+hide a missing-codegen-step bug that only a truly clean checkout exposes —
+CI's checkout is always clean, so re-verify against a state that mirrors that
+when a "no code changed, just CI config" fix keeps failing.)
+
+Previously-noted limitation now resolved: earlier sessions saw `flutter test` fail in this
+sandbox with a `sqlite3` native-asset build-hook hash mismatch (`Bad state: Hash of downloaded
+file libsqlite3...`). As of the build-130 fix verification, `flutter test` runs cleanly
+end-to-end (confirmed: full suite + a new migration regression test using a real file-backed
+`NativeDatabase`, ~1625 tests, all passing) — whatever proxy/environment artifact caused it
+before is no longer present. Don't assume it's broken; try a real `flutter test` run before
+falling back to analyze-only verification. (Plain `dart run <script>` — build_runner, drift_dev,
+pigeon, easy_localization, the test harness — still won't work for anything that imports
+`package:flutter/...` transitively, e.g. `database.dart`: it needs the Flutter engine, not just
+the Dart SDK, so use `flutter test` for DB/migration-level checks instead of a bare `dart run`
+script.)
 
 ### copyparty up2k — verified protocol facts (from logs + `u2c.py`)
 - **Chunk SIZE must match the server EXACTLY** (this was THE upload bug — builds

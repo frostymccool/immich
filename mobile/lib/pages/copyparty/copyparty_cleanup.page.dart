@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
+import 'package:immich_mobile/pages/copyparty/copyparty_import.page.dart';
 import 'package:immich_mobile/providers/api.provider.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
@@ -72,18 +75,48 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   final Set<String> _collapsed = {}; // group keys currently collapsed (item 7)
   String _password = '';
   bool _loading = true;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+  // Guards the connectivity-triggered retry specifically — separate from
+  // _loading (which only reflects the very first load) so a burst of
+  // connectivity events (a VPN handshake can fire several in a row) can't
+  // pile up overlapping retries.
+  bool _autoRetrying = false;
 
   @override
   void initState() {
     super.initState();
-    _loadExisting();
+    unawaited(_loadExisting());
+    // A one-shot check that fails while offline (or mid network-path-change,
+    // e.g. connecting a VPN) previously stayed stuck showing the raw error
+    // until the user manually pulled to refresh. Listen for ANY connectivity
+    // change and retry automatically instead — also resets the shared HTTP
+    // client, since a dart:io HttpClient can keep failing against a route
+    // that no longer exists even after a working one is available again.
+    _connectivitySub = Connectivity().onConnectivityChanged.listen((_) async {
+      if (!mounted || _autoRetrying) {
+        return;
+      }
+      _autoRetrying = true;
+      try {
+        ref.read(copypartyUploaderProvider).resetConnection();
+        await _loadExisting();
+      } finally {
+        _autoRetrying = false;
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    unawaited(_connectivitySub?.cancel());
+    super.dispose();
   }
 
   Future<void> _loadExisting() async {
     final receipts = await ref.read(copypartyReceiptRepositoryProvider).getUndeleted();
     final existing = <CopypartyReceipt>[];
     for (final r in receipts) {
-      if (await File(r.localPath).exists()) {
+      if (File(r.localPath).existsSync()) {
         existing.add(r);
       }
     }
@@ -113,6 +146,15 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     setState(() {
       _verify[id] = f(_verify[id] ?? const ServerFileVerification());
     });
+  }
+
+  /// Prefer an existing staged (phone-cached) copy over the ORIGINAL card path
+  /// for any re-hash — it's byte-identical to what was actually uploaded, so
+  /// this is strictly equivalent, never weaker, while being faster and not
+  /// requiring the card to still be inserted (the whole point of staging).
+  Future<String> _effectiveLocalPath(String sourcePath) async {
+    final staged = await ref.read(copypartyStagingProvider).findValidStaged(sourcePath);
+    return staged?.path ?? sourcePath;
   }
 
   /// Cheap on-load check: a folder listing per file → presence, size, partial.
@@ -147,7 +189,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       }
       VerifyState immich;
       try {
-        final assetId = await immichAssetIdByChecksum(api, r.localPath);
+        final assetId = await immichAssetIdByChecksum(api, await _effectiveLocalPath(r.localPath));
         immich = assetId != null ? VerifyState.yes : VerifyState.no;
       } catch (_) {
         immich = VerifyState.unknown;
@@ -170,9 +212,10 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     final uploader = ref.read(copypartyUploaderProvider);
     final api = ref.read(apiServiceProvider).assetsApi;
     try {
+      final effectivePath = await _effectiveLocalPath(r.localPath);
       final cp = await uploader.verifyHash(
         fileUrl: r.copypartyUrl,
-        localPath: r.localPath,
+        localPath: effectivePath,
         password: _password,
         base: _verify[r.id!] ?? const ServerFileVerification(),
         onHashProgress: (done, total) {
@@ -182,10 +225,10 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         },
       );
       VerifyState immich = VerifyState.unknown;
-      bool applicable = _immichApplies(r);
+      final applicable = _immichApplies(r);
       if (applicable) {
         try {
-          immich = (await immichAssetIdByChecksum(api, r.localPath)) != null ? VerifyState.yes : VerifyState.no;
+          immich = (await immichAssetIdByChecksum(api, effectivePath)) != null ? VerifyState.yes : VerifyState.no;
         } catch (_) {
           immich = VerifyState.unknown;
         }
@@ -284,6 +327,35 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     ref.invalidate(pendingCleanupProvider);
   }
 
+  /// Bulk "Remove from list" for the current selection (batch3 item 19) — same
+  /// semantics as the per-file action: stops tracking, deletes nothing.
+  Future<void> _removeSelected() async {
+    final targets = _existing.where((r) => _selected.contains(r.id) && !_deleted.contains(r.id)).toList();
+    if (targets.isEmpty) {
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Remove ${targets.length} from list?'),
+        content: const Text(
+          'This only stops tracking these files for cleanup. '
+          'The local files and the server copies are NOT deleted.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) {
+      return;
+    }
+    for (final r in targets) {
+      await _removeFromList(r);
+    }
+  }
+
   void _setAllCollapsed(bool collapsed) {
     setState(() {
       _collapsed.clear();
@@ -341,68 +413,24 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     }
   }
 
-  /// Recovery (Issue 8): re-upload a file whose verification failed, then verify.
+  /// Recovery (Issue 8, reworked batch3 item 18): re-upload now goes through
+  /// the MAIN import queue, so it shows on the active-uploads pages with the
+  /// full progress card. The file's ORIGINAL server folder is preserved via
+  /// uploadPathOverride (review L1), and the fresh receipt supersedes this one.
   Future<void> _uploadNow(CopypartyReceipt r) async {
-    if (_uploading.contains(r.id)) {
-      return;
-    }
-    setState(() {
-      _uploading.add(r.id!);
-      _progress[r.id!] = 0;
-    });
-    final config = ref.read(appConfigProvider).copyparty;
-    final uploader = ref.read(copypartyUploaderProvider);
-    final notifier = ref.read(importSessionProvider.notifier);
-    final repo = ref.read(copypartyReceiptRepositoryProvider);
-    // Re-upload to the file's ORIGINAL folder (its receipt URL minus the
-    // filename), not the base upload path — otherwise an FB9 mirrored-folder
-    // file gets re-uploaded to the wrong place and stays unverifiable. (L1)
-    final fileUri = Uri.parse(r.copypartyUrl);
-    final segs = List<String>.from(fileUri.pathSegments)..removeLast();
-    final uploadPath = '/${segs.join('/')}';
-    String? error;
-    try {
-      // Repair the copyparty side (hash 0-20%, chunk upload 20-100%).
-      await uploader.uploadFile(
-        r.localPath,
-        config.hostUrl,
-        uploadPath,
-        _password,
-        parallelism: config.parallelConnections,
-        onHashProgress: (done, total) {
-          if (total > 0 && mounted) {
-            setState(() => _progress[r.id!] = 0.2 * done / total);
-          }
-        },
-        onUploadProgress: (done, total) {
-          if (total > 0 && mounted) {
-            setState(() => _progress[r.id!] = 0.2 + 0.8 * done / total);
-          }
-        },
-      );
-      // Also repair the Immich side if this file belongs in Immich and isn't
-      // there yet — otherwise "Upload now" would leave it permanently unsafe.
-      if (_immichApplies(r) && (_verify[r.id]?.immich != VerifyState.yes)) {
-        final assetId = await notifier.uploadPathToImmich(r.localPath, r.filename);
-        if (assetId != null && r.id != null) {
-          await repo.markImmichUploaded(r.id!, assetId);
-        }
-      }
-    } catch (e) {
-      error = e.toString();
-    }
+    await ref.read(importSessionProvider.notifier).queueReceiptUploads([r]);
     if (!mounted) {
       return;
     }
-    setState(() {
-      _uploading.remove(r.id);
-      _progress.remove(r.id);
-    });
-    if (error != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed: $error')));
-      return;
-    }
-    await _verifyFile(r);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Queued ${r.filename} for upload'),
+        action: SnackBarAction(
+          label: 'View',
+          onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CopypartyImportPage())),
+        ),
+      ),
+    );
   }
 
   Future<void> _deleteSelected() async {
@@ -513,6 +541,8 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     final allSelectedSafe =
         _selected.isNotEmpty &&
         _existing.where((r) => _selected.contains(r.id)).every((r) => _verify[r.id]?.safeToDeleteAt(now) ?? false);
+    // batch3 item 15: only offer "Select verified" when something IS verified.
+    final anyVerified = _existing.any((r) => !_deleted.contains(r.id) && (_verify[r.id]?.safeToDeleteAt(now) ?? false));
 
     return Scaffold(
       appBar: AppBar(
@@ -520,7 +550,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         centerTitle: false,
         actions: [
           if (!_loading && _existing.isNotEmpty) ...[
-            TextButton(onPressed: _selectAllVerified, child: const Text('Select verified')),
+            if (anyVerified) TextButton(onPressed: _selectAllVerified, child: const Text('Select verified')),
             TextButton(
               onPressed: (busy || _selected.isEmpty) ? null : _verifySelected,
               child: Text('Verify${_selected.isEmpty ? '' : ' (${_selected.length})'}'),
@@ -534,12 +564,17 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                     _setAllCollapsed(false);
                   case 'collapseAll':
                     _setAllCollapsed(true);
+                  case 'removeSelected':
+                    unawaited(_removeSelected());
                 }
               },
               itemBuilder: (ctx) => [
                 PopupMenuItem(value: 'selectAll', child: Text(allSelected ? 'Deselect all' : 'Select all')),
                 const PopupMenuItem(value: 'expandAll', child: Text('Expand all')),
                 const PopupMenuItem(value: 'collapseAll', child: Text('Collapse all')),
+                // batch3 item 19: bulk variant of the per-file "Remove from list".
+                if (_selected.isNotEmpty)
+                  PopupMenuItem(value: 'removeSelected', child: Text('Remove ${_selected.length} from list')),
               ],
             ),
           ],
@@ -828,12 +863,14 @@ class _CleanupGroupSection extends StatelessWidget {
             'name',
             verifications.where((v) => v.filenamePresent == VerifyState.yes).length,
             verifications.length,
+            confirmedAbsent: verifications.where((v) => v.filenamePresent == VerifyState.no).length,
           ),
           _countChip(
             context,
             'size',
             verifications.where((v) => v.sizeMatches == VerifyState.yes).length,
             verifications.length,
+            confirmedAbsent: verifications.where((v) => v.sizeMatches == VerifyState.no).length,
           ),
           if (partial > 0)
             _rawChip(
@@ -864,15 +901,25 @@ class _CleanupGroupSection extends StatelessWidget {
     int total, {
     bool neutralWhenZero = false,
     IconData? zeroIcon,
+    // How many of the "not yes" ones are CONFIRMED absent (VerifyState.no) —
+    // as opposed to simply never checked/failed (VerifyState.unknown, e.g. a
+    // network error mid-request). A file reaching Pending Cleanup was, by
+    // definition, uploaded successfully at some point, so "0/N" from a failed
+    // check is not evidence it's gone — only a real .no count is. Without
+    // this, a network blip renders identically to "every file is missing."
+    int confirmedAbsent = 0,
   }) {
     final full = yes == total;
     final none = yes == 0;
+    final allUnknown = none && confirmedAbsent == 0;
     final color = full
         ? Colors.green.shade600
         : (none
-              ? (neutralWhenZero ? context.colorScheme.onSurfaceVariant : context.colorScheme.error)
+              ? ((neutralWhenZero || allUnknown) ? context.colorScheme.onSurfaceVariant : context.colorScheme.error)
               : Colors.orange.shade700);
-    final icon = full ? Icons.check_circle : (none ? (zeroIcon ?? Icons.cancel) : Icons.adjust);
+    final icon = full
+        ? Icons.check_circle
+        : (none ? (allUnknown ? Icons.help_outline : (zeroIcon ?? Icons.cancel)) : Icons.adjust);
     return _rawChip(context, '$label $yes/$total', color, icon);
   }
 
@@ -922,10 +969,10 @@ class _CleanupTile extends StatelessWidget {
     // Verification has been attempted and the copyparty side is NOT good.
     final hashTried = v.hashValidatedAt != null;
     final cpFailed =
-        (v.filenamePresent == VerifyState.no ||
+        v.filenamePresent == VerifyState.no ||
         v.sizeMatches == VerifyState.no ||
         v.partialExists == VerifyState.yes ||
-        (hashTried && !v.hashFreshAt(now)));
+        (hashTried && !v.hashFreshAt(now));
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -991,7 +1038,7 @@ class _CleanupTile extends StatelessWidget {
                           ),
                         ),
                       // Progress bar + % while verifying (hashing) or uploading (FB2/FB8).
-                      if ((verifying || uploading))
+                      if (verifying || uploading)
                         Padding(
                           padding: const EdgeInsets.only(top: 6),
                           child: Row(
@@ -1014,21 +1061,25 @@ class _CleanupTile extends StatelessWidget {
                       const SizedBox(height: 4),
                       Row(
                         children: [
-                          TextButton.icon(
-                            onPressed: (verifying || uploading) ? null : onVerify,
-                            icon: verifying
-                                ? const SizedBox(
-                                    width: 12,
-                                    height: 12,
-                                    child: CircularProgressIndicator(strokeWidth: 1.5),
-                                  )
-                                : Icon(safe ? Icons.verified_rounded : Icons.fingerprint_rounded, size: 16),
-                            label: Text(verifying ? 'Verifying…' : (safe ? 'Verified' : 'Verify')),
-                            style: TextButton.styleFrom(
-                              visualDensity: VisualDensity.compact,
-                              padding: const EdgeInsets.symmetric(horizontal: 8),
+                          // batch3 item 16: a hash Verify is pointless when the file
+                          // is known absent (name missing) or a partial exists — the
+                          // recovery there is "Upload now", not a verify.
+                          if (v.filenamePresent != VerifyState.no && v.partialExists != VerifyState.yes)
+                            TextButton.icon(
+                              onPressed: (verifying || uploading) ? null : onVerify,
+                              icon: verifying
+                                  ? const SizedBox(
+                                      width: 12,
+                                      height: 12,
+                                      child: CircularProgressIndicator(strokeWidth: 1.5),
+                                    )
+                                  : Icon(safe ? Icons.verified_rounded : Icons.fingerprint_rounded, size: 16),
+                              label: Text(verifying ? 'Verifying…' : (safe ? 'Verified' : 'Verify')),
+                              style: TextButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                                padding: const EdgeInsets.symmetric(horizontal: 8),
+                              ),
                             ),
-                          ),
                           // Recovery (Issue 8): offer re-upload when verification failed.
                           if (cpFailed && !verifying)
                             TextButton.icon(
@@ -1039,7 +1090,19 @@ class _CleanupTile extends StatelessWidget {
                                       height: 12,
                                       child: CircularProgressIndicator(strokeWidth: 1.5),
                                     )
-                                  : const Icon(Icons.cloud_upload_outlined, size: 16),
+                                  // batch3 item 17: icons match the actual targets —
+                                  // copyparty (card) always, plus Immich when this file
+                                  // belongs there and isn't confirmed present yet.
+                                  : Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(Icons.sd_card_rounded, size: 16),
+                                        if (_immichApplies(receipt) && v.immich != VerifyState.yes) ...[
+                                          const SizedBox(width: 2),
+                                          const Icon(Icons.photo_library_rounded, size: 16),
+                                        ],
+                                      ],
+                                    ),
                               label: Text(uploading ? 'Uploading…' : 'Upload now'),
                               style: TextButton.styleFrom(
                                 visualDensity: VisualDensity.compact,

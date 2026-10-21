@@ -9,7 +9,21 @@ import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 class CopypartyFilePairer {
   final List<String> triggerExtensions;
 
-  const CopypartyFilePairer({this.triggerExtensions = const ['lrv', 'insv', 'insp']});
+  /// Default destination applied to Immich-native files at scan time; non-native
+  /// files always default to copyparty only. (batch3 item 22)
+  final UploadDestination defaultNativeDestination;
+
+  const CopypartyFilePairer({
+    this.triggerExtensions = const ['lrv', 'insv', 'insp'],
+    this.defaultNativeDestination = UploadDestination.both,
+  });
+
+  /// Parses the persisted setting string ('cpOnly' | 'both' | 'immichOnly').
+  static UploadDestination parseDefaultDestination(String s) => switch (s) {
+    'cpOnly' => UploadDestination.copypartyOnly,
+    'immichOnly' => UploadDestination.immichNative,
+    _ => UploadDestination.both,
+  };
 
   // ---------------------------------------------------------------------------
   // Public API
@@ -21,7 +35,7 @@ class CopypartyFilePairer {
   /// discovered, so callers can show live progress.
   Future<List<UploadSet>> scanDirectory(String directoryPath, {void Function(int count)? onFileFound}) async {
     final dir = Directory(directoryPath);
-    if (!await dir.exists()) {
+    if (!dir.existsSync()) {
       return [];
     }
 
@@ -121,13 +135,16 @@ class CopypartyFilePairer {
 
       final uploadFiles = group.map((f) {
         final ext = _ext(f.name);
+        final native = _isNativeImmichFile(ext);
         return UploadFile(
           localPath: f.path,
           filename: f.name,
           sizeBytes: f.sizeBytes,
           lastModifiedMs: f.lastModifiedMs,
           isTriggerFile: triggerExtensions.contains(ext),
-          isNativeImmichFile: _isNativeImmichFile(ext),
+          isNativeImmichFile: native,
+          // batch3 item 22: apply the configured default for native files.
+          destination: native ? defaultNativeDestination : UploadDestination.copypartyOnly,
         );
       }).toList();
 
@@ -154,7 +171,7 @@ class CopypartyFilePairer {
     await for (final entity in dir.list(recursive: true, followLinks: true)) {
       if (entity is File) {
         try {
-          final stat = await entity.stat();
+          final stat = entity.statSync();
           result.add(
             FileInfo(
               path: entity.path,

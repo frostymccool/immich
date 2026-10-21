@@ -1,6 +1,6 @@
 import { createZodDto } from 'nestjs-zod';
-import { isoDatetimeToDate, latitudeSchema, longitudeSchema, stringToBool } from 'src/validation';
 import z from 'zod';
+import { isoDatetimeToDate, latitudeSchema, longitudeSchema, stringToBool } from 'src/validation.js';
 
 const MapReverseGeocodeSchema = z
   .object({
@@ -30,7 +30,7 @@ const MapMarkerSchema = z
 
 const MapMarkerResponseSchema = z
   .object({
-    id: z.string().describe('Asset ID'),
+    id: z.uuidv4().describe('Asset ID'),
     lat: z.number().meta({ format: 'double' }).describe('Latitude'),
     lon: z.number().meta({ format: 'double' }).describe('Longitude'),
     city: z.string().nullable().describe('City name'),

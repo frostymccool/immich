@@ -1,7 +1,7 @@
 import { createZodDto } from 'nestjs-zod';
-import { NotificationLevel, NotificationLevelSchema, NotificationType, NotificationTypeSchema } from 'src/enum';
-import { isoDatetimeToDate, stringToBool } from 'src/validation';
 import z from 'zod';
+import { NotificationLevel, NotificationLevelSchema, NotificationType, NotificationTypeSchema } from 'src/enum.js';
+import { isoDatetimeToDate, stringToBool } from 'src/validation.js';
 
 const TestEmailResponseSchema = z
   .object({
@@ -24,7 +24,7 @@ const TemplateSchema = z
 
 const NotificationSchema = z
   .object({
-    id: z.string().describe('Notification ID'),
+    id: z.uuidv4().describe('Notification ID'),
     createdAt: isoDatetimeToDate.describe('Creation date'),
     level: NotificationLevelSchema,
     type: NotificationTypeSchema,
