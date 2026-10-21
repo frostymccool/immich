@@ -14,7 +14,14 @@ code runs 3048 ahead of the custom number):
 ```
 3.3.3-custom.N+<3048+N>  →  3.3.3-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.3.3-custom.130+3178** (next push → `131+3179`).
+Latest pushed: **3.3.4-custom.132+3180** (next push → `133+3181`).
+
+Note: another Claude Code session may also be working on this fork in parallel on branch
+`claude/auto-immich-copyparty-upload-eq80lh` (not `feature/copyparty-up2k-import` itself — it
+rebases its own branch on top of this one). It bumps `mobile/pubspec.yaml`'s version independently
+too, so the custom build number here can skip ahead non-sequentially if that session pushed since
+this file was last read — always check the actual latest pushed commit's `pubspec.yaml`, not just
+this note, before picking the next number.
 
 The `3.3.3` base tracks the upstream immich-app/immich release this fork is
 synced to — bump it (and re-derive the offset if upstream's own build number
@@ -191,6 +198,13 @@ server section hidden, URL in the title).
 
 **Diagnostics** gated behind `debugMode` (off by default): self-test / share-log
 links hidden in normal use; a "Download log" button stays on the main settings.
+
+**"All files access" permission prompt** (`copyparty_import.page.dart`,
+`_DirectoryPickerStepState`): when MANAGE_EXTERNAL_STORAGE isn't granted, the "Open Settings"
+button calls `Permission.manageExternalStorage.request()` (opens the dedicated "All files access"
+screen directly) and auto-starts the scan if granted — NOT `openAppSettings()`, which only opens
+the generic app-info page where that permission isn't listed. Fixed by the parallel
+`claude/auto-immich-copyparty-upload-eq80lh` session and merged in during the v3.3.4 sync.
 
 ---
 
