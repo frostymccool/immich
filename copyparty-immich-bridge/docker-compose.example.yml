@@ -1,0 +1,57 @@
+# Example wiring for the copyparty -> Immich bridge on a single host
+# (e.g. the Proxmox VM already running the immich and copyparty containers).
+#
+# Adapt volume paths to your existing setup and merge into your real compose
+# files. The essential ideas:
+#   1. copyparty's data volume is ALSO mounted (read-only) into the bridge at
+#      the SAME container path, so the hook's absolute paths resolve directly.
+#      If the paths differ, set PATH_MAP on the bridge instead.
+#   2. copyparty gets the hook script + an --xau event hook + the bridge URL.
+#   3. The bridge talks to Immich over the compose network with an API key
+#      (Immich web UI -> Account Settings -> API Keys).
+
+services:
+  copyparty:
+    image: copyparty/ac:latest
+    volumes:
+      - /srv/copyparty/uploads:/w/uploads
+      - ./hook/immich_bridge_hook.py:/hooks/immich_bridge_hook.py:ro
+    environment:
+      IMMICH_BRIDGE_URL: http://immich-bridge:8099
+    command:
+      # your existing flags, plus the event hook:
+      #   xau = execute after upload; f = fork (non-blocking);
+      #   j = JSON payload; t30 = 30s timeout
+      - --xau
+      - f,j,t30,/hooks/immich_bridge_hook.py
+    ports:
+      - 3923:3923
+    restart: unless-stopped
+
+  immich-bridge:
+    build: .
+    # or, once you publish the image somewhere: image: <registry>/copyparty-immich-bridge
+    volumes:
+      # Same host dir as copyparty's volume, same container path, read-only.
+      # Use :rw instead if POST_IMPORT_ACTION is move/delete.
+      - /srv/copyparty/uploads:/w/uploads:ro
+      - bridge-state:/data
+    environment:
+      IMMICH_URL: http://immich-server:2283
+      IMMICH_API_KEY: "<paste an Immich API key here (or use IMMICH_API_KEY_FILE)>"
+      WATCH_DIRS: /w/uploads
+      # PATH_MAP: /w/uploads=/mnt/somewhere-else   # only if mount paths differ
+      # SWEEP_INTERVAL_SECONDS: "900"    # reconciliation sweep; 0 = startup only
+      # MIN_FILE_AGE_SECONDS: "30"       # settle time for non-up2k writes
+      # POST_IMPORT_ACTION: keep         # keep | move | delete
+      # MOVE_SUBDIR: .imported           # used when POST_IMPORT_ACTION=move
+      # IMMICH_ALBUM_NAME: ""            # optional: put imports into this album
+      # INCLUDE_EXTENSIONS: ""           # override Immich's media-types list
+      # LOG_LEVEL: INFO
+    restart: unless-stopped
+
+  # immich-server: your existing Immich service — the bridge only needs to
+  # reach it on the same network as IMMICH_URL points to.
+
+volumes:
+  bridge-state:

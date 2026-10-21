@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.3.3-custom.N+<3048+N>  →  3.3.3-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.3.4-custom.132+3180** (next push → `133+3181`).
+Latest pushed: **3.3.4-custom.133+3181** (next push → `134+3182`).
 
 Note: another Claude Code session may also be working on this fork in parallel on branch
 `claude/auto-immich-copyparty-upload-eq80lh` (not `feature/copyparty-up2k-import` itself — it

@@ -1,0 +1,37 @@
+name: Copyparty Immich Bridge Tests
+
+on:
+  push:
+    paths:
+      - 'copyparty-immich-bridge/**'
+      - '.github/workflows/bridge-tests.yml'
+  pull_request:
+    paths:
+      - 'copyparty-immich-bridge/**'
+      - '.github/workflows/bridge-tests.yml'
+
+permissions: {}
+
+jobs:
+  test:
+    name: Bridge unit + integration tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: copyparty-immich-bridge
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest
+
+      - name: Run tests
+        run: python -m pytest tests/ -v
