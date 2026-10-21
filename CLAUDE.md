@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.3.3-custom.N+<3048+N>  →  3.3.3-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.3.4-custom.133+3181** (next push → `134+3182`).
+Latest pushed: **3.3.4-custom.200+3248** (next push → `201+3249`). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
 
 Note: another Claude Code session may also be working on this fork in parallel on branch
 `claude/auto-immich-copyparty-upload-eq80lh` (not `feature/copyparty-up2k-import` itself — it
@@ -205,6 +205,21 @@ button calls `Permission.manageExternalStorage.request()` (opens the dedicated "
 screen directly) and auto-starts the scan if granted — NOT `openAppSettings()`, which only opens
 the generic app-info page where that permission isn't listed. Fixed by the parallel
 `claude/auto-immich-copyparty-upload-eq80lh` session and merged in during the v3.3.4 sync.
+
+---
+
+### `copyparty-immich-bridge/` — server-side auto-import (added build 200)
+Standalone Python service (not part of the mobile app) that watches the copyparty upload
+volume and imports completed files into Immich via its API, from ANY uploader — complementary
+to the mobile "Import from Memory Card" flow. Two delivery paths: copyparty's `xau` event hook
+(`hook/immich_bridge_hook.py`, instant, forked so it never blocks uploads) POSTs to the bridge's
+`/hook`, plus a periodic sweep as the reliability backstop. Dedup via Immich's
+`bulk-upload-check` (SHA-1); SQLite state DB tracks per-file (size, mtime) so nothing is
+re-imported; default `POST_IMPORT_ACTION=keep` never touches source files. Config is all env
+vars (see its README). Known gap: `/hook` has no auth — keep port 8099 on the internal Docker
+network only. Tests: `cd copyparty-immich-bridge && python -m pytest tests/` (44 tests); CI is
+`.github/workflows/bridge-tests.yml`, path-scoped to that directory. Originally built by a
+parallel Claude session (branch `claude/auto-immich-copyparty-upload-eq80lh`, now retired).
 
 ---
 
