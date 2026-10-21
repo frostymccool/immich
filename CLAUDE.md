@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.3.3-custom.N+<3048+N>  →  3.3.3-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.3.4-custom.202+3250** (next push → `203+3251`). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
+Latest pushed: **3.3.4-custom.203+3251** (next push → `204+3252`). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
 
 Note: another Claude Code session may also be working on this fork in parallel on branch
 `claude/auto-immich-copyparty-upload-eq80lh` (not `feature/copyparty-up2k-import` itself — it
@@ -216,7 +216,7 @@ to the mobile "Import from Memory Card" flow. Two delivery paths: copyparty's `x
 `/hook`, plus a periodic sweep as the reliability backstop. Dedup via Immich's
 `bulk-upload-check` (SHA-1); SQLite state DB tracks per-file (size, mtime) so nothing is
 re-imported; default `POST_IMPORT_ACTION=keep` never touches source files. Config is all env
-vars (see its README). Known gap: `/hook` has no auth — keep port 8099 on the internal Docker
+vars (see its README). Known gap: `/hook` has no auth (it now ignores any path outside `WATCH_DIRS`) — keep port 8099 on the internal Docker
 network only. Tests: `cd copyparty-immich-bridge && python -m pytest tests/` (44 tests); CI is
 `.github/workflows/bridge-tests.yml`, path-scoped to that directory. Originally built by a
 parallel Claude session (branch `claude/auto-immich-copyparty-upload-eq80lh`, now retired).

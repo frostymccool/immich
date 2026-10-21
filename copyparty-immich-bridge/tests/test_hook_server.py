@@ -20,7 +20,7 @@ def running_server(tmp_path):
     cfg = Config(
         immich_url="http://unused:1",
         api_key="k",
-        watch_dirs=["/w/uploads"],
+        watch_dirs=["/mnt/uploads"],
         path_map=[("/w/uploads", "/mnt/uploads")],
         state_db=str(tmp_path / "state.db"),
         bind_host="127.0.0.1",
@@ -110,3 +110,17 @@ def test_unknown_route_404(running_server):
     base, _, _ = running_server
     status, _ = post_json(base + "/nope", {})
     assert status == 404
+
+
+def test_hook_ignores_paths_outside_watch_dirs(running_server):
+    base, worker, _ = running_server
+    events = [
+        {"ap": "/w/other/IMG_1.jpg"},  # outside the watched tree
+        {"ap": "/w/uploads/../other/IMG_2.jpg"},  # traversal out of it
+        {"ap": "/etc/passwd.jpg"},
+        {"ap": "/w/uploads/ok/IMG_3.jpg"},  # inside: the only one allowed
+    ]
+    code, body = post_json(base + "/hook", events)
+    assert code == 200
+    assert body == {"queued": 1}
+    assert worker.queue_size == 1
