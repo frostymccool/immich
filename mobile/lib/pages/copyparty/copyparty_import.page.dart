@@ -333,8 +333,9 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
             content: const Text(
               'Scanning USB drives and SD cards requires '
               '"All files access" (MANAGE_EXTERNAL_STORAGE).\n\n'
-              'Open Settings → Apps → Immich → Permissions → Files and media → '
-              'Allow management of all files.\n\n'
+              'Tap "Open Settings", then switch on "Allow access to manage all '
+              'files" for Immich. If it does not open, go to Settings → Apps → '
+              'Special app access → All files access → Immich.\n\n'
               'This is a one-time step.',
             ),
             actions: [
@@ -344,7 +345,12 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
           ),
         );
         if (goToSettings == true) {
-          await openAppSettings();
+          // Opens the dedicated "All files access" screen for this app; the
+          // generic app-info page (openAppSettings) does not list it.
+          final status = await Permission.manageExternalStorage.request();
+          if (status.isGranted && mounted) {
+            unawaited(ref.read(importSessionProvider.notifier).scan(path));
+          }
         }
         return;
       }
