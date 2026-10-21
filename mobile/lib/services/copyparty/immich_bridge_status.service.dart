@@ -25,6 +25,8 @@ class BridgeStatus {
   final String? version;
   final Map<String, int> counts;
   final int queue;
+  final List<String> watchDirs;
+  final List<String> priorityDirs;
   final List<BridgeRecentItem> recent;
   final DateTime checkedAt;
 
@@ -34,6 +36,8 @@ class BridgeStatus {
     this.version,
     this.counts = const {},
     this.queue = 0,
+    this.watchDirs = const [],
+    this.priorityDirs = const [],
     this.recent = const [],
   });
 
@@ -115,6 +119,8 @@ class ImmichBridgeStatusService {
             version: version,
             counts: _parseCounts(statusBody['counts']),
             queue: statusBody['queue'] is int ? statusBody['queue'] as int : 0,
+            watchDirs: _parseStrings(statusBody['watch_dirs']),
+            priorityDirs: _parseStrings(statusBody['priority_dirs']),
             recent: _parseRecent(statusBody['recent']),
           );
         }
@@ -135,6 +141,13 @@ class ImmichBridgeStatusService {
     }
     return jsonDecode(utf8.decode(response.bodyBytes));
   }
+
+  static List<String> _parseStrings(Object? raw) => raw is List
+      ? [
+          for (final e in raw)
+            if (e is String) e,
+        ]
+      : const [];
 
   static Map<String, int> _parseCounts(Object? raw) {
     if (raw is! Map) {

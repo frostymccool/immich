@@ -69,3 +69,15 @@ def test_extensions_normalized():
 def test_bad_int():
     with pytest.raises(ConfigError):
         Config.from_env(dict(BASE_ENV, SWEEP_INTERVAL_SECONDS="soon"))
+
+
+def test_priority_dirs_parsed_and_must_be_inside_watch_dirs():
+    env = dict(BASE_ENV, WATCH_DIRS="/w/Australia", PRIORITY_DIRS="/w/Australia/Asia2026/")
+    assert Config.from_env(env).priority_dirs == ["/w/Australia/Asia2026"]
+    assert Config.from_env(dict(BASE_ENV)).priority_dirs == []
+
+    with pytest.raises(ConfigError):
+        Config.from_env(dict(BASE_ENV, PRIORITY_DIRS="/somewhere/else"))
+    with pytest.raises(ConfigError):
+        # a sibling that merely shares a name prefix is NOT inside the watch dir
+        Config.from_env(dict(BASE_ENV, WATCH_DIRS="/w/up", PRIORITY_DIRS="/w/uploads"))

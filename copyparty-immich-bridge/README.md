@@ -68,6 +68,7 @@ uploader ──► copyparty ──(xau event hook: JSON POST)──► bridge �
 | `IMMICH_URL` | *(required)* | Immich server base URL, e.g. `http://immich-server:2283` |
 | `IMMICH_API_KEY` / `IMMICH_API_KEY_FILE` | *(required)* | Immich API key (or a file containing it, for secrets) |
 | `WATCH_DIRS` | *(required)* | Comma-separated directory paths (as mounted in the bridge) to watch |
+| `PRIORITY_DIRS` | *(empty)* | Comma-separated folders **inside `WATCH_DIRS`** imported first (e.g. the folder the phone app uploads into). Everything else under `WATCH_DIRS` is still imported, just after. Empty = no preference |
 | `PATH_MAP` | *(empty)* | `src=dst[,src=dst]` prefix rewrites from copyparty's paths to the bridge's |
 | `SWEEP_INTERVAL_SECONDS` | `900` | Reconciliation sweep period; `0` = sweep once at startup only |
 | `MIN_FILE_AGE_SECONDS` | `30` | Sweep ignores files modified more recently than this |
@@ -87,7 +88,7 @@ uploader ──► copyparty ──(xau event hook: JSON POST)──► bridge �
 
 - `POST /hook` — copyparty event receiver (single JSON object, or a list for
   `xiu` batch hooks)
-- `GET /status` — counters by status, queue depth, 20 most recent items
+- `GET /status` — counters by status, queue depth, watch/priority dirs, 20 most recent items
 - `GET /healthz` — liveness
 
 ## Notes & limits

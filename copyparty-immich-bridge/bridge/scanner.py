@@ -19,6 +19,16 @@ log = logging.getLogger("bridge.scanner")
 _PARTIAL_SUFFIX = ".partial"
 
 
+def is_within_dirs(path: str, dirs: list[str]) -> bool:
+    """True when `path` (normalised, so `..` cannot escape) is inside any of `dirs`."""
+    normalized = os.path.normpath(path)
+    for root in dirs:
+        root = os.path.normpath(root)
+        if root == "/" or normalized == root or normalized.startswith(root + os.sep):
+            return True
+    return False
+
+
 def is_candidate_name(name: str) -> bool:
     """Cheap name-based filter: no dotfiles, no copyparty partials."""
     if name.startswith("."):

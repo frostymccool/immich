@@ -40,6 +40,7 @@ services:
       IMMICH_URL: http://immich-server:2283
       IMMICH_API_KEY: "<paste an Immich API key here (or use IMMICH_API_KEY_FILE)>"
       WATCH_DIRS: /w/uploads
+      # PRIORITY_DIRS: /w/uploads/Trip2026   # imported first (e.g. the app's upload folder); must be inside WATCH_DIRS
       # PATH_MAP: /w/uploads=/mnt/somewhere-else   # only if mount paths differ
       # SWEEP_INTERVAL_SECONDS: "900"    # reconciliation sweep; 0 = startup only
       # MIN_FILE_AGE_SECONDS: "30"       # settle time for non-up2k writes

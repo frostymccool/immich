@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from bridge.scanner import is_within_dirs
+
 VALID_POST_IMPORT_ACTIONS = ("keep", "move", "delete")
 
 
@@ -31,6 +33,11 @@ class Config:
     immich_url: str
     api_key: str
     watch_dirs: list[str]
+
+    # Subfolders of WATCH_DIRS whose files are imported FIRST (e.g. the folder the
+    # phone app uploads into). Everything else under WATCH_DIRS is still imported,
+    # just after them. Empty = no preference.
+    priority_dirs: list[str] = field(default_factory=list)
 
     # Maps a path prefix as seen by copyparty (the hook's "ap") to the prefix
     # where the same volume is mounted in THIS container. Empty = identical.
@@ -80,6 +87,11 @@ class Config:
         if not watch_dirs:
             raise ConfigError("WATCH_DIRS is required (comma-separated container paths)")
 
+        priority_dirs = [d.rstrip("/") or "/" for d in _split_list(e.get("PRIORITY_DIRS", ""))]
+        for d in priority_dirs:
+            if not is_within_dirs(d, watch_dirs):
+                raise ConfigError(f"PRIORITY_DIRS entry {d!r} must be inside one of WATCH_DIRS {watch_dirs}")
+
         path_map: list[tuple[str, str]] = []
         raw_map = e.get("PATH_MAP", "").strip()
         if raw_map:
@@ -118,6 +130,7 @@ class Config:
             immich_url=immich_url,
             api_key=api_key,
             watch_dirs=watch_dirs,
+            priority_dirs=priority_dirs,
             path_map=path_map,
             sweep_interval=_int("SWEEP_INTERVAL_SECONDS", 900),
             min_file_age=_int("MIN_FILE_AGE_SECONDS", 30),

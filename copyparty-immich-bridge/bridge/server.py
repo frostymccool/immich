@@ -10,30 +10,17 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from bridge import __version__
 from bridge.config import Config
+from bridge.scanner import is_within_dirs
 from bridge.state import StateStore
 from bridge.worker import ImportWorker
 
 log = logging.getLogger("bridge.server")
 
 MAX_HOOK_BODY = 4 * 1024 * 1024
-
-
-def is_within_watch_dirs(path: str, watch_dirs: list[str]) -> bool:
-    """True when `path` (after normalising any `..`) lives under a watch dir.
-
-    The hook is unauthenticated, so it must never be able to queue a file the
-    operator did not choose to watch."""
-    normalized = os.path.normpath(path)
-    for root in watch_dirs:
-        root = os.path.normpath(root)
-        if root == "/" or normalized == root or normalized.startswith(root + os.sep):
-            return True
-    return False
 
 
 def make_handler(cfg: Config, state: StateStore, worker: ImportWorker) -> type[BaseHTTPRequestHandler]:
@@ -66,7 +53,16 @@ def make_handler(cfg: Config, state: StateStore, worker: ImportWorker) -> type[B
                     }
                     for r in state.recent(20)
                 ]
-                self._send_json(200, {"counts": state.counts(), "queue": worker.queue_size, "recent": recent})
+                self._send_json(
+                    200,
+                    {
+                        "counts": state.counts(),
+                        "queue": worker.queue_size,
+                        "watch_dirs": cfg.watch_dirs,
+                        "priority_dirs": cfg.priority_dirs,
+                        "recent": recent,
+                    },
+                )
             else:
                 self._send_json(404, {"error": "not found"})
 
@@ -93,7 +89,7 @@ def make_handler(cfg: Config, state: StateStore, worker: ImportWorker) -> type[B
                 if not isinstance(ap, str) or not ap:
                     continue
                 local = cfg.map_hook_path(ap)
-                if not is_within_watch_dirs(local, cfg.watch_dirs):
+                if not is_within_dirs(local, cfg.watch_dirs):
                     log.info("hook path outside WATCH_DIRS, ignored: %s", local)
                     continue
                 if worker.enqueue(local, "hook"):

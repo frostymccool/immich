@@ -1005,6 +1005,8 @@ class _BridgeStatusTile extends ConsumerWidget {
             final lines = <String>[
               '${status.imported} imported · ${status.duplicates} already in Immich · ${status.queue} queued',
               if (status.failed > 0) '${status.failed} failed (retried automatically)',
+              if (status.watchDirs.isNotEmpty) 'Watching: ${status.watchDirs.join(', ')}',
+              if (status.priorityDirs.isNotEmpty) 'Imported first: ${status.priorityDirs.join(', ')}',
               if (status.lastActivity != null) 'Last activity ${_bridgeAgo(status.lastActivity!, status.checkedAt)}',
             ];
             return Column(

@@ -65,7 +65,7 @@ def test_hook_single_event_maps_path(running_server):
     status, body = post_json(base + "/hook", xau_payload)
     assert status == 200
     assert body == {"queued": 1}
-    assert worker._queue.get_nowait() == "/mnt/uploads/cam/IMG_1.jpg"
+    assert worker._queue.get_nowait()[2] == "/mnt/uploads/cam/IMG_1.jpg"
 
 
 def test_hook_batch_and_dedupe(running_server):

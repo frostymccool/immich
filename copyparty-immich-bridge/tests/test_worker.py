@@ -94,7 +94,7 @@ def test_failure_recorded_and_retried_by_sweep(tmp_path):
         # sweep re-queues it, a healthy client succeeds
         worker._client = good_client
         assert worker.sweep() == 1
-        worker._process(worker._queue.get())
+        worker._process(worker._queue.get()[2])
         assert state.get(path).status == "imported"
 
 
@@ -152,3 +152,31 @@ def test_enqueue_dedupes(tmp_path):
         worker, _, _ = make_worker(tmp_path, stub)
         assert worker.enqueue("/x.jpg", "hook") is True
         assert worker.enqueue("/x.jpg", "hook") is False
+
+
+def test_priority_dir_files_are_processed_first(tmp_path):
+    with StubImmich() as stub:
+        prio_dir = str(tmp_path / "watch" / "Asia2026")
+        worker, _, _ = make_worker(tmp_path, stub, priority_dirs=[prio_dir])
+        a = write_file(tmp_path, "other/a.jpg")
+        b = write_file(tmp_path, "other/b.jpg")
+        c = write_file(tmp_path, "Asia2026/c.jpg")
+        d = write_file(tmp_path, "Asia2026/d.jpg")
+        for p in (a, b, c, d):  # base-folder files are queued FIRST
+            worker.enqueue(p, "test")
+
+        order = []
+        while not worker._queue.empty():
+            order.append(worker._queue.get()[2])
+        # priority folder first (FIFO within each tier), then the rest of the base
+        assert order == [c, d, a, b]
+
+
+def test_no_priority_dirs_keeps_fifo_order(tmp_path):
+    with StubImmich() as stub:
+        worker, _, _ = make_worker(tmp_path, stub)
+        paths = [write_file(tmp_path, f"x{i}.jpg") for i in range(3)]
+        for p in paths:
+            worker.enqueue(p, "test")
+        order = [worker._queue.get()[2] for _ in paths]
+        assert order == paths

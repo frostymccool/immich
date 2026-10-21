@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
 import os
 import queue
@@ -11,7 +12,7 @@ import requests
 
 from bridge.config import Config
 from bridge.immich import ImmichClient, ImmichError, UploadOutcome, sha1_hex
-from bridge.scanner import extension_of, is_candidate_name, iter_candidates
+from bridge.scanner import extension_of, is_candidate_name, is_within_dirs, iter_candidates
 from bridge.state import StateStore
 
 log = logging.getLogger("bridge.worker")
@@ -30,7 +31,9 @@ class ImportWorker:
         self._state = state
         self._client = client
         self._allowed = allowed_extensions
-        self._queue: queue.Queue[str] = queue.Queue()
+        # (priority, sequence, path): priority-dir files first, FIFO within a tier.
+        self._queue: queue.PriorityQueue[tuple[int, int, str]] = queue.PriorityQueue()
+        self._seq = itertools.count()
         self._pending: set[str] = set()
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -47,7 +50,7 @@ class ImportWorker:
     def stop(self) -> None:
         self._stop.set()
         for _ in self._threads:
-            self._queue.put("")  # wake blocked workers
+            self._queue.put((-1, next(self._seq), ""))  # wake blocked workers
 
     @property
     def queue_size(self) -> int:
@@ -61,8 +64,10 @@ class ImportWorker:
             if path in self._pending:
                 return False
             self._pending.add(path)
-        log.info("queued (%s): %s", source, path)
-        self._queue.put(path)
+            seq = next(self._seq)
+        priority = 0 if is_within_dirs(path, self._cfg.priority_dirs) else 1
+        log.info("queued (%s%s): %s", source, ", priority" if priority == 0 else "", path)
+        self._queue.put((priority, seq, path))
         return True
 
     def sweep(self) -> int:
@@ -88,7 +93,7 @@ class ImportWorker:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            path = self._queue.get()
+            _, _, path = self._queue.get()
             if not path or self._stop.is_set():
                 break
             try:
