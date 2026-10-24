@@ -2,10 +2,13 @@ import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
+import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/generated/translations.g.dart';
+import 'package:immich_mobile/pages/copyparty/copyparty_import.page.dart';
 import 'package:immich_mobile/presentation/widgets/images/thumbnail.widget.dart';
 import 'package:immich_mobile/providers/backup/backup.provider.dart';
+import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/db.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
@@ -80,6 +83,25 @@ class _UploadDetailPageState extends ConsumerState<UploadDetailPage> {
     final failedItems = uploadItems.values.where((item) => item.isFailed == true).toList();
     final parallelUploads = ref.watch(appConfigProvider.select((c) => c.backup.parallelUploads)).clamp(1, 10);
 
+    // Copyparty (memory-card import) active uploads — surfaced here in the
+    // shared Upload Details view rather than on the backup settings page.
+    final cpSession = ref.watch(importSessionProvider);
+    // batch3 item 12: EVERY active copyparty file — copying to phone, copied
+    // (waiting), hashing, handshaking, uploading, Immich — not just the one
+    // currently transferring.
+    final copypartyItems = cpSession.step == ImportSessionStep.uploading
+        ? cpSession.uploadSets.expand((s) => s.files).where((f) {
+            if (f.staging || f.stagedReady) {
+              return true;
+            }
+            return f.status != UploadFileStatus.pending &&
+                f.status != UploadFileStatus.receiptWritten &&
+                f.status != UploadFileStatus.failed &&
+                f.status != UploadFileStatus.skipped &&
+                !(f.status == UploadFileStatus.confirmed && !f.needsImmich);
+          }).toList()
+        : <UploadFile>[];
+
     return Scaffold(
       appBar: AppBar(
         title: Text(context.t.upload_details),
@@ -87,7 +109,14 @@ class _UploadDetailPageState extends ConsumerState<UploadDetailPage> {
         elevation: 0,
         scrolledUnderElevation: 1,
       ),
-      body: _buildTwoSectionLayout(context, uploadingItems, failedItems, iCloudProgress, parallelUploads),
+      body: _buildTwoSectionLayout(
+        context,
+        uploadingItems,
+        failedItems,
+        iCloudProgress,
+        parallelUploads,
+        copypartyItems,
+      ),
     );
   }
 
@@ -97,6 +126,7 @@ class _UploadDetailPageState extends ConsumerState<UploadDetailPage> {
     List<UploadStatus> failedItems,
     Map<String, double> iCloudProgress,
     int parallelUploads,
+    List<UploadFile> copypartyItems,
   ) {
     return CustomScrollView(
       slivers: [
@@ -148,6 +178,63 @@ class _UploadDetailPageState extends ConsumerState<UploadDetailPage> {
             }, childCount: parallelUploads),
           ),
         ),
+
+        // Copyparty (memory-card import) Section
+        if (copypartyItems.isNotEmpty) ...[
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Row(
+                children: [
+                  Text(
+                    'Copyparty',
+                    style: context.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: context.colorScheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: context.colorScheme.primary.withValues(alpha: 0.15),
+                      borderRadius: const BorderRadius.all(Radius.circular(12)),
+                    ),
+                    child: Text(
+                      copypartyItems.length.toString(),
+                      style: context.textTheme.labelSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: context.colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: () => _confirmCancelCopyparty(context),
+                    icon: const Icon(Icons.stop_circle_outlined, size: 18),
+                    label: const Text('Stop'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: context.colorScheme.error,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _buildCopypartyCard(context, copypartyItems[index]),
+                ),
+                childCount: copypartyItems.length,
+              ),
+            ),
+          ),
+        ],
 
         // Errors Section
         if (failedItems.isNotEmpty) ...[
@@ -515,6 +602,40 @@ class _UploadDetailPageState extends ConsumerState<UploadDetailPage> {
       context: context,
       builder: (context) => FileDetailDialog(uploadStatus: item),
     );
+  }
+
+  Widget _buildCopypartyCard(BuildContext context, UploadFile f) {
+    // batch3 item 11: identical card to the import page (phase chip, bytes ·
+    // speed, est time, skip) instead of a bare name+bar.
+    return CopypartyProgressFileCard(
+      file: f,
+      onSkip: () => ref.read(importSessionProvider.notifier).skipCurrentFile(f.localPath),
+    );
+  }
+
+  Future<void> _confirmCancelCopyparty(BuildContext context) async {
+    final stop = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Stop uploading?'),
+        content: const Text(
+          'This stops the current copyparty upload. Files already uploaded are '
+          'kept on the server; the rest can be resumed later from where they '
+          'left off.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep uploading')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: ctx.colorScheme.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Stop'),
+          ),
+        ],
+      ),
+    );
+    if (stop == true) {
+      ref.read(importSessionProvider.notifier).cancelUpload();
+    }
   }
 }
 

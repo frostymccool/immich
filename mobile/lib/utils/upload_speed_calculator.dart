@@ -24,6 +24,14 @@ class UploadSpeedCalculator {
   /// The total file size being uploaded.
   int _totalBytes = 0;
 
+  /// Resets the calculator for a new upload.
+  void reset() {
+    _speedSamples.clear();
+    _lastUpdateTime = null;
+    _lastBytes = 0;
+    _totalBytes = 0;
+  }
+
   /// Updates the calculator with the current progress.
   ///
   /// [currentBytes] is the number of bytes transferred so far.
@@ -88,9 +96,9 @@ class UploadSpeedCalculator {
   String get speedAsString {
     final s = _currentSpeed;
     return switch (s) {
-      <= 0 => '-- MB/s',
-      >= 1 => '${s.round()} MB/s',
-      _ => '${(s * 1000).round()} kB/s',
+      <= 0 => '-- MiB/s',
+      >= 1 => '${s.toStringAsFixed(1)} MiB/s',
+      _ => '${(s * 1024).round()} KiB/s',
     };
   }
 

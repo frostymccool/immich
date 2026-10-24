@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bridge Flow</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f27; --muted: #5d6675; --line: #b8c0cc; --accent: #e8590c;
+    --user: #dbe9ff; --user-b: #4a86e8;
+    --cp: #ffeccc; --cp-b: #e0950b;
+    --br: #d6f5dd; --br-b: #2f9e4f;
+    --im: #ebdcff; --im-b: #8250df;
+    --app: #cdf3f0; --app-b: #12908a;
+    --st: #e6e8ec; --st-b: #6b7686;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12151a; --panel: #1b2027; --text: #e7eaf0; --muted: #98a2b3; --line: #444d5c; --accent: #ff8a3d;
+      --user: #1f3556; --user-b: #6aa0f5;
+      --cp: #4a3510; --cp-b: #f0b043;
+      --br: #17381f; --br-b: #4cc472;
+      --im: #35244f; --im-b: #a67bf0;
+      --app: #0f3a38; --app-b: #3cc9c1;
+      --st: #2a303a; --st-b: #8b95a5;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12151a; --panel: #1b2027; --text: #e7eaf0; --muted: #98a2b3; --line: #444d5c; --accent: #ff8a3d;
+    --user: #1f3556; --user-b: #6aa0f5; --cp: #4a3510; --cp-b: #f0b043; --br: #17381f; --br-b: #4cc472;
+    --im: #35244f; --im-b: #a67bf0; --app: #0f3a38; --app-b: #3cc9c1; --st: #2a303a; --st-b: #8b95a5;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .tabs button, .ctl button {
+    font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    padding: 8px 14px; border-radius: 8px;
+  }
+  .tabs button[aria-selected="true"] { border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); font-weight: 600; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--muted); margin: 0 0 8px; }
+  .legend i { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; border: 2px solid; }
+  .stage { overflow-x: auto; }
+  svg { display: block; width: 100%; min-width: 760px; height: auto; }
+  .node rect { stroke-width: 2; transition: opacity .3s, stroke-width .3s; }
+  .node text { fill: var(--text); font-size: 12px; pointer-events: none; }
+  .node text.t { font-weight: 700; }
+  .node { cursor: pointer; opacity: .45; transition: opacity .3s; }
+  .node.on { opacity: 1; }
+  .node.on rect { stroke-width: 4; }
+  .k-user rect { fill: var(--user); stroke: var(--user-b); }
+  .k-cp rect { fill: var(--cp); stroke: var(--cp-b); }
+  .k-br rect { fill: var(--br); stroke: var(--br-b); }
+  .k-im rect { fill: var(--im); stroke: var(--im-b); }
+  .k-app rect { fill: var(--app); stroke: var(--app-b); }
+  .k-st rect { fill: var(--st); stroke: var(--st-b); }
+  .edge { stroke: var(--line); stroke-width: 2; fill: none; opacity: .6; }
+  .edge.on { stroke: var(--accent); stroke-width: 3.5; opacity: 1; stroke-dasharray: 8 6; animation: flow 0.7s linear infinite; }
+  @keyframes flow { to { stroke-dashoffset: -14; } }
+  .dot { fill: var(--accent); }
+  .badge { fill: var(--accent); font-size: 11px; font-weight: 700; }
+  .ctl { display: flex; align-items: center; gap: 8px; margin: 12px 0 8px; flex-wrap: wrap; }
+  .ctl .count { color: var(--muted); font-size: 13px; margin-left: auto; }
+  .caption { border-left: 4px solid var(--accent); padding: 6px 12px; background: var(--bg); border-radius: 0 8px 8px 0; min-height: 76px; }
+  .caption b { display: block; margin-bottom: 2px; }
+  .exh { font-size: 12px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; margin: 12px 0 4px; }
+  pre.ex { margin: 0; padding: 10px 12px; background: #11151b; color: #d7dde8; border-radius: 8px; overflow-x: auto; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
+  pre.ex.phone { background: var(--panel); color: var(--text); border: 2px solid var(--app-b); border-radius: 16px; white-space: pre-wrap; font-family: system-ui, sans-serif; font-size: 13.5px; max-width: 420px; }
+  ol.steps { list-style: none; counter-reset: s; margin: 14px 0 0; padding: 0; display: grid; gap: 4px; }
+  ol.steps li { counter-increment: s; cursor: pointer; padding: 6px 10px; border-radius: 8px; font-size: 14px; color: var(--muted); display: flex; gap: 10px; }
+  ol.steps li::before { content: counter(s); font-weight: 700; min-width: 20px; text-align: center; color: var(--muted); }
+  ol.steps li.on { background: var(--bg); color: var(--text); }
+  ol.steps li.on::before { color: var(--accent); }
+  .note { font-size: 13px; color: var(--muted); margin-top: 14px; }
+  @media (prefers-reduced-motion: reduce) { .edge.on { animation: none; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>copyparty → Immich bridge: how it works</h1>
+  <p class="sub">Three flows. Pick a tab, press play (or step through). Click any box to jump to the step that uses it.</p>
+
+  <div class="tabs" role="tablist" id="tabs"></div>
+
+  <div class="card">
+    <div class="legend">
+      <span><i style="background:var(--user);border-color:var(--user-b)"></i>You / phone</span>
+      <span><i style="background:var(--cp);border-color:var(--cp-b)"></i>copyparty</span>
+      <span><i style="background:var(--br);border-color:var(--br-b)"></i>bridge</span>
+      <span><i style="background:var(--im);border-color:var(--im-b)"></i>Immich server</span>
+      <span><i style="background:var(--app);border-color:var(--app-b)"></i>Immich app (APK)</span>
+      <span><i style="background:var(--st);border-color:var(--st-b)"></i>stored state</span>
+    </div>
+    <div class="stage"><svg id="svg" viewBox="0 0 1000 620" role="img" aria-label="Animated flow diagram"></svg></div>
+    <div class="ctl">
+      <button id="prev" aria-label="Previous step">◀ Prev</button>
+      <button id="play" aria-label="Play or pause">⏸ Pause</button>
+      <button id="next" aria-label="Next step">Next ▶</button>
+      <span class="count" id="count"></span>
+    </div>
+    <div class="caption" id="caption" aria-live="polite"></div>
+    <div id="examples" aria-live="polite"></div>
+    <ol class="steps" id="steps"></ol>
+  </div>
+
+  <p class="note">All example values (file names, IPs, IDs, counts, times) are made up to show the shape of the real output. Source of truth: <code>install.sh</code>, <code>bridge/server.py</code>, <code>bridge/worker.py</code>, <code>bridge/scanner.py</code> and the app's <code>immich_bridge_status.service.dart</code>. Defaults shown: sweep every 900 s, files must be 30 s old, 1 worker, 5 attempts per file.</p>
+</main>
+
+<script>
+(function () {
+  var NW = 170, NH = 74, NS = 'http://www.w3.org/2000/svg';
+
+  // n(id, x, y, kind, title, sub lines...)
+  function n(id, x, y, kind) { return { id: id, x: x, y: y, kind: kind, lines: Array.prototype.slice.call(arguments, 4) }; }
+
+  var SCENES = [
+    {
+      name: '1 · Install',
+      h: 290,
+      nodes: [
+        n('i1', 5, 30, 'user', 'You run install.sh', 'curl … | bash on', 'the Docker VM'),
+        n('i2', 210, 30, 'br', 'Preflight', 'docker, git, compose', 'found; no foreign override'),
+        n('i3', 415, 30, 'cp', 'Find X (data mount)', 'docker inspect copyparty', 'first mount not /cfg'),
+        n('i4', 620, 30, 'br', 'Work out Y (folders)', 'app folder + base folder', 'under X'),
+        n('i5', 825, 30, 'im', 'Check Immich', 'ping + API key valid', 'before changing anything'),
+        n('i6', 825, 190, 'st', 'Fetch bridge code', 'sparse git clone to', '~/immich-bridge-src'),
+        n('i7', 620, 190, 'st', 'Write override file', 'docker-compose.override', '.yml + immich-bridge.env'),
+        n('i8', 415, 190, 'br', 'compose up --build', 'bridge container +', 'ro mount of X'),
+        n('i9', 210, 190, 'cp', 'Hook safety check', 'copyparty up after 10s?', 'else drop the hook'),
+        n('i10', 5, 190, 'user', 'Healthy → done', 'prints URL to type in', 'the phone app')
+      ],
+      steps: [
+        { t: 'Start', d: 'One command on the VM that runs copyparty. Everything is wrapped in a main() so the pipe is fully read before anything runs.', nodes: ['i1'], edges: [] },
+        { t: 'Preflight', d: 'Checks docker, curl, git and compose exist, that ~/copyparty/docker-compose.yml is there, and that the copyparty container is running. It refuses to overwrite a docker-compose.override.yml it did not create itself.', nodes: ['i1', 'i2'], edges: [['i1', 'i2']] },
+        { t: 'Finds X — where copyparty keeps files', d: 'Runs docker inspect on the copyparty container and lists its mounts. The first mount that is not copyparty’s /cfg config dir is the data mount: X-host (on the VM, e.g. your NAS mount) paired with X-container (the same folder as copyparty sees it). The bridge mounts X read-only.', nodes: ['i2', 'i3'], edges: [['i2', 'i3']] },
+        { t: 'Works out Y — which folders to watch', d: 'Y is built from X-container plus folder names: WATCH_DIRS = X/Australia/Asia2026 (the app’s upload folder) and PRIORITY_DIRS = the same folder, imported first. With WIDE=1, WATCH_DIRS widens to X/Australia while priority stays Asia2026. Override with APP_FOLDER / BASE_FOLDER.', nodes: ['i3', 'i4'], edges: [['i3', 'i4']] },
+        { t: 'Checks Immich', d: 'IMMICH_URL defaults to this VM’s IP on port 2283. It pings the server, then calls /api/users/me with the API key (asked for once, hidden, read from the terminal). If either fails, it stops before touching your setup.', nodes: ['i4', 'i5'], edges: [['i4', 'i5']] },
+        { t: 'Fetches the bridge source', d: 'Sparse git clone of just the copyparty-immich-bridge folder from the repo (re-runs fetch and reset instead).', nodes: ['i5', 'i6'], edges: [['i5', 'i6']] },
+        { t: 'Writes the override — never your compose file', d: 'Creates docker-compose.override.yml next to yours: the bridge service (env: IMMICH_URL, WATCH_DIRS, PRIORITY_DIRS; X mounted read-only; a small volume for its state) and, unless your compose already sets command:, the copyparty xau hook. The key goes in immich-bridge.env (mode 600). Delete the override to undo.', nodes: ['i6', 'i7'], edges: [['i6', 'i7']] },
+        { t: 'Builds and starts', d: 'docker compose up -d --build. Compose merges your file with the override automatically.', nodes: ['i7', 'i8'], edges: [['i7', 'i8']] },
+        { t: 'Hook safety net', d: 'If the hook is enabled it waits 10 s. If copyparty is no longer running, it rewrites the override without the hook and restarts it, so you fall back to sweep-only (15 min) instead of a dead copyparty.', nodes: ['i8', 'i9'], edges: [['i8', 'i9']] },
+        { t: 'Waits for healthy, prints the last step', d: 'Polls http://127.0.0.1:8099/healthz for up to 60 s. On success it prints what it watches and the one thing left to do: type http://<vm-ip>:8099 into the app under Settings → copyparty → Import Bridge.', nodes: ['i9', 'i10'], edges: [['i9', 'i10']] }
+      ]
+    },
+    {
+      name: '2 · Finding & importing files',
+      h: 770,
+      nodes: [
+        n('a1', 20, 30, 'user', 'Upload finishes', 'phone app or any', 'client → copyparty'),
+        n('a2', 235, 30, 'cp', 'copyparty xau hook', 'forked script, never', 'blocks the upload'),
+        n('a3', 450, 30, 'br', 'POST /hook :8099', 'path must be inside', 'WATCH_DIRS else ignored'),
+        n('b1', 20, 260, 'br', 'Sweep timer', 'at startup, then every', '15 min (backstop)'),
+        n('b2', 235, 260, 'br', 'Walk folder Y', 'recursive, all subfolders', 'skips .hist, hidden dirs'),
+        n('b3', 450, 260, 'st', 'Filter', 'skip .PARTIAL, empty, <30s', 'old, bad ext, already done'),
+        n('q', 735, 140, 'br', 'Enqueue', 'de-dup if already queued', 'priority 0 = app folder'),
+        n('w1', 790, 400, 'br', 'Worker takes next', 'lowest priority number', 'first, then FIFO'),
+        n('w2', 580, 400, 'br', 'Sanity checks', 'name ok, ext allowed', 'size > 0, not done'),
+        n('w3', 370, 400, 'br', 'SHA-1 + dedupe', 'POST bulk-upload-check', 'already in Immich?'),
+        n('w4', 160, 400, 'im', 'Upload to Immich', 'POST /api/assets', '(+ album if set)'),
+        n('r2', 20, 570, 'st', 'Failure path', 'error + attempt saved;', 'sweep retries, max 5'),
+        n('r1', 230, 570, 'st', 'Record in state.db', 'SQLite: imported /', 'duplicate / failed'),
+        n('r4', 440, 570, 'app', 'GET /status', 'reads state.db — see', 'tab 3 for the app side'),
+        n('r3', 230, 670, 'cp', 'Post-import: keep', 'source file untouched', '(mounted read-only)')
+      ],
+      steps: [
+        { t: 'Two ways a file gets noticed', d: 'Fast path: the copyparty hook. Safety net: a periodic folder sweep. Both end at the same queue, so a file is never imported twice and never missed.', nodes: ['a1', 'b1'], edges: [] },
+        { t: 'Fast path — upload completes', d: 'A phone (or anything else) finishes an upload into the watched part of copyparty.', nodes: ['a1', 'a2'], edges: [['a1', 'a2']] },
+        { t: 'Fast path — hook calls the bridge', d: 'copyparty runs its xau event hook (flags f,j,t30: forked, JSON, 30 s timeout). The script POSTs the file path to the bridge’s /hook, so the upload itself is never slowed down. If the bridge is down the hook just fails quietly.', nodes: ['a2', 'a3'], edges: [['a2', 'a3']] },
+        { t: 'Fast path — scoping', d: 'The bridge maps the path into its own mount and only accepts it if it is inside WATCH_DIRS. Anything else is logged and ignored (this is why the default install only touches Asia2026). Accepted paths go to the queue.', nodes: ['a3', 'q'], edges: [['a3', 'q']] },
+        { t: 'Backstop — the sweep starts', d: 'Runs once at startup and then every SWEEP_INTERVAL_SECONDS (900). This is what catches anything uploaded while the bridge or hook was down, and files from uploaders that never fire the hook.', nodes: ['b1', 'b2'], edges: [['b1', 'b2']] },
+        { t: 'Backstop — finds files in folder Y and every subfolder', d: 'os.walk over each WATCH_DIRS entry, all the way down. It skips hidden directories (this covers copyparty’s .hist), the post-import move folder, dotfiles and *.PARTIAL files that up2k is still writing, empty files, and unsupported extensions (the list comes from Immich itself via /api/server/media-types).', nodes: ['b2', 'b3'], edges: [['b2', 'b3']] },
+        { t: 'Backstop — skip what’s already handled', d: 'Files modified in the last 30 s are left alone so a half-written file is not grabbed. Anything state.db already has as done for the same size and mtime is skipped, and so is anything that has failed 5 times. The rest is queued.', nodes: ['b3', 'q'], edges: [['b3', 'q']] },
+        { t: 'Queue with priority', d: 'A path already waiting is not queued twice. Files inside PRIORITY_DIRS (the folder the phone app uploads to) get priority 0 and jump ahead of everything else under the wider base folder, which still gets imported afterwards.', nodes: ['q', 'w1'], edges: [['q', 'w1']] },
+        { t: 'Sanity checks', d: 'Re-checked at the last moment: still exists, not a dotfile or .PARTIAL, extension allowed (hook paths have not been filtered yet), size above zero, and not already recorded as done.', nodes: ['w1', 'w2'], edges: [['w1', 'w2']] },
+        { t: 'Hash and ask Immich', d: 'Computes the file’s SHA-1 and asks Immich’s bulk-upload-check. If Immich already has those bytes the file counts as a duplicate and nothing is uploaded.', nodes: ['w2', 'w3'], edges: [['w2', 'w3']] },
+        { t: 'Upload through the Immich API', d: 'New files are posted to /api/assets with the API key (and added to an album if ALBUM_NAME is set). The source file is only read, never changed.', nodes: ['w3', 'w4'], edges: [['w3', 'w4']] },
+        { t: 'STATUS IS WRITTEN HERE', d: 'Every outcome (imported, duplicate, failed, skipped) is recorded in the SQLite state.db with the file’s size and mtime. This table is the only thing the app’s status tile ever reads, via /status.', nodes: ['w4', 'r1', 'r4'], edges: [['w4', 'r1'], ['r1', 'r4']] },
+        { t: 'Failure and post-import', d: 'A failure (Immich down, 500, unreadable file) is recorded with its error and attempt count; the sweep retries it later, up to 5 attempts. On success the default POST_IMPORT_ACTION=keep leaves the source untouched; move or delete are opt-in and only run after the import is recorded.', nodes: ['w4', 'r2', 'r1', 'r3'], edges: [['w4', 'r2'], ['r1', 'r3']] }
+      ],
+      badges: [{ x: 625, y: 612, text: '◀ the status the app reads is stored in state.db' }]
+    },
+    {
+      name: '3 · Status shown in the app',
+      h: 400,
+      nodes: [
+        n('s1', 20, 30, 'br', 'Import worker', 'records every file', 'outcome'),
+        n('s2', 235, 30, 'st', 'state.db (SQLite)', 'counts, recent 20 files', 'the source of status'),
+        n('s3', 450, 30, 'br', 'Bridge HTTP :8099', 'GET /healthz', 'GET /status'),
+        n('s4', 735, 30, 'app', 'App: status service', 'fetch(bridgeUrl), 4 s', 'timeout, never throws'),
+        n('s5', 735, 200, 'app', 'Riverpod provider', 'refresh every 15 s, only', 'while page is open'),
+        n('s6', 520, 200, 'app', 'Status tile', 'Settings → copyparty →', 'Import Bridge'),
+        n('s7', 305, 200, 'user', 'What you see', 'running · counts · queue', 'last activity · folders'),
+        n('s8', 520, 305, 'st', 'Bridge off / wrong', 'tile says unreachable;', 'every app feature works')
+      ],
+      steps: [
+        { t: 'Outcomes become data', d: 'Each time the worker finishes a file it writes the result — imported, duplicate, failed or skipped — to state.db.', nodes: ['s1', 's2'], edges: [['s1', 's2']] },
+        { t: 'The bridge exposes it read-only', d: 'GET /healthz answers {ok, version}. GET /status answers the counts per status, the queue length, WATCH_DIRS, PRIORITY_DIRS and the 20 most recent files with status, error, attempts and time.', nodes: ['s2', 's3'], edges: [['s2', 's3']] },
+        { t: 'The app asks (only if you set a URL)', d: 'The URL is the one thing you type in the app: Settings → copyparty → Import Bridge. Blank means the feature is off and no request is ever made. The service calls /healthz first, then /status, each with a 4 s timeout.', nodes: ['s3', 's4'], edges: [['s3', 's4']] },
+        { t: 'Polled only while you look', d: 'An auto-dispose Riverpod provider re-fetches every 15 s while the settings page is open and stops the moment you leave it. Nothing polls at app start or in the background.', nodes: ['s4', 's5'], edges: [['s4', 's5']] },
+        { t: 'Rendered in the settings tile', d: 'The tile shows running or not, version, imported · already in Immich · queued, failures, the folders being watched, which one is imported first, and the last-activity time with the recent files.', nodes: ['s5', 's6'], edges: [['s5', 's6']] },
+        { t: 'What you read', d: 'A healthy bridge shows live numbers. If the URL is blank, malformed, the service is stopped or the VM is off, the tile just says so.', nodes: ['s6', 's7'], edges: [['s6', 's7']] },
+        { t: 'Never a blocker', d: 'Every failure mode (blank or bad URL, down, slow, garbage JSON) maps to a status and is never thrown. No upload, backup, sync or copyparty code reads the bridge URL, so the APK works the same with the bridge absent.', nodes: ['s6', 's8'], edges: [['s6', 's8']] }
+      ]
+    }
+  ];
+
+  // Fabricated but realistic examples shown under each step: ex[scene][step] = [[label, text, 'phone'?], ...]
+  var EX = [
+    [
+      [['You type, on the VM, as user imm', 'imm@immich-prox:~$ curl -fsSL https://raw.githubusercontent.com/frostymccool/immich/feature/copyparty-up2k-import/copyparty-immich-bridge/install.sh | bash']],
+      [['Output if all is well', '(silent — it moves straight on)'], ['Output if something is missing', 'ERROR: container \'copyparty\' not found (set CONTAINER=...)']],
+      [['docker inspect copyparty → mounts (host|container)', '/home/imm/copyparty/cfg|/cfg        ← skipped (config dir)\n/mnt/picsupload|/w                  ← this is X'], ['Installer prints', 'copyparty data: /mnt/picsupload -> /w (mounted read-only into the bridge)']],
+      [['Default (app folder only)', 'WATCH_DIRS    = /w/Australia/Asia2026\nPRIORITY_DIRS = /w/Australia/Asia2026'], ['With WIDE=1', 'WATCH_DIRS    = /w/Australia\nPRIORITY_DIRS = /w/Australia/Asia2026   (still imported first)']],
+      [['Installer prints', '==> Checking Immich at http://192.168.5.21:2283\nImmich reachable, API key accepted.'], ['Key prompt (typing is hidden)', 'Paste the Immich API key (input hidden): ']],
+      [['Installer prints', '==> Fetching the bridge (branch feature/copyparty-up2k-import)\nCloning into \'/home/imm/immich-bridge-src\'...']],
+      [['~/copyparty/docker-compose.override.yml (new file)', '# managed by the immich-bridge installer\nservices:\n  copyparty:\n    volumes:\n      - /home/imm/immich-bridge-src/copyparty-immich-bridge/hook/immich_bridge_hook.py:/hooks/immich_bridge_hook.py:ro\n    environment:\n      IMMICH_BRIDGE_URL: http://immich-bridge:8099\n    command: ["--xau", "f,j,t30,/hooks/immich_bridge_hook.py"]\n  immich-bridge:\n    build: /home/imm/immich-bridge-src/copyparty-immich-bridge\n    ports: ["8099:8099"]\n    environment:\n      IMMICH_URL: http://192.168.5.21:2283\n      WATCH_DIRS: /w/Australia/Asia2026\n      PRIORITY_DIRS: /w/Australia/Asia2026\n    volumes:\n      - /mnt/picsupload:/w:ro']],
+      [['Installer prints', '==> Starting the bridge\n [+] Building 24.1s\n ✔ Container immich-bridge  Started\n ✔ Container copyparty      Started']],
+      [['Normal run', '(nothing printed; copyparty is still "running" after 10 s)'], ['If copyparty won\'t start with the hook', 'copyparty did not stay up with the instant hook (restarting); removing the hook and retrying.']],
+      [['Final output', '==> Installed\nWatching:        /w/Australia/Asia2026\nImported first:  /w/Australia/Asia2026\nInstant import:  on (copyparty hook)\nOnly the app\'s folder is watched. To also import the rest of \'Australia\', re-run with WIDE=1 in front.\n\nLAST STEP, on your phone: Settings > copyparty > Import Bridge > URL:  http://192.168.5.21:8099']]
+    ],
+    [
+      [['Where each path shows up in the bridge log', '14:02:11 INFO bridge.worker: queued (hook, priority): /w/Australia/Asia2026/IMG_4821.JPG\n14:15:00 INFO bridge.worker: sweep queued 37 file(s)']],
+      [['In copyparty', 'Phone uploads IMG_4821.JPG (4.2 MB) into  Australia/Asia2026/\ncopyparty finishes it as  /w/Australia/Asia2026/IMG_4821.JPG']],
+      [['What copyparty hands the hook (abridged)', '{"ap": "/w/Australia/Asia2026/IMG_4821.JPG", "vp": "Australia/Asia2026/IMG_4821.JPG", "sz": 4411203, "user": "phone"}'], ['Hook → bridge', 'POST http://immich-bridge:8099/hook\n← 200 {"queued": 1}']],
+      [['Inside WATCH_DIRS', '/w/Australia/Asia2026/IMG_4821.JPG → accepted   ← 200 {"queued": 1}'], ['Outside WATCH_DIRS', 'INFO bridge.server: hook path outside WATCH_DIRS, ignored: /w/Other/holiday.mp4\n← 200 {"queued": 0}']],
+      [['Bridge log at start-up', 'INFO bridge: copyparty-immich-bridge 0.1.0 starting\nINFO bridge: watching [\'/w/Australia/Asia2026\'] -> http://192.168.5.21:2283\nINFO bridge.worker: sweep queued 37 file(s)']],
+      [['What the sweep decides, file by file', '/w/Australia/Asia2026/\n  IMG_4821.JPG            ✓ candidate\n  Day3/IMG_5002.HEIC      ✓ candidate (subfolder)\n  Day3/IMG_5003.MOV       ✓ candidate\n  Day3/IMG_5004.JPG.PARTIAL   ✗ still being uploaded\n  Day3/.hist/             ✗ hidden folder, not entered\n  notes.txt               ✗ not a media type Immich accepts\n  empty.jpg               ✗ 0 bytes\n  IMG_5100.JPG            ✗ modified 12 s ago (needs 30 s)']],
+      [['state.db lookup', 'IMG_4800.JPG  size 3.9 MB  mtime 2026-10-23 09:14  → imported       → skipped\nIMG_4821.JPG  not in state.db                                → queued\nBAD_0001.JPG  failed 5 of 5 attempts                          → skipped (gave up)']],
+      [['Queue contents (priority, order, path) — pops lowest first', '(0, #41)  /w/Australia/Asia2026/IMG_4821.JPG       ← app folder\n(0, #42)  /w/Australia/Asia2026/Day3/IMG_5002.HEIC  ← app folder\n(1, #40)  /w/Australia/Old/2019/IMG_0007.JPG        ← elsewhere (WIDE=1)\n\nImported in order: #41, #42, then #40 even though #40 queued first.']],
+      [['Checks, with outcomes', 'IMG_4821.JPG   ok\n.DS_Store        ✗ dotfile, ignored\nclip.mkv.PARTIAL ✗ partial, ignored\nreport.pdf      ✗ recorded as skipped: unsupported extension\nzero.jpg        ✗ size 0, ignored\nIMG_4800.JPG    ✗ already imported (same size + mtime)']],
+      [['Bridge → Immich', 'sha1 = 3f786850e387550fdab836ed7e6dc881de23001b\nPOST /api/assets/bulk-upload-check\n  {"assets":[{"id":"/w/…/IMG_4821.JPG","checksum":"3f78…001b"}]}\n← {"results":[{"action":"accept"}]}                      → not in Immich, go upload\n← {"results":[{"action":"reject","reason":"duplicate"}]}  → already there, skip upload'], ['Log line when it is a duplicate', 'INFO bridge.worker: already in Immich (checksum): IMG_4821.JPG -> 7c1e9a52-…']],
+      [['Log line on success', '14:02:19 INFO bridge.worker: imported: IMG_4821.JPG -> asset 7c1e9a52-3b0f-4d6a-9f21-5a8e2c0d7b14'], ['What you then see in Immich', 'Asset "IMG_4821.JPG" appears in the timeline (uploaded as device "copyparty-bridge")']],
+      [['state.db rows after a few files', 'path                                         status     attempts  updated\n…/Asia2026/IMG_4821.JPG                      imported   0         14:02:19\n…/Asia2026/Day3/IMG_5002.HEIC               duplicate  0         14:02:22\n…/Asia2026/report.pdf                       skipped    0         14:15:03'], ['/status then returns', '{"counts": {"imported": 12, "duplicate": 3, "failed": 1, "skipped": 2}, "queue": 4, ...}']],
+      [['Failure log + row', 'WARNING bridge.worker: import failed for /w/…/Day3/IMG_5002.HEIC: upload failed: HTTP 500\n…/Day3/IMG_5002.HEIC   failed   attempts 2   "upload failed: HTTP 500"   ← sweep retries at the next 15-min tick'], ['After a success (default keep)', '/w/Australia/Asia2026/IMG_4821.JPG still exists, byte-for-byte unchanged']]
+    ],
+    [
+      [['One row in state.db', 'path = /w/Australia/Asia2026/IMG_4821.JPG\nstatus = imported   asset_id = 7c1e9a52-…   attempts = 0   updated_at = 1792576939.4']],
+      [['GET /healthz', '{"ok": true, "version": "0.1.0"}'], ['GET /status (abridged)', '{\n  "counts": {"imported": 12, "duplicate": 3, "failed": 1, "skipped": 2},\n  "queue": 4,\n  "watch_dirs": ["/w/Australia/Asia2026"],\n  "priority_dirs": ["/w/Australia/Asia2026"],\n  "recent": [{"path": "/w/…/IMG_4821.JPG", "status": "imported", "updated_at": 1792576939.4}, …]\n}']],
+      [['In the app, once', 'Settings → copyparty → Import Bridge → URL:  http://192.168.5.21:8099'], ['Requests the app then makes', 'GET http://192.168.5.21:8099/healthz   (≤4 s)\nGET http://192.168.5.21:8099/status    (≤4 s)']],
+      [['Timeline', '12:00:00  you open the settings page → fetch\n12:00:15  fetch again\n12:00:30  fetch again\n12:00:41  you leave the page → polling stops, nothing runs in the background']],
+      [['Tile on your phone (what the app really renders)', 'Import bridge: running (v0.1.0)\n12 imported · 3 already in Immich · 4 queued\n1 failed (retried automatically)\nWatching: /w/Australia/Asia2026\nImported first: /w/Australia/Asia2026\nLast activity 2 min ago\n\n☁ IMG_4821.JPG      imported · 2 min ago\n⧉ IMG_5002.HEIC     duplicate · 2 min ago\n⚠ IMG_5099.MOV      failed · 14 min ago\n                    upload failed: HTTP 500', 'phone']],
+      [['Same tile, other states', 'Blank URL:      no tile (feature off, no request made)\nBad URL:        Import bridge: invalid URL — Enter an address like http://192.168.5.21:8099\nVM / bridge off: Import bridge: not reachable — Uploads to copyparty and Immich are unaffected. Anything uploaded meanwhile is picked up automatically when the bridge is back. Tap to retry.']],
+      [['What stays unaffected when the tile says "not reachable"', 'Phone backup to Immich  ✓ normal\nImport from Memory Card → copyparty  ✓ normal\nImmich timeline, search, sync  ✓ normal']]
+    ]
+  ];
+
+  var svg = document.getElementById('svg');
+  var tabsEl = document.getElementById('tabs');
+  var stepsEl = document.getElementById('steps');
+  var captionEl = document.getElementById('caption');
+  var countEl = document.getElementById('count');
+  var playBtn = document.getElementById('play');
+  var scene = 0, step = 0, timer = null, playing = true;
+  var nodeEls = {}, edgeEls = {};
+
+  function el(name, attrs, parent) {
+    var e = document.createElementNS(NS, name);
+    for (var k in attrs) { e.setAttribute(k, attrs[k]); }
+    if (parent) { parent.appendChild(e); }
+    return e;
+  }
+
+  // Point on the border of the node rect, along the line from its centre toward (tx, ty).
+  function edgePoint(node, tx, ty) {
+    var cx = node.x + NW / 2, cy = node.y + NH / 2;
+    var dx = tx - cx, dy = ty - cy;
+    if (dx === 0 && dy === 0) { return [cx, cy]; }
+    var sx = dx === 0 ? Infinity : (NW / 2) / Math.abs(dx);
+    var sy = dy === 0 ? Infinity : (NH / 2) / Math.abs(dy);
+    var s = Math.min(sx, sy);
+    return [cx + dx * s, cy + dy * s];
+  }
+
+  function byId(sc, id) { return sc.nodes.filter(function (x) { return x.id === id; })[0]; }
+
+  function build() {
+    var sc = SCENES[scene];
+    while (svg.firstChild) { svg.removeChild(svg.firstChild); }
+    svg.setAttribute('viewBox', '0 0 1000 ' + sc.h);
+    nodeEls = {}; edgeEls = {};
+
+    var defs = el('defs', {}, svg);
+    var mk = el('marker', { id: 'arr', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 12, markerHeight: 12, markerUnits: 'userSpaceOnUse', orient: 'auto-start-reverse' }, defs);
+    el('path', { d: 'M0,0 L10,5 L0,10 z', fill: 'var(--accent)' }, mk);
+
+    var seen = {};
+    sc.steps.forEach(function (s) {
+      s.edges.forEach(function (e) {
+        var key = e[0] + '>' + e[1];
+        if (seen[key]) { return; }
+        seen[key] = true;
+        var a = byId(sc, e[0]), b = byId(sc, e[1]);
+        var p1 = edgePoint(a, b.x + NW / 2, b.y + NH / 2);
+        var p2 = edgePoint(b, a.x + NW / 2, a.y + NH / 2);
+        var d = 'M' + p1[0] + ',' + p1[1] + ' L' + p2[0] + ',' + p2[1];
+        edgeEls[key] = el('path', { d: d, 'class': 'edge' }, svg);
+      });
+    });
+
+    sc.nodes.forEach(function (nd) {
+      var g = el('g', { 'class': 'node k-' + nd.kind, tabindex: 0 }, svg);
+      el('rect', { x: nd.x, y: nd.y, width: NW, height: NH, rx: 10 }, g);
+      nd.lines.forEach(function (ln, i) {
+        var t = el('text', { x: nd.x + 10, y: nd.y + 22 + i * 17, 'class': i === 0 ? 't' : '' }, g);
+        t.textContent = ln;
+      });
+      g.addEventListener('click', function () { jumpToNode(nd.id); });
+      g.addEventListener('keydown', function (ev) { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); jumpToNode(nd.id); } });
+      nodeEls[nd.id] = g;
+    });
+
+    (sc.badges || []).forEach(function (b) {
+      var t = el('text', { x: b.x, y: b.y, 'class': 'badge' }, svg);
+      t.textContent = b.text;
+    });
+
+    stepsEl.innerHTML = '';
+    sc.steps.forEach(function (s, i) {
+      var li = document.createElement('li');
+      li.textContent = s.t;
+      li.addEventListener('click', function () { go(i, true); });
+      stepsEl.appendChild(li);
+    });
+  }
+
+  function clearDots() {
+    var dots = svg.querySelectorAll('.dot');
+    for (var i = 0; i < dots.length; i++) { dots[i].remove(); }
+  }
+
+  function render() {
+    var sc = SCENES[scene], s = sc.steps[step];
+    var id;
+    for (id in nodeEls) { nodeEls[id].classList.toggle('on', s.nodes.indexOf(id) >= 0); }
+    var activeKeys = s.edges.map(function (e) { return e[0] + '>' + e[1]; });
+    for (var key in edgeEls) {
+      var on = activeKeys.indexOf(key) >= 0;
+      edgeEls[key].classList.toggle('on', on);
+      if (on) { edgeEls[key].setAttribute('marker-end', 'url(#arr)'); } else { edgeEls[key].removeAttribute('marker-end'); }
+    }
+    clearDots();
+    activeKeys.forEach(function (key) {
+      var dot = el('circle', { r: 6, 'class': 'dot' }, svg);
+      var am = el('animateMotion', { dur: '1.6s', repeatCount: 'indefinite', path: edgeEls[key].getAttribute('d') }, dot);
+      am.setAttribute('keyPoints', '0;1'); am.setAttribute('keyTimes', '0;1'); am.setAttribute('calcMode', 'linear');
+    });
+    captionEl.innerHTML = '';
+    var b = document.createElement('b'); b.textContent = s.t;
+    var p = document.createElement('span'); p.textContent = s.d;
+    captionEl.appendChild(b); captionEl.appendChild(p);
+    var exEl = document.getElementById('examples');
+    exEl.innerHTML = '';
+    ((EX[scene] || [])[step] || []).forEach(function (blk) {
+      var h = document.createElement('div'); h.className = 'exh'; h.textContent = 'Example · ' + blk[0];
+      var pre = document.createElement('pre'); pre.className = 'ex' + (blk[2] ? ' ' + blk[2] : ''); pre.textContent = blk[1];
+      exEl.appendChild(h); exEl.appendChild(pre);
+    });
+    countEl.textContent = 'Step ' + (step + 1) + ' of ' + sc.steps.length;
+    var lis = stepsEl.children;
+    for (var i = 0; i < lis.length; i++) { lis[i].classList.toggle('on', i === step); }
+  }
+
+  function schedule() {
+    clearTimeout(timer);
+    if (!playing) { return; }
+    var len = SCENES[scene].steps[step].d.length;
+    timer = setTimeout(function () { go((step + 1) % SCENES[scene].steps.length, false); }, 3200 + len * 18);
+  }
+
+  function go(i, user) {
+    step = i;
+    if (user) { playing = false; playBtn.textContent = '▶ Play'; }
+    render();
+    schedule();
+  }
+
+  function jumpToNode(id) {
+    var steps = SCENES[scene].steps;
+    for (var i = 0; i < steps.length; i++) {
+      if (steps[i].nodes.indexOf(id) >= 0) { go(i, true); return; }
+    }
+  }
+
+  function selectScene(i) {
+    scene = i; step = 0;
+    var btns = tabsEl.children;
+    for (var j = 0; j < btns.length; j++) { btns[j].setAttribute('aria-selected', j === i ? 'true' : 'false'); }
+    build(); render(); schedule();
+  }
+
+  SCENES.forEach(function (sc, i) {
+    var b = document.createElement('button');
+    b.setAttribute('role', 'tab');
+    b.textContent = sc.name;
+    b.addEventListener('click', function () { selectScene(i); });
+    tabsEl.appendChild(b);
+  });
+
+  document.getElementById('prev').addEventListener('click', function () { var n = SCENES[scene].steps.length; go((step - 1 + n) % n, true); });
+  document.getElementById('next').addEventListener('click', function () { go((step + 1) % SCENES[scene].steps.length, true); });
+  playBtn.addEventListener('click', function () {
+    playing = !playing;
+    playBtn.textContent = playing ? '⏸ Pause' : '▶ Play';
+    schedule();
+  });
+
+  selectScene(0);
+})();
+</script>
+</body>
+</html>

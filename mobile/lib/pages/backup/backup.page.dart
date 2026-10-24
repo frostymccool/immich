@@ -10,6 +10,7 @@ import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/extensions/platform_extensions.dart';
 import 'package:immich_mobile/extensions/theme_extensions.dart';
 import 'package:immich_mobile/generated/translations.g.dart';
+import 'package:immich_mobile/pages/common/settings.page.dart';
 import 'package:immich_mobile/presentation/widgets/backup/backup_toggle_button.widget.dart';
 import 'package:immich_mobile/providers/background_sync.provider.dart';
 import 'package:immich_mobile/providers/backup/backup.provider.dart';
@@ -20,6 +21,7 @@ import 'package:immich_mobile/providers/sync_status.provider.dart';
 import 'package:immich_mobile/providers/user.provider.dart';
 import 'package:immich_mobile/routing/router.dart';
 import 'package:immich_mobile/widgets/backup/backup_info_card.dart';
+import 'package:immich_mobile/widgets/settings/copyparty_settings/copyparty_settings.dart';
 import 'package:immich_ui/immich_ui.dart';
 import 'package:logging/logging.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -115,6 +117,45 @@ class _BackupPageState extends ConsumerState<BackupPage> {
           icon: const Icon(Icons.arrow_back_ios_rounded),
         ),
         actions: [
+          IconButton(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => Consumer(
+                  builder: (ctx, ref2, _) {
+                    final cp = ref2.watch(appConfigProvider.select((c) => c.copyparty));
+                    final host = cp.hostUrl.replaceAll(RegExp(r'/+$'), '');
+                    final path = '/${cp.uploadPath.replaceAll(RegExp(r'^/+|/+$'), '')}';
+                    return Scaffold(
+                      appBar: AppBar(
+                        // item 4: show the full target URL in the heading since
+                        // the server section is hidden on this embedded page.
+                        title: Text('Copyparty ($host$path)'),
+                        centerTitle: false,
+                        actions: [
+                          IconButton(
+                            // Same flow as the rest of the app (e.g. asset
+                            // viewer/free-up-space settings jump straight to
+                            // their own section) — this embedded page hides
+                            // server config, so give it a direct way to the
+                            // full Copyparty settings instead of making the
+                            // user hunt through the main Settings list.
+                            onPressed: () => ctx.pushRoute(SettingsSubRoute(section: SettingSection.copyparty)),
+                            icon: const Icon(Icons.settings_outlined),
+                            tooltip: 'Copyparty settings',
+                          ),
+                        ],
+                      ),
+                      // item 3: server config lives in main app settings only.
+                      body: const CopypartySettings(showServerConfig: false),
+                    );
+                  },
+                ),
+              ),
+            ),
+            // item 2: memory-card icon, consistent with the main settings entry.
+            icon: const Icon(Icons.sd_card_rounded),
+            tooltip: 'Copyparty',
+          ),
           IconButton(
             onPressed: () {
               unawaited(context.pushRoute(const BackupOptionsRoute()));
