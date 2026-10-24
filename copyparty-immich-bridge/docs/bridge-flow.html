@@ -67,6 +67,9 @@
   .ctl .count { color: var(--muted); font-size: 13px; margin-left: auto; }
   .caption { border-left: 4px solid var(--accent); padding: 6px 12px; background: var(--bg); border-radius: 0 8px 8px 0; min-height: 76px; }
   .caption b { display: block; margin-bottom: 2px; }
+  .exh { font-size: 12px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; margin: 12px 0 4px; }
+  pre.ex { margin: 0; padding: 10px 12px; background: #11151b; color: #d7dde8; border-radius: 8px; overflow-x: auto; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
+  pre.ex.phone { background: var(--panel); color: var(--text); border: 2px solid var(--app-b); border-radius: 16px; white-space: pre-wrap; font-family: system-ui, sans-serif; font-size: 13.5px; max-width: 420px; }
   ol.steps { list-style: none; counter-reset: s; margin: 14px 0 0; padding: 0; display: grid; gap: 4px; }
   ol.steps li { counter-increment: s; cursor: pointer; padding: 6px 10px; border-radius: 8px; font-size: 14px; color: var(--muted); display: flex; gap: 10px; }
   ol.steps li::before { content: counter(s); font-weight: 700; min-width: 20px; text-align: center; color: var(--muted); }
@@ -100,10 +103,11 @@
       <span class="count" id="count"></span>
     </div>
     <div class="caption" id="caption" aria-live="polite"></div>
+    <div id="examples" aria-live="polite"></div>
     <ol class="steps" id="steps"></ol>
   </div>
 
-  <p class="note">Source of truth: <code>install.sh</code>, <code>bridge/server.py</code>, <code>bridge/worker.py</code>, <code>bridge/scanner.py</code> and the app's <code>immich_bridge_status.service.dart</code>. Defaults shown: sweep every 900 s, files must be 30 s old, 1 worker, 5 attempts per file.</p>
+  <p class="note">All example values (file names, IPs, IDs, counts, times) are made up to show the shape of the real output. Source of truth: <code>install.sh</code>, <code>bridge/server.py</code>, <code>bridge/worker.py</code>, <code>bridge/scanner.py</code> and the app's <code>immich_bridge_status.service.dart</code>. Defaults shown: sweep every 900 s, files must be 30 s old, 1 worker, 5 attempts per file.</p>
 </main>
 
 <script>
@@ -202,6 +206,46 @@
         { t: 'Never a blocker', d: 'Every failure mode (blank or bad URL, down, slow, garbage JSON) maps to a status and is never thrown. No upload, backup, sync or copyparty code reads the bridge URL, so the APK works the same with the bridge absent.', nodes: ['s6', 's8'], edges: [['s6', 's8']] }
       ]
     }
+  ];
+
+  // Fabricated but realistic examples shown under each step: ex[scene][step] = [[label, text, 'phone'?], ...]
+  var EX = [
+    [
+      [['You type, on the VM, as user imm', 'imm@immich-prox:~$ curl -fsSL https://raw.githubusercontent.com/frostymccool/immich/feature/copyparty-up2k-import/copyparty-immich-bridge/install.sh | bash']],
+      [['Output if all is well', '(silent — it moves straight on)'], ['Output if something is missing', 'ERROR: container \'copyparty\' not found (set CONTAINER=...)']],
+      [['docker inspect copyparty → mounts (host|container)', '/home/imm/copyparty/cfg|/cfg        ← skipped (config dir)\n/mnt/picsupload|/w                  ← this is X'], ['Installer prints', 'copyparty data: /mnt/picsupload -> /w (mounted read-only into the bridge)']],
+      [['Default (app folder only)', 'WATCH_DIRS    = /w/Australia/Asia2026\nPRIORITY_DIRS = /w/Australia/Asia2026'], ['With WIDE=1', 'WATCH_DIRS    = /w/Australia\nPRIORITY_DIRS = /w/Australia/Asia2026   (still imported first)']],
+      [['Installer prints', '==> Checking Immich at http://192.168.5.21:2283\nImmich reachable, API key accepted.'], ['Key prompt (typing is hidden)', 'Paste the Immich API key (input hidden): ']],
+      [['Installer prints', '==> Fetching the bridge (branch feature/copyparty-up2k-import)\nCloning into \'/home/imm/immich-bridge-src\'...']],
+      [['~/copyparty/docker-compose.override.yml (new file)', '# managed by the immich-bridge installer\nservices:\n  copyparty:\n    volumes:\n      - /home/imm/immich-bridge-src/copyparty-immich-bridge/hook/immich_bridge_hook.py:/hooks/immich_bridge_hook.py:ro\n    environment:\n      IMMICH_BRIDGE_URL: http://immich-bridge:8099\n    command: ["--xau", "f,j,t30,/hooks/immich_bridge_hook.py"]\n  immich-bridge:\n    build: /home/imm/immich-bridge-src/copyparty-immich-bridge\n    ports: ["8099:8099"]\n    environment:\n      IMMICH_URL: http://192.168.5.21:2283\n      WATCH_DIRS: /w/Australia/Asia2026\n      PRIORITY_DIRS: /w/Australia/Asia2026\n    volumes:\n      - /mnt/picsupload:/w:ro']],
+      [['Installer prints', '==> Starting the bridge\n [+] Building 24.1s\n ✔ Container immich-bridge  Started\n ✔ Container copyparty      Started']],
+      [['Normal run', '(nothing printed; copyparty is still "running" after 10 s)'], ['If copyparty won\'t start with the hook', 'copyparty did not stay up with the instant hook (restarting); removing the hook and retrying.']],
+      [['Final output', '==> Installed\nWatching:        /w/Australia/Asia2026\nImported first:  /w/Australia/Asia2026\nInstant import:  on (copyparty hook)\nOnly the app\'s folder is watched. To also import the rest of \'Australia\', re-run with WIDE=1 in front.\n\nLAST STEP, on your phone: Settings > copyparty > Import Bridge > URL:  http://192.168.5.21:8099']]
+    ],
+    [
+      [['Where each path shows up in the bridge log', '14:02:11 INFO bridge.worker: queued (hook, priority): /w/Australia/Asia2026/IMG_4821.JPG\n14:15:00 INFO bridge.worker: sweep queued 37 file(s)']],
+      [['In copyparty', 'Phone uploads IMG_4821.JPG (4.2 MB) into  Australia/Asia2026/\ncopyparty finishes it as  /w/Australia/Asia2026/IMG_4821.JPG']],
+      [['What copyparty hands the hook (abridged)', '{"ap": "/w/Australia/Asia2026/IMG_4821.JPG", "vp": "Australia/Asia2026/IMG_4821.JPG", "sz": 4411203, "user": "phone"}'], ['Hook → bridge', 'POST http://immich-bridge:8099/hook\n← 200 {"queued": 1}']],
+      [['Inside WATCH_DIRS', '/w/Australia/Asia2026/IMG_4821.JPG → accepted   ← 200 {"queued": 1}'], ['Outside WATCH_DIRS', 'INFO bridge.server: hook path outside WATCH_DIRS, ignored: /w/Other/holiday.mp4\n← 200 {"queued": 0}']],
+      [['Bridge log at start-up', 'INFO bridge: copyparty-immich-bridge 0.1.0 starting\nINFO bridge: watching [\'/w/Australia/Asia2026\'] -> http://192.168.5.21:2283\nINFO bridge.worker: sweep queued 37 file(s)']],
+      [['What the sweep decides, file by file', '/w/Australia/Asia2026/\n  IMG_4821.JPG            ✓ candidate\n  Day3/IMG_5002.HEIC      ✓ candidate (subfolder)\n  Day3/IMG_5003.MOV       ✓ candidate\n  Day3/IMG_5004.JPG.PARTIAL   ✗ still being uploaded\n  Day3/.hist/             ✗ hidden folder, not entered\n  notes.txt               ✗ not a media type Immich accepts\n  empty.jpg               ✗ 0 bytes\n  IMG_5100.JPG            ✗ modified 12 s ago (needs 30 s)']],
+      [['state.db lookup', 'IMG_4800.JPG  size 3.9 MB  mtime 2026-10-23 09:14  → imported       → skipped\nIMG_4821.JPG  not in state.db                                → queued\nBAD_0001.JPG  failed 5 of 5 attempts                          → skipped (gave up)']],
+      [['Queue contents (priority, order, path) — pops lowest first', '(0, #41)  /w/Australia/Asia2026/IMG_4821.JPG       ← app folder\n(0, #42)  /w/Australia/Asia2026/Day3/IMG_5002.HEIC  ← app folder\n(1, #40)  /w/Australia/Old/2019/IMG_0007.JPG        ← elsewhere (WIDE=1)\n\nImported in order: #41, #42, then #40 even though #40 queued first.']],
+      [['Checks, with outcomes', 'IMG_4821.JPG   ok\n.DS_Store        ✗ dotfile, ignored\nclip.mkv.PARTIAL ✗ partial, ignored\nreport.pdf      ✗ recorded as skipped: unsupported extension\nzero.jpg        ✗ size 0, ignored\nIMG_4800.JPG    ✗ already imported (same size + mtime)']],
+      [['Bridge → Immich', 'sha1 = 3f786850e387550fdab836ed7e6dc881de23001b\nPOST /api/assets/bulk-upload-check\n  {"assets":[{"id":"/w/…/IMG_4821.JPG","checksum":"3f78…001b"}]}\n← {"results":[{"action":"accept"}]}                      → not in Immich, go upload\n← {"results":[{"action":"reject","reason":"duplicate"}]}  → already there, skip upload'], ['Log line when it is a duplicate', 'INFO bridge.worker: already in Immich (checksum): IMG_4821.JPG -> 7c1e9a52-…']],
+      [['Log line on success', '14:02:19 INFO bridge.worker: imported: IMG_4821.JPG -> asset 7c1e9a52-3b0f-4d6a-9f21-5a8e2c0d7b14'], ['What you then see in Immich', 'Asset "IMG_4821.JPG" appears in the timeline (uploaded as device "copyparty-bridge")']],
+      [['state.db rows after a few files', 'path                                         status     attempts  updated\n…/Asia2026/IMG_4821.JPG                      imported   0         14:02:19\n…/Asia2026/Day3/IMG_5002.HEIC               duplicate  0         14:02:22\n…/Asia2026/report.pdf                       skipped    0         14:15:03'], ['/status then returns', '{"counts": {"imported": 12, "duplicate": 3, "failed": 1, "skipped": 2}, "queue": 4, ...}']],
+      [['Failure log + row', 'WARNING bridge.worker: import failed for /w/…/Day3/IMG_5002.HEIC: upload failed: HTTP 500\n…/Day3/IMG_5002.HEIC   failed   attempts 2   "upload failed: HTTP 500"   ← sweep retries at the next 15-min tick'], ['After a success (default keep)', '/w/Australia/Asia2026/IMG_4821.JPG still exists, byte-for-byte unchanged']]
+    ],
+    [
+      [['One row in state.db', 'path = /w/Australia/Asia2026/IMG_4821.JPG\nstatus = imported   asset_id = 7c1e9a52-…   attempts = 0   updated_at = 1792576939.4']],
+      [['GET /healthz', '{"ok": true, "version": "0.1.0"}'], ['GET /status (abridged)', '{\n  "counts": {"imported": 12, "duplicate": 3, "failed": 1, "skipped": 2},\n  "queue": 4,\n  "watch_dirs": ["/w/Australia/Asia2026"],\n  "priority_dirs": ["/w/Australia/Asia2026"],\n  "recent": [{"path": "/w/…/IMG_4821.JPG", "status": "imported", "updated_at": 1792576939.4}, …]\n}']],
+      [['In the app, once', 'Settings → copyparty → Import Bridge → URL:  http://192.168.5.21:8099'], ['Requests the app then makes', 'GET http://192.168.5.21:8099/healthz   (≤4 s)\nGET http://192.168.5.21:8099/status    (≤4 s)']],
+      [['Timeline', '12:00:00  you open the settings page → fetch\n12:00:15  fetch again\n12:00:30  fetch again\n12:00:41  you leave the page → polling stops, nothing runs in the background']],
+      [['Tile on your phone (what the app really renders)', 'Import bridge: running (v0.1.0)\n12 imported · 3 already in Immich · 4 queued\n1 failed (retried automatically)\nWatching: /w/Australia/Asia2026\nImported first: /w/Australia/Asia2026\nLast activity 2 min ago\n\n☁ IMG_4821.JPG      imported · 2 min ago\n⧉ IMG_5002.HEIC     duplicate · 2 min ago\n⚠ IMG_5099.MOV      failed · 14 min ago\n                    upload failed: HTTP 500', 'phone']],
+      [['Same tile, other states', 'Blank URL:      no tile (feature off, no request made)\nBad URL:        Import bridge: invalid URL — Enter an address like http://192.168.5.21:8099\nVM / bridge off: Import bridge: not reachable — Uploads to copyparty and Immich are unaffected. Anything uploaded meanwhile is picked up automatically when the bridge is back. Tap to retry.']],
+      [['What stays unaffected when the tile says "not reachable"', 'Phone backup to Immich  ✓ normal\nImport from Memory Card → copyparty  ✓ normal\nImmich timeline, search, sync  ✓ normal']]
+    ]
   ];
 
   var svg = document.getElementById('svg');
@@ -308,6 +352,13 @@
     var b = document.createElement('b'); b.textContent = s.t;
     var p = document.createElement('span'); p.textContent = s.d;
     captionEl.appendChild(b); captionEl.appendChild(p);
+    var exEl = document.getElementById('examples');
+    exEl.innerHTML = '';
+    ((EX[scene] || [])[step] || []).forEach(function (blk) {
+      var h = document.createElement('div'); h.className = 'exh'; h.textContent = 'Example · ' + blk[0];
+      var pre = document.createElement('pre'); pre.className = 'ex' + (blk[2] ? ' ' + blk[2] : ''); pre.textContent = blk[1];
+      exEl.appendChild(h); exEl.appendChild(pre);
+    });
     countEl.textContent = 'Step ' + (step + 1) + ' of ' + sc.steps.length;
     var lis = stepsEl.children;
     for (var i = 0; i < lis.length; i++) { lis[i].classList.toggle('on', i === step); }

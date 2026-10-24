@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.3.3-custom.N+<3048+N>  →  3.3.3-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.3.4-custom.206+3254** (next push → `207+3255`). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
+Latest pushed: **3.3.4-custom.207+3255** (next push → `208+3256`). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
 
 Note: another Claude Code session may also be working on this fork in parallel on branch
 `claude/auto-immich-copyparty-upload-eq80lh` (not `feature/copyparty-up2k-import` itself — it
@@ -122,6 +122,12 @@ Concretely:
   analysis that isn't backed by data — and they have been right to.
 - A confident-sounding explanation that you cannot point to a log line for is a
   guess. Label it as one.
+
+### HTML explainers/mockups must show concrete examples
+Whenever an HTML page (flow diagram, mockup, review page) describes something the user will
+"see", include a realistic example of it (fabricated data is fine, say so on the page): real-looking
+terminal output, log lines, JSON, file names, the app tile as rendered. Prose alone is ambiguous
+to the user. See `copyparty-immich-bridge/docs/bridge-flow.html` (the `EX` table).
 
 ### APK builds
 `Build Custom APK` (`.github/workflows/build-custom-apk.yml`) triggers
