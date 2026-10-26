@@ -2176,11 +2176,11 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
       // so label it honestly or it reads as the copy restarting from scratch.
       return file.verifyingResume
           ? _chip(context, 'Verifying', Icons.fact_check_outlined, context.colorScheme.tertiary)
-          : _chip(context, 'Copying', Icons.phone_android_rounded, context.colorScheme.secondary);
+          : _chip(context, 'Caching', Icons.phone_android_rounded, context.colorScheme.secondary);
     }
     // Copy-ahead finished (copied AND hashed) — waiting for its upload turn.
     if (file.stagedReady) {
-      return _chip(context, 'Copied', Icons.phonelink_ring_rounded, context.colorScheme.tertiary);
+      return _chip(context, 'Cached', Icons.phonelink_ring_rounded, context.colorScheme.tertiary);
     }
     final (String label, IconData icon, Color color) = switch (file.status) {
       UploadFileStatus.hashing => ('Hashing', Icons.tag_rounded, context.colorScheme.onSurfaceVariant),
@@ -2323,7 +2323,7 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
                         // before any new copying — label it "verifying", not
                         // "copying", or it reads as restarting from scratch.
                         ? '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · '
-                              '${file.verifyingResume ? 'verifying' : 'copying'} '
+                              '${file.verifyingResume ? 'verifying' : 'caching'} '
                               '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}% · $_speed'
                         : isCopied
                         // Fully staged, waiting for its upload turn. Include the
@@ -2331,7 +2331,7 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
                         // silently dropped before, unlike the analogous "Done"
                         // (upload) timing line.
                         ? (_stageTimingSuffix(file) != null
-                              ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · copied in '
+                              ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · cached in '
                                     '${_stageTimingSuffix(file)} · waiting to upload'
                               : '${formatHumanReadableBytes(file.sizeBytes, 1)} · copied to phone · waiting to upload')
                         : isHashing
