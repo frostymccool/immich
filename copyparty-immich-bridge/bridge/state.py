@@ -141,6 +141,15 @@ class StateStore:
             rows = self._db.execute("SELECT status, COUNT(*) FROM files GROUP BY status").fetchall()
         return {status: n for status, n in rows}
 
+    def done_assets(self) -> list[tuple[str, str]]:
+        """(path, immich asset id) of every file that was imported / found already in Immich."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT path, asset_id FROM files WHERE status IN ('imported', 'duplicate') "
+                "AND asset_id IS NOT NULL AND asset_id != '' AND asset_id != 'present' ORDER BY updated_at"
+            ).fetchall()
+        return [(p, a) for p, a in rows]
+
     def recent(self, limit: int = 20) -> list[FileRecord]:
         with self._lock:
             rows = self._db.execute(

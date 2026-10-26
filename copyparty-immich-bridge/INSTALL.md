@@ -46,8 +46,16 @@ Source files are never moved or deleted (the bridge mounts them read-only).
 
 Every imported file is also added to an Immich album named after the folder it sits in (a file in
 `Day 3 hike/` goes into the album **Day 3 hike**, which is created the first time it is needed). Switch it off with the
-checkbox on the settings page, or `ALBUM_FROM_FOLDER=false`. Files imported before you updated are not added
-retroactively.
+checkbox on the settings page, or `ALBUM_FROM_FOLDER=false`.
+
+**Needs an Immich API key with album permissions** (`album.read`, `album.create`, `albumAsset.create`, or simply
+*all permissions*). The installer checks the key and prints a note if it lacks them, and the bridge's Status tab
+shows a red banner (and the Logs tab a warning) if albums can't be written, so it can't fail silently. Imports
+themselves never depend on it. To fix a key: create a new one in Immich (Account Settings > API Keys, all
+permissions) and re-run the installer with `IMMICH_API_KEY=… ` in front.
+
+**Files imported earlier** (before albums were on, or while the key lacked permission) are added by the button
+**Add already-imported files to their folder albums** on the Folders & settings tab. Safe to press again.
 
 ## Update, remove, options
 

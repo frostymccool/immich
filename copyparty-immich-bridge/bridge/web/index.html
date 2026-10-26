@@ -100,6 +100,7 @@
         <h2>Imports</h2>
         <div class="tiles" id="tiles"></div>
         <p class="muted" id="watching"></p>
+        <div id="albumNote"></div>
       </div>
       <div class="card">
         <h2>Recent files</h2>
@@ -138,6 +139,11 @@
         <div class="muted">e.g. a file in the folder “Day 3 hike” goes into the Immich album “Day 3 hike”, which is created if it doesn’t exist yet. Only the folder the file sits directly in is used. On by default.</div>
         <label class="f" for="album_name">Also add everything to this one Immich album (optional) <span class="changed" id="c_album_name"></span></label>
         <input id="album_name" type="text" placeholder="e.g. Summer trip 2026">
+        <div style="margin:12px 0 0">
+          <button id="backfill">Add already-imported files to their folder albums</button>
+          <span class="muted" id="backfillState"></span>
+        </div>
+        <div class="muted">One-off: files imported before folder albums were switched on (or while the Immich key lacked album permissions) are put in their albums now. Safe to run again.</div>
         <label class="f" for="include_extensions">Only these file types (optional) <span class="changed" id="c_include_extensions"></span></label>
         <input id="include_extensions" type="text" placeholder="blank = whatever Immich supports, e.g. jpg heic mp4">
         <label class="f" for="log_level">Log detail <span class="changed" id="c_log_level"></span></label>
@@ -265,6 +271,23 @@
       tb.appendChild(tr);
     });
     $('recentEmpty').classList.toggle('hidden', s.recent.length > 0);
+    renderAlbums(s.albums);
+  }
+  function renderAlbums(a) {
+    var box = $('albumNote'); box.textContent = '';
+    if (!a || !a.enabled) { return; }
+    var note = function (cls, text) { var d = el('div', { 'class': cls }, text); d.style.margin = '8px 0 0'; box.appendChild(d); };
+    if (a.permission && a.permission.ok === false) {
+      note('errs', 'Folder albums can’t work: the Immich API key is missing album permissions (' + a.permission.missing.join(', ') +
+        '). Imports are unaffected. Fix: create an API key with all permissions in Immich, then re-run the installer with IMMICH_API_KEY=… in front.');
+    } else if (a.failed > 0 && a.last_error) {
+      note('errs', a.failed + ' album add' + (a.failed === 1 ? '' : 's') + ' failed. Latest: ' + a.last_error);
+    }
+    if (a.added > 0) { note('muted', 'Folder albums: ' + a.added + ' file' + (a.added === 1 ? '' : 's') + ' added to albums since the bridge started.'); }
+    else if (!a.permission || a.permission.ok !== false) { note('muted', 'Folder albums: nothing added yet (only files imported from now on are added; use the button under Folders & settings for earlier ones).'); }
+    var bf = a.backfill || {};
+    var st = $('backfillState');
+    if (st) { st.textContent = bf.running ? ' working… ' + bf.done + ' / ' + bf.total : (bf.total ? ' last run: ' + bf.done + ' done, ' + bf.failed + ' failed' : ''); }
   }
   function pollHealth() {
     return fetch('/healthz').then(function (r) { return r.json(); }).then(function (h) {
@@ -273,6 +296,10 @@
   }
   $('scan').onclick = function () {
     api('POST', '/api/scan', {}).then(function () { $('scan').textContent = 'Scanning…'; setTimeout(function () { $('scan').textContent = 'Scan now'; refresh(); }, 1500); });
+  };
+
+  $('backfill').onclick = function () {
+    api('POST', '/api/albums/backfill', {}).then(function (r) { renderAlbums(r.albums); $('backfillState').textContent = r.started ? ' started…' : ' already running…'; setTimeout(refresh, 1500); });
   };
 
   // ---- settings ----------------------------------------------------------------
@@ -411,6 +438,7 @@
   };
 
   // ---- polling -----------------------------------------------------------------
+  var bfRunning = false;
   function refresh() {
     clearTimeout(pollT);
     if (!token) { return; }
@@ -418,9 +446,9 @@
     var job;
     if (tab === 'status') { job = fetch('/status').then(function (r) { return r.json(); }).then(renderStatus); }
     else if (tab === 'logs') { job = fetchLogs(lastLogId === 0 && !logLines.length); }
-    else { job = Promise.resolve(); }
+    else { job = fetch('/status').then(function (r) { return r.json(); }).then(function (st) { bfRunning = !!(st.albums && st.albums.backfill && st.albums.backfill.running); renderAlbums(st.albums); }); }
     job.catch(function () { /* transient */ }).then(function () {
-      var wait = tab === 'logs' ? ($('logAuto').checked ? 2000 : 0) : (tab === 'status' ? 5000 : 0);
+      var wait = tab === 'logs' ? ($('logAuto').checked ? 2000 : 0) : (tab === 'status' ? 5000 : (bfRunning ? 2000 : 0));
       if (wait) { pollT = setTimeout(refresh, wait); }
     });
   }

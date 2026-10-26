@@ -13,12 +13,16 @@ import hashlib
 import logging
 import os
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import requests
 
 log = logging.getLogger("bridge.immich")
+
+# What the API key needs for albums (Immich permission names, from its OpenAPI spec). "all" covers them.
+ALBUM_PERMISSIONS = ("album.read", "album.create", "albumAsset.create")
 
 # Fallback when Immich is unreachable at startup and INCLUDE_EXTENSIONS is not
 # set. Conservative subset of Immich's supported media types.
@@ -65,6 +69,8 @@ class ImmichClient:
         # album name -> id, so a folder-named album is looked up/created once, not per file
         self._album_ids: dict[str, str] = {}
         self._album_lock = threading.Lock()
+        # what the page shows so a silent failure (usually a key without album permissions) is visible
+        self.album_stats: dict = {"added": 0, "failed": 0, "last_error": None, "last_error_at": None}
 
     def close(self) -> None:
         self._session.close()
@@ -144,12 +150,37 @@ class ImmichClient:
 
     # -- albums ---------------------------------------------------------------
 
+    def album_permission_status(self) -> dict:
+        """Does this API key have the album permissions? {'ok': True|False|None, 'missing': [...]};
+        None = could not tell (GET /api/api-keys/me needs no permission, so this only fails on network trouble)."""
+        try:
+            resp = self._session.get(self._base + "/api/api-keys/me", timeout=self._timeout)
+            resp.raise_for_status()
+            granted = set(resp.json().get("permissions") or [])
+        except (requests.RequestException, ValueError, AttributeError):
+            return {"ok": None, "missing": []}
+        if "all" in granted:
+            return {"ok": True, "missing": []}
+        missing = [p for p in ALBUM_PERMISSIONS if p not in granted]
+        return {"ok": not missing, "missing": missing}
+
+    def _album_result(self, error: str | None) -> None:
+        with self._album_lock:
+            if error is None:
+                self.album_stats["added"] += 1
+            else:
+                self.album_stats["failed"] += 1
+                self.album_stats["last_error"] = error
+                self.album_stats["last_error_at"] = time.time()
+
     def add_to_album(self, album_name: str, asset_id: str) -> bool:
         """Adds an asset to the named album, creating the album on first use.
-        Best-effort: errors are logged, never raised. Returns True when the asset is in the album.
+        Best-effort: errors are logged and counted (the web page shows them), never raised.
+        Returns True when the asset is in the album afterwards.
 
-        If the cached album was deleted in Immich since, the first attempt fails with 400/404; the cache
-        entry is dropped and the album is looked up / created again once."""
+        Immich answers 200 with a per-asset result, so that list is checked too ("duplicate" = it was
+        already in the album, fine). If the cached album was deleted in Immich since, the first attempt
+        fails with 400/404; the cache entry is dropped and the album is looked up / created once more."""
         for attempt in (1, 2):
             try:
                 album_id = self._get_or_create_album(album_name)
@@ -159,6 +190,18 @@ class ImmichClient:
                     timeout=self._timeout,
                 )
                 resp.raise_for_status()
+                try:
+                    results = resp.json()
+                except ValueError:
+                    results = []
+                bad = [r for r in results if isinstance(r, dict) and not r.get("success") and r.get("error") != "duplicate"]
+                if bad:
+                    reason = bad[0].get("error") or bad[0].get("errorMessage") or "unknown"
+                    msg = f"Immich refused to add the asset to {album_name!r}: {reason}"
+                    log.warning("album add failed for %s: %s", asset_id, msg)
+                    self._album_result(msg)
+                    return False
+                self._album_result(None)
                 return True
             except requests.HTTPError as ex:
                 status = ex.response.status_code if ex.response is not None else 0
@@ -166,10 +209,14 @@ class ImmichClient:
                     with self._album_lock:
                         self._album_ids.pop(album_name, None)
                     continue
-                log.warning("album add failed for %s -> %r: %s", asset_id, album_name, ex)
+                detail = (ex.response.text or "")[:200].strip() if ex.response is not None else ""
+                msg = f"HTTP {status} for album {album_name!r}" + (f": {detail}" if detail else "")
+                log.warning("album add failed for %s: %s", asset_id, msg)
+                self._album_result(msg)
                 return False
             except requests.RequestException as ex:
                 log.warning("album add failed for %s -> %r: %s", asset_id, album_name, ex)
+                self._album_result(f"{album_name!r}: {ex}")
                 return False
         return False
 

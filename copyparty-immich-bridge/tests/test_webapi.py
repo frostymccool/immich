@@ -278,3 +278,15 @@ def test_hook_script_without_the_token_is_refused_but_never_fails_the_upload(app
     result = run_hook_script(base, str(media / "trip" / "a.jpg"), None)
     assert result.returncode == 0  # must never break copyparty
     assert call(base, "GET", "/status", token=None)[1]["queue"] == 0
+
+
+def test_status_reports_album_health_and_backfill_endpoint_needs_the_token(app):
+    make, _ = app
+    base, *_ = make()
+    status, body, _ = call(base, "GET", "/status", token=None)
+    assert status == 200
+    assert set(body["albums"]) >= {"enabled", "permission", "backfill"}
+    assert call(base, "POST", "/api/albums/backfill", {}, token=None)[0] == 401
+    status, body, _ = call(base, "POST", "/api/albums/backfill", {})
+    assert status == 200 and "started" in body
+    assert call(base, "POST", "/api/albums/recheck", {}, token="bad")[0] == 401

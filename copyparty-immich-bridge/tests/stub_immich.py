@@ -19,6 +19,10 @@ class StubImmich:
         self.albums: list[dict] = []
         self.album_assets: dict[str, list[str]] = {}
         self._album_seq = 0
+        self.key_permissions: list[str] = ["all"]
+        self.forbid_albums = False  # every album call answers 403 (a key without album permissions)
+        self.album_item_error: str | None = None  # PUT answers 200 but with a per-asset error
+        self.album_fail_ids: set[str] = set()
         self.removed_albums: set[str] = set()
         self.media_types_route = media_types_route
         self._counter = 0
@@ -40,6 +44,10 @@ class StubImmich:
             def do_GET(self):
                 if self.path == stub.media_types_route:
                     self._json(200, {"image": [".jpg", ".png", ".heic"], "video": [".mp4"], "sidecar": [".xmp"]})
+                elif self.path == "/api/api-keys/me":
+                    self._json(200, {"id": "key-1", "name": "bridge", "permissions": stub.key_permissions})
+                elif self.path == "/api/albums" and stub.forbid_albums:
+                    self._json(403, {"message": "Missing required permission: album.read"})
                 elif self.path == "/api/albums":
                     self._json(200, stub.albums)
                 else:
@@ -71,6 +79,8 @@ class StubImmich:
                         stub.known_checksums[checksum] = asset_id
                     stub.uploads.append({"checksum": checksum, "raw_len": len(body)})
                     self._json(201, {"id": asset_id, "status": "created"})
+                elif self.path == "/api/albums" and stub.forbid_albums:
+                    self._json(403, {"message": "Missing required permission: album.create"})
                 elif self.path == "/api/albums":
                     name = json.loads(body)["albumName"]
                     stub._album_seq += 1
@@ -86,10 +96,22 @@ class StubImmich:
                 m = re.fullmatch(r"/api/albums/([^/]+)/assets", self.path)
                 if m and m.group(1) in stub.removed_albums:
                     self._json(404, {"message": "Not found or no album.update access"})
+                elif m and stub.forbid_albums:
+                    self._json(403, {"message": "Missing required permission: albumAsset.create"})
                 elif m:
                     ids = json.loads(body)["ids"]
-                    stub.album_assets.setdefault(m.group(1), []).extend(ids)
-                    self._json(200, [{"id": i, "success": True} for i in ids])
+                    if stub.album_item_error:
+                        self._json(200, [{"id": i, "success": False, "error": stub.album_item_error} for i in ids])
+                        return
+                    already = stub.album_assets.setdefault(m.group(1), [])
+                    out = []
+                    for i in ids:
+                        if i in already:
+                            out.append({"id": i, "success": False, "error": "duplicate"})
+                        else:
+                            already.append(i)
+                            out.append({"id": i, "success": True})
+                    self._json(200, out)
                 else:
                     self._json(404, {"error": "not found"})
 

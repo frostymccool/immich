@@ -192,6 +192,19 @@ say "Checking Immich at $IMMICH_URL"
 curl -fsS -m 10 "$IMMICH_URL/api/server/ping" >/dev/null || die "cannot reach Immich at $IMMICH_URL (set IMMICH_URL=...)"
 curl -fsS -m 10 -H "x-api-key: $KEY" "$IMMICH_URL/api/users/me" >/dev/null || die "Immich rejected that API key"
 echo "Immich reachable, API key accepted."
+# Folder-named albums need album permissions on the key. Warn (never fail) if it clearly lacks them.
+perms="$(curl -fsS -m 10 -H "x-api-key: $KEY" "$IMMICH_URL/api/api-keys/me" 2>/dev/null || true)"
+if [ -n "$perms" ] && ! printf '%s' "$perms" | grep -q '"all"'; then
+  missing=""
+  for p in album.read album.create albumAsset.create; do
+    printf '%s' "$perms" | grep -q "\"$p\"" || missing="$missing $p"
+  done
+  if [ -n "$missing" ]; then
+    echo "NOTE: this API key lacks album permissions (missing:$missing)."
+    echo "      Imports will work, but files will NOT be added to folder albums. For albums, create a key with"
+    echo "      all permissions in Immich (Account Settings > API Keys) and re-run with IMMICH_API_KEY=... in front."
+  fi
+fi
 
 umask 077
 printf 'IMMICH_API_KEY=%s\nBRIDGE_TOKEN=%s\n' "$KEY" "$TOKEN" > "$ENVFILE"

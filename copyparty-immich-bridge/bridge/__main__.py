@@ -74,6 +74,7 @@ def main() -> int:
 
     worker = ImportWorker(cfg, state, client, allowed)
     worker.start()
+    threading.Thread(target=worker.check_album_permission, name="album-permission", daemon=True).start()
 
     def sweep_loop() -> None:
         while not stop_event.is_set():

@@ -87,3 +87,41 @@ def test_album_deleted_in_immich_is_recreated_on_the_next_file(tmp_path):
         assert [a["albumName"] for a in stub.albums] == ["Day 1"]
         assert stub.albums[0]["id"] != "album-1"
         assert stub.album_assets[stub.albums[0]["id"]] == ["a2"]
+
+
+def test_permission_status_all_missing_and_unknown(tmp_path):
+    with StubImmich() as stub:
+        client = ImmichClient(stub.url, "k", "dev")
+        assert client.album_permission_status() == {"ok": True, "missing": []}  # "all"
+        stub.key_permissions = ["asset.upload", "asset.read", "album.read"]
+        status = client.album_permission_status()
+        assert status["ok"] is False and status["missing"] == ["album.create", "albumAsset.create"]
+        stub.key_permissions = ["album.read", "album.create", "albumAsset.create"]
+        assert client.album_permission_status()["ok"] is True
+    # Immich unreachable -> "can't tell", never an exception
+    assert ImmichClient("http://127.0.0.1:1", "k", "dev").album_permission_status() == {"ok": None, "missing": []}
+
+
+def test_a_key_without_album_permission_is_counted_and_reported_not_raised(tmp_path):
+    with StubImmich() as stub:
+        stub.forbid_albums = True
+        client = ImmichClient(stub.url, "k", "dev")
+        assert client.add_to_album("Day 1", "a1") is False
+        assert client.album_stats["failed"] == 1 and client.album_stats["added"] == 0
+        assert "403" in client.album_stats["last_error"] and "album" in client.album_stats["last_error"]
+
+
+def test_immich_saying_200_with_a_per_asset_error_is_a_failure(tmp_path):
+    with StubImmich() as stub:
+        stub.album_item_error = "no_permission"
+        client = ImmichClient(stub.url, "k", "dev")
+        assert client.add_to_album("Day 1", "a1") is False
+        assert "no_permission" in client.album_stats["last_error"]
+
+
+def test_already_in_the_album_counts_as_success(tmp_path):
+    with StubImmich() as stub:
+        client = ImmichClient(stub.url, "k", "dev")
+        assert client.add_to_album("Day 1", "a1") is True
+        assert client.add_to_album("Day 1", "a1") is True  # Immich reports "duplicate": fine
+        assert client.album_stats == {"added": 2, "failed": 0, "last_error": None, "last_error_at": None}

@@ -32,7 +32,7 @@ echo "git $*" >> "$FAKE_LOG"
 if [ "$1" = clone ]; then dir="${@: -1}"; mkdir -p "$dir/.git" "$dir/copyparty-immich-bridge/hook"; touch "$dir/copyparty-immich-bridge/Dockerfile"; fi
 exit 0
 """
-FAKE_CURL = '#!/usr/bin/env bash\necho "curl $*" >> "$FAKE_LOG"; exit 0\n'
+FAKE_CURL = '#!/usr/bin/env bash\necho "curl $*" >> "$FAKE_LOG"\ncase "$*" in *api-keys/me*) printf \'%s\' "${FAKE_KEY_JSON:-}";; esac\nexit 0\n'
 FAKE_IP = '#!/usr/bin/env bash\necho "1.1.1.1 via 1 dev eth0 src 192.168.1.50"\n'
 
 
@@ -173,3 +173,18 @@ def test_first_install_offers_a_numbered_list_newest_first_and_accepts_a_number(
     assert ".hist" not in r.stdout
     assert "Type the number" in r.stdout
     assert "WATCH_DIRS: /w/Trips/Summer2026" in box.override.read_text()
+
+
+def test_a_key_without_album_permissions_gets_a_note_but_the_install_still_works(box):
+    r = box.run(env={"APP_FOLDER": "Work", "FAKE_KEY_JSON": '{"permissions":["asset.upload","asset.read","album.read"]}'})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "lacks album permissions" in r.stdout and "album.create" in r.stdout and "albumAsset.create" in r.stdout
+    assert "album.read" not in r.stdout.split("missing:")[1].split(")")[0]
+    assert box.override.exists()
+
+
+def test_a_key_with_all_or_the_album_permissions_gets_no_note(box):
+    for perms in ('{"permissions":["all"]}', '{"permissions":["album.read","album.create","albumAsset.create","asset.upload"]}', ""):
+        r = box.run(env={"APP_FOLDER": "Work", "FAKE_KEY_JSON": perms})
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "lacks album permissions" not in r.stdout, perms

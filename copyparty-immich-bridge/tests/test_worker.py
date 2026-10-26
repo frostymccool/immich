@@ -274,3 +274,76 @@ def test_album_name_tidying_and_limits():
     assert folder_album_name("/w/.imported/x.jpg") is None
     assert folder_album_name("/x.jpg") is None
     assert len(folder_album_name("/w/" + "a" * 300 + "/x.jpg")) == 200
+
+
+# -- album diagnostics + back-fill ---------------------------------------------------------------------------
+
+
+def test_missing_album_permission_is_detected_logged_and_does_not_stop_imports(tmp_path, caplog):
+    with StubImmich() as stub:
+        stub.key_permissions = ["asset.upload", "asset.read"]
+        stub.forbid_albums = True
+        worker, state, _ = make_worker(tmp_path, stub)
+        with caplog.at_level("INFO", logger="bridge.worker"):
+            worker.check_album_permission()
+        assert "cannot use albums" in caplog.text and "album.create" in caplog.text
+        path = write_file(tmp_path, "Day 1/a.jpg", b"a")
+        worker._process(path)
+        assert state.get(path).status == "imported"  # the import itself is unaffected
+        info = worker.album_info()
+        assert info["enabled"] is True
+        assert info["permission"]["ok"] is False and "album.create" in info["permission"]["missing"]
+        assert info["failed"] == 1 and "403" in info["last_error"]
+
+
+def test_album_info_when_everything_works(tmp_path):
+    with StubImmich() as stub:
+        worker, state, _ = make_worker(tmp_path, stub)
+        worker.check_album_permission()
+        worker._process(write_file(tmp_path, "Day 1/a.jpg", b"a"))
+        info = worker.album_info()
+        assert info["permission"]["ok"] is True and info["added"] == 1 and info["failed"] == 0
+
+
+def _wait_backfill(worker, timeout=10):
+    deadline = time.time() + timeout
+    while worker.backfill["running"] and time.time() < deadline:
+        time.sleep(0.02)
+    assert not worker.backfill["running"]
+
+
+def test_backfill_adds_files_imported_before_folder_albums_existed(tmp_path):
+    with StubImmich() as stub:
+        worker, state, cfg = make_worker(tmp_path, stub, album_from_folder=False)
+        for rel, data in [("Day 1/a.jpg", b"a"), ("Day 1/b.jpg", b"b"), ("Day 2/c.jpg", b"c")]:
+            worker._process(write_file(tmp_path, rel, data))
+        assert stub.albums == []  # imported while the feature was off
+        cfg.album_from_folder = True
+        assert worker.start_backfill() is True
+        _wait_backfill(worker)
+        assert [a["albumName"] for a in stub.albums] == ["Day 1", "Day 2"]
+        assert stub.album_assets["album-1"] == ["asset-1", "asset-2"]
+        assert stub.album_assets["album-2"] == ["asset-3"]
+        assert worker.backfill["total"] == 3 and worker.backfill["done"] == 3 and worker.backfill["failed"] == 0
+
+
+def test_backfill_twice_is_harmless_and_failures_are_counted(tmp_path):
+    with StubImmich() as stub:
+        worker, state, cfg = make_worker(tmp_path, stub, album_from_folder=False)
+        worker._process(write_file(tmp_path, "Day 1/a.jpg", b"a"))
+        cfg.album_from_folder = True
+        worker.start_backfill(); _wait_backfill(worker)
+        worker.start_backfill(); _wait_backfill(worker)  # already in the album -> still "done", no duplicates
+        assert stub.album_assets["album-1"] == ["asset-1"]
+        assert worker.backfill["failed"] == 0
+        stub.forbid_albums = True
+        worker.start_backfill(); _wait_backfill(worker)
+        assert worker.backfill["failed"] == 1
+
+
+def test_backfill_ignores_failed_and_skipped_files(tmp_path):
+    with StubImmich() as stub:
+        worker, state, cfg = make_worker(tmp_path, stub)
+        state.record_failure("/w/x/bad.jpg", 1, 1.0, None, "boom")
+        state.record_skip("/w/x/doc.txt", 1, 1.0, "unsupported extension")
+        assert state.done_assets() == []

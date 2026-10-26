@@ -35,6 +35,9 @@ class ImportWorker:
         self._queue: queue.PriorityQueue[tuple[int, int, str]] = queue.PriorityQueue()
         self._seq = itertools.count()
         self._pending: set[str] = set()
+        self.album_permission: dict = {"ok": None, "missing": []}
+        self.backfill: dict = {"running": False, "total": 0, "done": 0, "failed": 0}
+        self._backfill_lock = threading.Lock()
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -147,13 +150,67 @@ class ImportWorker:
 
             if outcome.asset_id and outcome.asset_id != "present":
                 for album in self._albums_for(path):
-                    self._client.add_to_album(album, outcome.asset_id)
+                    if self._client.add_to_album(album, outcome.asset_id):
+                        log.info("album %r <- %s", album, name)
 
             self._state.record_success(path, size, mtime, sha1, outcome.status, outcome.asset_id)
             self._post_import(path)
         except (ImmichError, requests.RequestException, OSError) as ex:
             log.warning("import failed for %s: %s", path, ex)
             self._state.record_failure(path, size, mtime, sha1, str(ex))
+
+    # -- albums: permission check + back-fill of files imported before folder albums existed ----------------
+
+    def check_album_permission(self) -> dict:
+        """Asks Immich whether the API key may use albums, remembers the answer, and says so in the log."""
+        self.album_permission = self._client.album_permission_status()
+        if self._cfg.album_from_folder or self._cfg.album_name:
+            if self.album_permission["ok"] is False:
+                log.warning(
+                    "the Immich API key cannot use albums (missing: %s) - files will import but NOT be added to "
+                    "albums. Create a key with all permissions and re-run the installer with IMMICH_API_KEY=...",
+                    ", ".join(self.album_permission["missing"]),
+                )
+            elif self.album_permission["ok"] is True:
+                log.info("the Immich API key may create albums")
+        return self.album_permission
+
+    def album_info(self) -> dict:
+        return {
+            "enabled": bool(self._cfg.album_from_folder or self._cfg.album_name),
+            "permission": self.album_permission,
+            **getattr(self._client, "album_stats", {}),
+            "backfill": dict(self.backfill),
+        }
+
+    def start_backfill(self) -> bool:
+        """Adds everything already imported to its folder album, in the background. False if one is running."""
+        with self._backfill_lock:
+            if self.backfill["running"]:
+                return False
+            self.backfill = {"running": True, "total": 0, "done": 0, "failed": 0}
+        threading.Thread(target=self._run_backfill, name="album-backfill", daemon=True).start()
+        return True
+
+    def _run_backfill(self) -> None:
+        try:
+            rows = self._state.done_assets()
+            self.backfill["total"] = len(rows)
+            log.info("adding %d already-imported file(s) to their folder albums", len(rows))
+            for path, asset_id in rows:
+                if self._stop.is_set():
+                    break
+                ok = True
+                for album in self._albums_for(path):
+                    ok = self._client.add_to_album(album, asset_id) and ok
+                self.backfill["done"] += 1
+                if not ok:
+                    self.backfill["failed"] += 1
+            log.info("album back-fill finished: %d done, %d failed", self.backfill["done"], self.backfill["failed"])
+        except Exception:
+            log.exception("album back-fill crashed")
+        finally:
+            self.backfill["running"] = False
 
     def _albums_for(self, path: str) -> list[str]:
         """Albums this file goes into: the fixed album (if set) and the folder-named one (if enabled)."""

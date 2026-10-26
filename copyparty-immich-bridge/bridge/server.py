@@ -170,6 +170,7 @@ def make_handler(
                         "queue": worker.queue_size,
                         "watch_dirs": cfg.watch_dirs,
                         "priority_dirs": cfg.priority_dirs,
+                        "albums": worker.album_info(),
                         "recent": recent,
                     },
                 )
@@ -235,6 +236,16 @@ def make_handler(
                         self._send_json(500, {"error": f"could not save settings: {ex}"})
                         return
                     self._send_json(200, self._config_payload())
+                return
+            if self.path == "/api/albums/backfill":
+                if self._require_api():
+                    started = worker.start_backfill()
+                    self._send_json(200, {"started": started, "albums": worker.album_info()})
+                return
+            if self.path == "/api/albums/recheck":
+                if self._require_api():
+                    worker.check_album_permission()
+                    self._send_json(200, {"albums": worker.album_info()})
                 return
             if self.path == "/api/scan" and scan_now is not None:
                 if self._require_api():
