@@ -101,7 +101,6 @@
       <div class="card">
         <h2>Imports</h2>
         <div id="pauseNote"></div>
-        <div id="activeNote"></div>
         <div class="tiles" id="tiles"></div>
         <p class="muted" id="watching"></p>
         <div id="albumNote"></div>
@@ -109,7 +108,7 @@
       </div>
       <div class="card">
         <h2>Recent files</h2>
-        <table><thead><tr><th>File</th><th>Result</th><th>When</th></tr></thead><tbody id="recent"></tbody></table>
+        <table><thead><tr><th>File</th><th>Status</th><th>When</th></tr></thead><tbody id="recent"></tbody></table>
         <p class="muted" id="recentEmpty">Nothing imported yet.</p>
       </div>
     </section>
@@ -272,6 +271,19 @@
     var q = el('div', { 'class': 'tile' }); q.appendChild(el('b', {}, String(s.queue))); q.appendChild(el('span', { 'class': 'muted' }, 'Queued')); tiles.appendChild(q);
     $('watching').textContent = 'Watching: ' + s.watch_dirs.join(', ') + (s.priority_dirs.length ? '   ·   Imported first: ' + s.priority_dirs.join(', ') : '');
     var tb = $('recent'); tb.textContent = '';
+    var act = s.active || [];
+    act.forEach(function (a) {
+      var tr = el('tr'); var c1 = el('td', { 'class': 'path' }); c1.appendChild(el('div', {}, a.name));
+      var label = a.phase === 'uploading' ? 'uploading .. (' + (a.percent || 0) + '%)' : a.phase + ' ..';
+      var c2 = el('td'); c2.appendChild(el('span', { 'class': 'pill imported' }, label));
+      var m = Math.floor(a.seconds / 60);
+      tr.appendChild(c1); tr.appendChild(c2); tr.appendChild(el('td', {}, 'running ' + (m ? m + ' min ' + (a.seconds % 60) + ' s' : a.seconds + ' s')));
+      tb.appendChild(tr);
+    });
+    if (!act.length && s.queue && !s.paused) {
+      var wr = el('tr'); var wc = el('td', { 'class': 'errs', colspan: '3' }, s.queue + ' file' + (s.queue === 1 ? ' is' : 's are') + ' waiting but nothing is importing. Open the Logs tab.');
+      wr.appendChild(wc); tb.appendChild(wr);
+    }
     s.recent.forEach(function (r) {
       var tr = el('tr'); var name = r.path.split('/').pop();
       var c1 = el('td', { 'class': 'path' }); c1.appendChild(el('div', {}, name)); c1.appendChild(el('div', { 'class': 'muted' }, r.path.slice(0, r.path.length - name.length)));
@@ -280,21 +292,9 @@
       tr.appendChild(c1); tr.appendChild(c2); tr.appendChild(el('td', {}, ago(r.updated_at)));
       tb.appendChild(tr);
     });
-    $('recentEmpty').classList.toggle('hidden', s.recent.length > 0);
+    $('recentEmpty').classList.toggle('hidden', s.recent.length > 0 || act.length > 0);
     renderAlbums(s.albums);
     renderPaused(s.paused, s.queue);
-    renderActive(s.active || [], s.queue, s.paused);
-  }
-  function renderActive(list, queue, paused) {
-    var box = $('activeNote'); box.textContent = '';
-    if (list.length) {
-      list.forEach(function (a) {
-        var m = Math.floor(a.seconds / 60), t = m ? m + ' min ' + (a.seconds % 60) + ' s' : a.seconds + ' s';
-        box.appendChild(el('p', { 'class': 'muted' }, 'Importing now: ' + a.name + ' - ' + a.phase + ' for ' + t));
-      });
-    } else if (queue && !paused) {
-      box.appendChild(el('p', { 'class': 'errs' }, queue + ' file' + (queue === 1 ? ' is' : 's are') + ' waiting but nothing is importing. Open the Logs tab.'));
-    }
   }
   function doReimport() {
     var who = lastIdentity && lastIdentity.immich_user ? lastIdentity.immich_user.name + ' (' + lastIdentity.immich_user.email + ')' : 'the current Immich account';

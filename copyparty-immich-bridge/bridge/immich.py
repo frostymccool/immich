@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import uuid
 import threading
 import time
 from dataclasses import dataclass
@@ -56,6 +57,59 @@ def sha1_hex(path: str, chunk_size: int = 1024 * 1024) -> str:
                 break
             digest.update(chunk)
     return digest.hexdigest()
+
+
+class _MultipartBody:
+    """Streams a multipart/form-data upload from disk with a known length, reporting bytes sent."""
+
+    def __init__(self, fields: dict[str, str], filename: str, path: str, progress):
+        self.boundary = uuid.uuid4().hex
+        head = "".join(
+            f'--{self.boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n' for k, v in fields.items()
+        )
+        quoted = filename.replace("\\", "\\\\").replace('"', "%22").replace("\r", "").replace("\n", "")
+        head += (
+            f'--{self.boundary}\r\nContent-Disposition: form-data; name="assetData"; filename="{quoted}"\r\n'
+            "Content-Type: application/octet-stream\r\n\r\n"
+        )
+        self._head = head.encode("utf-8")
+        self._tail = f"\r\n--{self.boundary}--\r\n".encode()
+        self._file_size = os.path.getsize(path)
+        self._fh = open(path, "rb")
+        self._parts_done = 0  # 0 head, 1 file, 2 tail, 3 finished
+        self._progress = progress
+        self._sent = 0
+        self._total = len(self._head) + self._file_size + len(self._tail)
+
+    def __len__(self) -> int:
+        return self._total
+
+    def read(self, n: int = 65536) -> bytes:
+        if self._parts_done == 0:
+            self._parts_done = 1
+            chunk = self._head
+        elif self._parts_done == 1:
+            chunk = self._fh.read(n)
+            if not chunk:
+                self._parts_done = 2
+                chunk = self._tail
+        else:
+            self._parts_done = 3
+            chunk = b""
+        self._sent += len(chunk)
+        if self._progress is not None and chunk:
+            self._progress(min(self._sent, self._total), self._total)
+        return chunk
+
+    def __iter__(self):
+        while True:
+            chunk = self.read()
+            if not chunk:
+                return
+            yield chunk
+
+    def close(self) -> None:
+        self._fh.close()
 
 
 class ImmichClient:
@@ -118,7 +172,7 @@ class ImmichClient:
             return first.get("assetId") or "present"
         return None
 
-    def upload(self, path: str, sha1_hex_digest: str) -> UploadOutcome:
+    def upload(self, path: str, sha1_hex_digest: str, progress=None) -> UploadOutcome:
         """Uploads one file. Immich replies 201 (created) or 200 (duplicate)."""
         stat = os.stat(path)
         mtime_iso = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
@@ -133,16 +187,21 @@ class ImmichClient:
             "filename": filename,
             "isFavorite": "false",
         }
-        with open(path, "rb") as fh:
+        body = _MultipartBody(data, filename, path, progress)
+        try:
             resp = self._session.post(
                 self._base + "/api/assets",
-                data=data,
-                files={"assetData": (filename, fh, "application/octet-stream")},
-                headers={"x-immich-checksum": sha1_hex_digest},
+                data=body,
+                headers={
+                    "x-immich-checksum": sha1_hex_digest,
+                    "Content-Type": f"multipart/form-data; boundary={body.boundary}",
+                },
                 # Big videos over a LAN need a long wait for Immich's reply, but not forever: a stalled
                 # upload must fail (and be retried) instead of blocking the queue.
                 timeout=(self._timeout, self._upload_timeout),
             )
+        finally:
+            body.close()
         if resp.status_code not in (200, 201):
             raise ImmichError(f"upload failed: HTTP {resp.status_code}: {resp.text[:300]}")
         body = resp.json()

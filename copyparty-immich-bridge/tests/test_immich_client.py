@@ -141,3 +141,14 @@ def test_known_albums_lists_what_was_used(tmp_path):
         client.add_to_album("Day 1", "a1")
         client.add_to_album("Day 2", "a2")
         assert client.known_albums() == {"Day 1": "album-1", "Day 2": "album-2"}
+
+
+def test_upload_reports_progress_up_to_100(tmp_path):
+    with StubImmich() as stub:
+        client = make_client(stub)
+        f = tmp_path / "big.bin"
+        f.write_bytes(b"x" * 300_000)
+        seen = []
+        client.upload(str(f), sha1_hex(str(f)), progress=lambda sent, total: seen.append((sent, total)))
+        assert seen and seen[-1][0] == seen[-1][1]
+        assert seen == sorted(seen)

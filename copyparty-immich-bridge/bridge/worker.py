@@ -43,7 +43,7 @@ class ImportWorker:
         self.backfill: dict = {"running": False, "total": 0, "done": 0, "failed": 0}
         self._backfill_lock = threading.Lock()
         self._lock = threading.Lock()
-        self._active: dict[str, tuple[float, str]] = {}  # path -> (started, phase) of files being imported now
+        self._active: dict[str, tuple[float, str, int | None]] = {}  # path -> (started, phase) of files being imported now
         self._held = 0  # files a worker has taken from the queue but is holding because imports are paused
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -76,13 +76,14 @@ class ImportWorker:
         now = time.time()
         with self._lock:
             return [
-                {"name": os.path.basename(p), "phase": ph, "seconds": int(now - t0)} for p, (t0, ph) in self._active.items()
+                {"name": os.path.basename(p), "phase": ph, "seconds": int(now - t0), "percent": pct}
+                for p, (t0, ph, pct) in self._active.items()
             ]
 
-    def _phase(self, path: str, phase: str) -> None:
+    def _phase(self, path: str, phase: str, percent: int | None = None) -> None:
         with self._lock:
-            started = self._active.get(path, (time.time(), ""))[0]
-            self._active[path] = (started, phase)
+            started = self._active.get(path, (time.time(), "", None))[0]
+            self._active[path] = (started, phase, percent)
 
     # -- producers ---------------------------------------------------------------
 
@@ -189,7 +190,9 @@ class ImportWorker:
                 log.info("already in Immich (checksum): %s -> %s", name, existing)
             else:
                 self._phase(path, "uploading")
-                outcome = self._client.upload(path, sha1)
+                outcome = self._client.upload(
+                    path, sha1, progress=lambda sent, total: self._phase(path, "uploading", int(sent * 100 / total) if total else 0)
+                )
                 log.info("%s: %s -> asset %s", outcome.status, name, outcome.asset_id)
 
             if outcome.asset_id and outcome.asset_id != "present":
