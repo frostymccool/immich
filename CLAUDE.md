@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.3.3-custom.N+<3048+N>  →  3.3.3-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.3.5-custom.210+3258** (next push → `211+3259`; build 210 = privacy/.gitignore audit, examples now use generic IPs/hosts; build 209 = the "config upgrade" below; synced to upstream v3.3.5 — clean linear fast-forward, only version/Fastfile/Info.plist changed on mobile). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
+Latest pushed: **3.3.5-custom.211+3259** (next push → `212+3260`; build 211 = fork audit wired into every pipeline; build 209 = the "config upgrade" below; synced to upstream v3.3.5 — clean linear fast-forward, only version/Fastfile/Info.plist changed on mobile). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
 
 Note: another Claude Code session may also be working on this fork in parallel on branch
 `claude/auto-immich-copyparty-upload-eq80lh` (not `feature/copyparty-up2k-import` itself — it
@@ -128,6 +128,20 @@ Whenever an HTML page (flow diagram, mockup, review page) describes something th
 "see", include a realistic example of it (fabricated data is fine, say so on the page): real-looking
 terminal output, log lines, JSON, file names, the app tile as rendered. Prose alone is ambiguous
 to the user. See `copyparty-immich-bridge/docs/bridge-flow.html` (the `EX` table).
+
+### Fork audit — mandatory, automatic, and fail-closed
+`scripts/fork-audit.sh` checks for tracked secret files (.env/keystores/keys/certs/DBs/logs/APKs), high-confidence
+secrets, personal data in FORK-OWNED paths (private IPs, personal e-mails, real home dirs, real-looking tokens,
+non-generic prompts), `.gitignore` coverage, the tip commit's author e-mail, and (`--apk <file>`) secrets packaged
+inside a built APK. It runs: locally via `.githooks/pre-push` (**enable once per clone: `git config core.hooksPath
+.githooks`** — do this at the start of every new session/container), in `fork-audit.yml` on every push/PR/dispatch,
+as a required `audit` job before `build-custom-apk.yml` builds anything (plus an APK-contents check before the artifact
+is uploaded), and in `bridge-tests.yml`. Run it by hand before pushing if the hook isn't enabled. A failing audit
+blocks the build — fix the finding, never weaken the script; if upstream legitimately adds a sensitive-looking file
+(placeholder/test key), review it and add it to `ALLOW_FILES` with a reason. The fork-owned path list (`OWN`) in the
+script must be extended when new fork-only directories/files are added. Upstream-inherited release workflows
+(docker.yml, fdroid.yml, prepare-release.yml …) are not modified (merge churn) but cannot run meaningfully on this
+fork; the standalone audit still runs on every push regardless.
 
 ### Keep personal details out of the repo (public fork)
 Never commit real LAN IPs, hostnames, user names, NAS paths, tokens, API keys, `.env` files,

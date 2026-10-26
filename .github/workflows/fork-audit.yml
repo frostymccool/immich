@@ -1,0 +1,30 @@
+name: Fork Audit
+
+# Blocks anything sensitive or personal from shipping (secrets, keystores, .env files,
+# private IPs / e-mails / home paths in fork-owned files, lost .gitignore protections).
+# Runs on every push and PR, can be started by hand, and is reused by the build pipelines.
+# Details: scripts/fork-audit.sh
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  audit:
+    name: Sensitive-data audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run fork audit
+        run: bash scripts/fork-audit.sh
