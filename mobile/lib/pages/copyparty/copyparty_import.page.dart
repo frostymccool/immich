@@ -3097,8 +3097,8 @@ class _CompletionFileTile extends StatelessWidget {
 
 /// Relative folder shown in the picker/completion — INCLUDES the picked root
 /// folder's own name so it matches where the file lands on the server under
-/// FB9 (e.g. root "australia" + subfolder "sydney bridge" → "australia/sydney
-/// bridge"). (item 4)
+/// FB9 (e.g. root "trips" + subfolder "city walk" → "trips/city
+/// walk"). (item 4)
 String _relPathUtil(String? root, String? dir) {
   if (dir == null) {
     return '';

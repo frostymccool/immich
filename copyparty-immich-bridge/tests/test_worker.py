@@ -156,12 +156,12 @@ def test_enqueue_dedupes(tmp_path):
 
 def test_priority_dir_files_are_processed_first(tmp_path):
     with StubImmich() as stub:
-        prio_dir = str(tmp_path / "watch" / "Asia2026")
+        prio_dir = str(tmp_path / "watch" / "Summer2026")
         worker, _, _ = make_worker(tmp_path, stub, priority_dirs=[prio_dir])
         a = write_file(tmp_path, "other/a.jpg")
         b = write_file(tmp_path, "other/b.jpg")
-        c = write_file(tmp_path, "Asia2026/c.jpg")
-        d = write_file(tmp_path, "Asia2026/d.jpg")
+        c = write_file(tmp_path, "Summer2026/c.jpg")
+        d = write_file(tmp_path, "Summer2026/d.jpg")
         for p in (a, b, c, d):  # base-folder files are queued FIRST
             worker.enqueue(p, "test")
 

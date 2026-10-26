@@ -18,8 +18,11 @@ SRC_DIR="${SRC_DIR:-$HOME/immich-bridge-src}"
 REPO="${REPO:-https://github.com/frostymccool/immich.git}"
 BRANCH="${BRANCH:-feature/copyparty-up2k-import}"
 CONTAINER="${CONTAINER:-copyparty}"
-BASE_FOLDER="${BASE_FOLDER:-Australia}"
-APP_FOLDER="${APP_FOLDER:-Australia/Asia2026}"
+# Folder the phone app uploads into, RELATIVE to copyparty's data folder (e.g. Trips/Summer2026). Asked
+# for on a first install, then remembered by re-runs. "." = everything under the data folder.
+APP_FOLDER="${APP_FOLDER:-}"
+# The wider folder WIDE=1 watches instead; default: the folder containing APP_FOLDER.
+BASE_FOLDER="${BASE_FOLDER:-}"
 WIDE="${WIDE:-0}"
 WRITABLE="${WRITABLE:-0}"   # 1 = mount the data read-write so the page can enable move/delete after import
 HOOK="${HOOK:-1}"
@@ -85,8 +88,38 @@ if [ "$HOOK" = "1" ] && grep -qE '^[[:space:]]+command:' "$COPYPARTY_DIR/docker-
   HOOK=0
 fi
 
-if [ "$WIDE" = "1" ]; then WATCH="$MOUNT_DEST/$BASE_FOLDER"; else WATCH="$MOUNT_DEST/$APP_FOLDER"; fi
-PRIORITY="$MOUNT_DEST/$APP_FOLDER"
+# --- which folder does the phone app upload into? ----------------------------------
+# 1) explicit APP_FOLDER=..., 2) the value a previous run of this installer wrote, 3) ask once.
+if [ -z "$APP_FOLDER" ] && [ -f "$OVERRIDE" ] && grep -qF "$MARKER" "$OVERRIDE"; then
+  prev="$(sed -n 's/^[[:space:]]*PRIORITY_DIRS:[[:space:]]*//p' "$OVERRIDE" | head -n1)"
+  case "$prev" in
+    "$MOUNT_DEST"/*) APP_FOLDER="${prev#"$MOUNT_DEST"/}"; echo "Keeping the folder from your last install: $APP_FOLDER" ;;
+  esac
+fi
+if [ -z "$APP_FOLDER" ]; then
+  echo
+  echo "Which folder does the phone app upload into? Give it relative to copyparty's data folder"
+  echo "(inside $MOUNT_DEST), for example  Trips/Summer2026 . Leave blank to watch everything there."
+  if ! read -r -p "Folder: " APP_FOLDER </dev/tty 2>/dev/null; then
+    die "no terminal to ask on; re-run with APP_FOLDER=... in front (or APP_FOLDER=. to watch everything)"
+  fi
+  [ -n "$APP_FOLDER" ] || APP_FOLDER="."
+fi
+APP_FOLDER="${APP_FOLDER#/}"; APP_FOLDER="${APP_FOLDER%/}"; [ -n "$APP_FOLDER" ] || APP_FOLDER="."
+if [ -z "$BASE_FOLDER" ]; then
+  case "$APP_FOLDER" in */*) BASE_FOLDER="${APP_FOLDER%/*}" ;; *) BASE_FOLDER="." ;; esac
+fi
+BASE_FOLDER="${BASE_FOLDER#/}"; BASE_FOLDER="${BASE_FOLDER%/}"; [ -n "$BASE_FOLDER" ] || BASE_FOLDER="."
+
+under_mount() { if [ "$1" = "." ]; then printf '%s' "$MOUNT_DEST"; else printf '%s/%s' "$MOUNT_DEST" "$1"; fi; }
+if [ "$WIDE" = "1" ]; then WATCH="$(under_mount "$BASE_FOLDER")"; else WATCH="$(under_mount "$APP_FOLDER")"; fi
+# A priority folder only makes sense when it is narrower than what is watched.
+PRIORITY=""
+PRIORITY_LINE="      # PRIORITY_DIRS: not set (the whole data folder is watched, nothing is imported first)"
+if [ "$APP_FOLDER" != "." ]; then
+  PRIORITY="$(under_mount "$APP_FOLDER")"
+  PRIORITY_LINE="      PRIORITY_DIRS: $PRIORITY"
+fi
 if [ "$WRITABLE" = "1" ]; then MOUNT_MODE=rw; else MOUNT_MODE=ro; fi
 
 # --- bridge source -------------------------------------------------------------
@@ -165,7 +198,7 @@ EOF
     environment:
       IMMICH_URL: $IMMICH_URL
       WATCH_DIRS: $WATCH
-      PRIORITY_DIRS: $PRIORITY
+$PRIORITY_LINE
       BROWSE_ROOTS: $MOUNT_DEST
     volumes:
       - $MOUNT_SRC:$MOUNT_DEST:$MOUNT_MODE
@@ -204,9 +237,11 @@ fi
 
 say "Installed"
 echo "Watching:        $WATCH"
-echo "Imported first:  $PRIORITY"
+echo "Imported first:  ${PRIORITY:-nothing in particular}"
 if [ "$HOOK" = "1" ]; then echo "Instant import:  on (copyparty hook)"; else echo "Instant import:  off (the sweep checks every 15 minutes)"; fi
-[ "$WIDE" = "1" ] || echo "Only the app's folder is watched. To also import the rest of '$BASE_FOLDER', re-run with WIDE=1 in front."
+if [ "$WIDE" != "1" ] && [ "$APP_FOLDER" != "." ]; then
+  echo "Only the app's folder is watched. To also import the rest of '$BASE_FOLDER', re-run with WIDE=1 in front."
+fi
 echo
 echo "Settings page:   http://$HOST_IP:$BRIDGE_PORT/#token=$TOKEN"
 echo "                 (open that link once; the browser remembers it. Choose folders, see logs, scan now.)"

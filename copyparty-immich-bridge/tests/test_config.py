@@ -72,8 +72,8 @@ def test_bad_int():
 
 
 def test_priority_dirs_parsed_and_must_be_inside_watch_dirs():
-    env = dict(BASE_ENV, WATCH_DIRS="/w/Australia", PRIORITY_DIRS="/w/Australia/Asia2026/")
-    assert Config.from_env(env).priority_dirs == ["/w/Australia/Asia2026"]
+    env = dict(BASE_ENV, WATCH_DIRS="/w/Trips", PRIORITY_DIRS="/w/Trips/Summer2026/")
+    assert Config.from_env(env).priority_dirs == ["/w/Trips/Summer2026"]
     assert Config.from_env(dict(BASE_ENV)).priority_dirs == []
 
     with pytest.raises(ConfigError):

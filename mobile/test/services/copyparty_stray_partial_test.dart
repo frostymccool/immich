@@ -7,7 +7,7 @@ import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 
 const _file = 'VID_20261022_153357_00_035.insv';
-const _url = 'https://cp.example.test/Asia2026/360%20pagoda%2022nd%20oct/$_file';
+const _url = 'https://cp.example.test/Summer2026/360%20clips%2022nd%20oct/$_file';
 
 http.Response _listing(Map<String, int> files) => http.Response(
   jsonEncode({
@@ -78,7 +78,7 @@ void main() {
       expect(r.removed, ['$_file.PARTIAL']);
       expect(r.failed, isEmpty);
       expect(t.deletes, hasLength(1));
-      expect(t.deletes.single.pathSegments, ['Asia2026', '360 pagoda 22nd oct', '$_file.PARTIAL']);
+      expect(t.deletes.single.pathSegments, ['Summer2026', '360 clips 22nd oct', '$_file.PARTIAL']);
       expect(t.deletes.single.queryParameters['pw'], 'pw1');
     });
 

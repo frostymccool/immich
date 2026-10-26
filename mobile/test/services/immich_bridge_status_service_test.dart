@@ -82,8 +82,8 @@ void main() {
           return _json({
             'counts': {'imported': 12, 'duplicate': 3, 'failed': 1, 'skipped': 2},
             'queue': 4,
-            'watch_dirs': ['/w/Australia'],
-            'priority_dirs': ['/w/Australia/Asia2026'],
+            'watch_dirs': ['/w/Trips'],
+            'priority_dirs': ['/w/Trips/Summer2026'],
             'recent': [
               {
                 'path': '/w/uploads/trip/IMG_0001.JPG',
@@ -114,8 +114,8 @@ void main() {
       expect(status.duplicates, 3);
       expect(status.failed, 1);
       expect(status.queue, 4);
-      expect(status.watchDirs, ['/w/Australia']);
-      expect(status.priorityDirs, ['/w/Australia/Asia2026']);
+      expect(status.watchDirs, ['/w/Trips']);
+      expect(status.priorityDirs, ['/w/Trips/Summer2026']);
       expect(status.recent, hasLength(2));
       expect(status.recent.first.fileName, 'IMG_0001.JPG');
       expect(status.recent.last.error, 'upload failed: HTTP 500');

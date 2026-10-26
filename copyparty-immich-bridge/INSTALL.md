@@ -28,14 +28,17 @@ When it finishes it prints two links:
 
 ## What it watches by default
 
-Only the app's upload folder, `Australia/Asia2026` (imported first). Nothing else on the NAS is
-touched, so the first run can't surprise you. To also import the rest of `Australia` (anything
-Immich doesn't already have, deduplicated by checksum), re-run with `WIDE=1`:
+The folder your phone app uploads into, imported first. **The installer asks for it once** (relative to
+copyparty's data folder, for example `Trips/Summer2026`; blank = everything under the data folder) and
+**remembers it on every re-run**, so updating never asks again. Nothing else on the NAS is touched, so the
+first run can't surprise you. To also import the rest of the folder that contains it (anything Immich
+doesn't already have, deduplicated by checksum), re-run with `WIDE=1`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/frostymccool/immich/feature/copyparty-up2k-import/copyparty-immich-bridge/install.sh | WIDE=1 bash
 ```
 
+You can change the watched folders any time on the settings page (no re-install needed).
 Source files are never moved or deleted (the bridge mounts them read-only).
 
 ## Update, remove, options
@@ -44,7 +47,7 @@ Source files are never moved or deleted (the bridge mounts them read-only).
 |------|----|
 | Update to the latest | run the same command again (it reuses the saved key) |
 | Uninstall | same command ending `\| bash -s -- --uninstall` |
-| Different folder names | prefix `APP_FOLDER=Australia/Other BASE_FOLDER=Australia` |
+| Choose the app folder without being asked | prefix `APP_FOLDER=Trips/Other` (`APP_FOLDER=.` = everything); `BASE_FOLDER=Trips` overrides what `WIDE=1` watches |
 | Skip the instant hook | prefix `HOOK=0` |
 | Let the page enable move/delete after import | prefix `WRITABLE=1` (mounts the data read-write) |
 | Change the port | prefix `BRIDGE_PORT=9000` |
