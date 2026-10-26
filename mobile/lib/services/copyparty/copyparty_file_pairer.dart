@@ -57,6 +57,11 @@ class CopypartyFilePairer {
   // the pairer recognise them as belonging to the same upload set.
   static const _stripPrefixes = ['LRV_', 'VID_', 'LIV_', 'PHO_', 'THM_'];
 
+  // Insta360 names one capture as PREFIX_YYYYMMDD_HHMMSS_LL_NNN, where PREFIX is VID/LRV/IMG/PRO and the
+  // two-digit LL differs per file type or lens (VID_..._00_004.insv front lens, VID_..._10_004.insv back lens,
+  // LRV_..._01_004.lrv preview proxy). Date, time and sequence NNN identify the capture; LL must not.
+  static final _insta360Stem = RegExp(r'^[A-Za-z]{2,4}_(\d{8})_(\d{6})_\d{2}_(\d{3,})$');
+
   /// Strips the file extension, strips known camera prefixes, then lowercases.
   String normalise(String filename) {
     var stem = filename;
@@ -64,6 +69,11 @@ class CopypartyFilePairer {
     final dotIdx = stem.lastIndexOf('.');
     if (dotIdx > 0) {
       stem = stem.substring(0, dotIdx);
+    }
+
+    final insta = _insta360Stem.firstMatch(stem);
+    if (insta != null) {
+      return '${insta.group(1)}_${insta.group(2)}_${insta.group(3)}';
     }
 
     final upper = stem.toUpperCase();
