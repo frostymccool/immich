@@ -36,6 +36,7 @@ class ImportWorker:
         self._seq = itertools.count()
         self._pending: set[str] = set()
         self.album_permission: dict = {"ok": None, "missing": []}
+        self.immich_user: dict | None = None
         self.backfill: dict = {"running": False, "total": 0, "done": 0, "failed": 0}
         self._backfill_lock = threading.Lock()
         self._lock = threading.Lock()
@@ -197,6 +198,18 @@ class ImportWorker:
             elif self.album_permission["ok"] is True:
                 log.info("the Immich API key may create albums")
         return self.album_permission
+
+    def refresh_identity(self) -> dict | None:
+        """Which Immich account the API key belongs to (logged, and shown on the settings page)."""
+        who = getattr(self._client, "whoami", lambda: None)()
+        if who is not None:
+            self.immich_user = who
+            log.info("importing into the Immich account %s <%s> - log in as this user to see the photos and albums", who["name"], who["email"])
+        return who
+
+    def album_links(self, immich_url: str) -> list[dict]:
+        known = getattr(self._client, "known_albums", dict)()
+        return [{"name": n, "id": i, "url": f"{immich_url.rstrip('/')}/albums/{i}"} for n, i in sorted(known.items())]
 
     def album_info(self) -> dict:
         return {

@@ -104,6 +104,7 @@
         <div class="tiles" id="tiles"></div>
         <p class="muted" id="watching"></p>
         <div id="albumNote"></div>
+        <div id="identity"></div>
       </div>
       <div class="card">
         <h2>Recent files</h2>
@@ -276,6 +277,23 @@
     $('recentEmpty').classList.toggle('hidden', s.recent.length > 0);
     renderAlbums(s.albums);
     renderPaused(s.paused, s.queue);
+  }
+  function renderIdentity(r) {
+    var box = $('identity'); box.textContent = '';
+    if (!r) { return; }
+    var line = function (text) { var d = el('div', { 'class': 'muted' }, text); d.style.margin = '8px 0 0'; box.appendChild(d); return d; };
+    if (r.immich_user) {
+      line('Importing into the Immich account ' + (r.immich_user.name || '?') + (r.immich_user.email ? ' (' + r.immich_user.email + ')' : '') +
+        '. Everything the bridge imports, and every album it creates, belongs to this account: log in to Immich as this user to see it.');
+    }
+    if (r.albums && r.albums.length) {
+      var d = line('Folder albums used since the bridge started (open in Immich): ');
+      r.albums.forEach(function (a, i) {
+        var link = el('a', { href: a.url, target: '_blank', rel: 'noopener' }, a.name);
+        link.style.color = 'var(--accent)';
+        d.appendChild(link); if (i < r.albums.length - 1) { d.appendChild(document.createTextNode(' · ')); }
+      });
+    }
   }
   var isPaused = false;
   function renderPaused(paused, queue) {
@@ -471,7 +489,11 @@
     if (!token) { return; }
     pollHealth();
     var job;
-    if (tab === 'status') { job = fetch('/status').then(function (r) { return r.json(); }).then(renderStatus); }
+    if (tab === 'status') {
+      job = fetch('/status').then(function (r) { return r.json(); }).then(renderStatus).then(function () {
+        return api('GET', '/api/config').then(function (c) { renderIdentity(c.readonly); });  // account + album links need the token
+      });
+    }
     else if (tab === 'logs') { job = fetchLogs(lastLogId === 0 && !logLines.length); }
     else { job = fetch('/status').then(function (r) { return r.json(); }).then(function (st) { bfRunning = !!(st.albums && st.albums.backfill && st.albums.backfill.running); renderAlbums(st.albums); }); }
     job.catch(function () { /* transient */ }).then(function () {

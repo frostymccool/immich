@@ -164,6 +164,23 @@ class ImmichClient:
         missing = [p for p in ALBUM_PERMISSIONS if p not in granted]
         return {"ok": not missing, "missing": missing}
 
+    def whoami(self) -> dict | None:
+        """The Immich account this API key belongs to: {'name', 'email'} or None. Everything the bridge
+        imports, and every album it creates, belongs to THIS account - which may not be the one you log in
+        with, and then you would not see any of it."""
+        try:
+            resp = self._session.get(self._base + "/api/users/me", timeout=self._timeout)
+            resp.raise_for_status()
+            body = resp.json()
+            return {"name": str(body.get("name") or ""), "email": str(body.get("email") or "")}
+        except (requests.RequestException, ValueError, AttributeError):
+            return None
+
+    def known_albums(self) -> dict[str, str]:
+        """album name -> Immich album id for the albums this bridge has used since it started."""
+        with self._album_lock:
+            return dict(self._album_ids)
+
     def _album_result(self, error: str | None) -> None:
         with self._album_lock:
             if error is None:

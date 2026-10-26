@@ -125,3 +125,19 @@ def test_already_in_the_album_counts_as_success(tmp_path):
         assert client.add_to_album("Day 1", "a1") is True
         assert client.add_to_album("Day 1", "a1") is True  # Immich reports "duplicate": fine
         assert client.album_stats == {"added": 2, "failed": 0, "last_error": None, "last_error_at": None}
+
+
+def test_whoami_names_the_account_the_key_belongs_to(tmp_path):
+    with StubImmich() as stub:
+        stub.user_name, stub.user_email = "Ann Example", "ann@example.test"
+        assert ImmichClient(stub.url, "k", "dev").whoami() == {"name": "Ann Example", "email": "ann@example.test"}
+    assert ImmichClient("http://127.0.0.1:1", "k", "dev").whoami() is None  # unreachable: no exception
+
+
+def test_known_albums_lists_what_was_used(tmp_path):
+    with StubImmich() as stub:
+        client = ImmichClient(stub.url, "k", "dev")
+        assert client.known_albums() == {}
+        client.add_to_album("Day 1", "a1")
+        client.add_to_album("Day 2", "a2")
+        assert client.known_albums() == {"Day 1": "album-1", "Day 2": "album-2"}

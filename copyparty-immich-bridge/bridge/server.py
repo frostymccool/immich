@@ -133,6 +133,8 @@ def make_handler(
                     "bind_port": cfg.bind_port,
                     "workers": cfg.workers,
                     "device_id": cfg.device_id,
+                    "immich_user": worker.immich_user,
+                    "albums": worker.album_links(cfg.immich_url),
                     "state_db": cfg.state_db,
                     "settings_file": cfg.settings_file,
                     "uptime_seconds": int(time.time() - STARTED_AT),

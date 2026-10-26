@@ -305,3 +305,15 @@ def test_pause_and_resume_endpoint(app):
     assert cfg.paused is False
     assert call(base, "POST", "/api/pause", {"paused": "yes"})[0] == 400
     assert call(base, "POST", "/api/pause", {})[0] == 400
+
+
+def test_account_and_album_links_are_behind_the_token_not_in_the_open_status(app):
+    make, _ = app
+    base, httpd, cfg, *_ = make()
+    # find the worker behind the server through its handler closure is awkward; use a fresh status call instead
+    open_status = call(base, "GET", "/status", token=None, raw=True)[1]
+    assert b"immich_user" not in open_status and b"@" not in open_status  # no e-mail on the open endpoint
+    status, body, _ = call(base, "GET", "/api/config")
+    assert status == 200
+    assert "immich_user" in body["readonly"] and body["readonly"]["albums"] == []
+    assert call(base, "GET", "/api/config", token=None)[0] == 401

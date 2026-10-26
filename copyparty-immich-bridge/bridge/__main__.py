@@ -74,7 +74,7 @@ def main() -> int:
 
     worker = ImportWorker(cfg, state, client, allowed)
     worker.start()
-    threading.Thread(target=worker.check_album_permission, name="album-permission", daemon=True).start()
+    threading.Thread(target=lambda: (worker.refresh_identity(), worker.check_album_permission()), name="immich-checks", daemon=True).start()
 
     def sweep_loop() -> None:
         while not stop_event.is_set():

@@ -424,3 +424,15 @@ def test_stopping_while_paused_does_not_hang(tmp_path):
         time.sleep(0.8)
         worker.stop()
         assert _wait_for(lambda: not any(t.is_alive() for t in worker._threads), timeout=5)
+
+
+def test_identity_and_album_links_after_an_import(tmp_path, caplog):
+    with StubImmich() as stub:
+        stub.user_name, stub.user_email = "Ann Example", "ann@example.test"
+        worker, state, _ = make_worker(tmp_path, stub)
+        with caplog.at_level("INFO", logger="bridge.worker"):
+            assert worker.refresh_identity() == {"name": "Ann Example", "email": "ann@example.test"}
+        assert "Ann Example" in caplog.text and "log in as this user" in caplog.text
+        worker._process(write_file(tmp_path, "Day 1/a.jpg", b"a"))
+        links = worker.album_links(stub.url + "/")
+        assert links == [{"name": "Day 1", "id": "album-1", "url": f"{stub.url}/albums/album-1"}]

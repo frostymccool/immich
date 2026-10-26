@@ -42,6 +42,14 @@ curl -fsSL https://raw.githubusercontent.com/frostymccool/immich/feature/copypar
 You can change the watched folders any time on the settings page (no re-install needed).
 Source files are never moved or deleted (the bridge mounts them read-only).
 
+## "I can't see the files / albums in Immich"
+
+Everything the bridge imports, and every album it creates, belongs to **the Immich account the API key was
+created under**. If you browse Immich as a different user, you will see none of it. The bridge's Status tab now
+says which account that is ("Importing into the Immich account …") and lists the folder albums it has used, each
+as a link that opens in Immich. Fix: create the API key while logged in as the account you actually use, and
+re-run the installer with `IMMICH_API_KEY=… ` in front (or share the albums with your account in Immich).
+
 ## Pausing
 
 The **Pause imports** button (top right of the settings page) stops new imports so you can check what has been
