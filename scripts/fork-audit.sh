@@ -109,6 +109,12 @@ done
 
 section "5. tip commit author"
 ae="$(git log -1 --format=%ae 2>/dev/null)"; ce="$(git log -1 --format=%ce 2>/dev/null)"
+parents="$(git rev-list --parents -n1 HEAD 2>/dev/null | wc -w)"
+if [ "$ce" = "noreply@github.com" ] && [ "$parents" -ge 3 ]; then
+  # GitHub's synthetic pull-request merge commit carries the PR opener's identity; the workflows
+  # check out the real head commit instead, so there is nothing of ours to judge here.
+  ae="noreply@github.com"; ce="noreply@github.com"
+fi
 for e in "$ae" "$ce"; do
   case "$e" in
     ""|*noreply*|*@users.noreply.github.com|*github-actions*|*@anthropic.com) ;;
