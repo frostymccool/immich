@@ -2323,7 +2323,7 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
                         // before any new copying — label it "verifying", not
                         // "copying", or it reads as restarting from scratch.
                         ? '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · '
-                              '${file.verifyingResume ? 'verifying' : 'caching'} '
+                              '${file.verifyingResume ? 'verifying' : 'cached'} '
                               '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}% · $_speed'
                         : isCopied
                         // Fully staged, waiting for its upload turn. Include the
