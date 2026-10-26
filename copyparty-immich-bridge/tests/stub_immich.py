@@ -20,6 +20,7 @@ class StubImmich:
         self.album_assets: dict[str, list[str]] = {}
         self._album_seq = 0
         self.user_name = "Test User"
+        self.user_id = "user-1"
         self.user_email = "test@example.test"
         self.key_permissions: list[str] = ["all"]
         self.forbid_albums = False  # every album call answers 403 (a key without album permissions)
@@ -47,7 +48,7 @@ class StubImmich:
                 if self.path == stub.media_types_route:
                     self._json(200, {"image": [".jpg", ".png", ".heic"], "video": [".mp4"], "sidecar": [".xmp"]})
                 elif self.path == "/api/users/me":
-                    self._json(200, {"id": "user-1", "name": stub.user_name, "email": stub.user_email})
+                    self._json(200, {"id": stub.user_id, "name": stub.user_name, "email": stub.user_email})
                 elif self.path == "/api/api-keys/me":
                     self._json(200, {"id": "key-1", "name": "bridge", "permissions": stub.key_permissions})
                 elif self.path == "/api/albums" and stub.forbid_albums:

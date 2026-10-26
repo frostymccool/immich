@@ -165,14 +165,18 @@ class ImmichClient:
         return {"ok": not missing, "missing": missing}
 
     def whoami(self) -> dict | None:
-        """The Immich account this API key belongs to: {'name', 'email'} or None. Everything the bridge
+        """The Immich account this API key belongs to: {'id', 'name', 'email'} or None. Everything the bridge
         imports, and every album it creates, belongs to THIS account - which may not be the one you log in
         with, and then you would not see any of it."""
         try:
             resp = self._session.get(self._base + "/api/users/me", timeout=self._timeout)
             resp.raise_for_status()
             body = resp.json()
-            return {"name": str(body.get("name") or ""), "email": str(body.get("email") or "")}
+            return {
+                "id": str(body.get("id") or ""),
+                "name": str(body.get("name") or ""),
+                "email": str(body.get("email") or ""),
+            }
         except (requests.RequestException, ValueError, AttributeError):
             return None
 

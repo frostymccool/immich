@@ -134,6 +134,7 @@ def make_handler(
                     "workers": cfg.workers,
                     "device_id": cfg.device_id,
                     "immich_user": worker.immich_user,
+                    "account_change": worker.account_change,
                     "albums": worker.album_links(cfg.immich_url),
                     "state_db": cfg.state_db,
                     "settings_file": cfg.settings_file,
@@ -256,6 +257,25 @@ def make_handler(
                     return
                 log.info("imports %s from the web page", "PAUSED" if body["paused"] else "RESUMED")
                 self._send_json(200, {"paused": cfg.paused, "queue": worker.queue_size})
+                return
+            if self.path == "/api/reimport":
+                if not self._require_api():
+                    return
+                body = self._read_json_body()
+                if body is None:
+                    return
+                if body.get("confirm") is not True:
+                    self._send_json(400, {"error": "send {\"confirm\": true} to forget what was imported and import it all again"})
+                    return
+                forgotten = worker.reimport_everything()
+                if scan_now is not None:
+                    scan_now()
+                self._send_json(200, {"forgotten": forgotten})
+                return
+            if self.path == "/api/account/ack":
+                if self._require_api():
+                    worker.acknowledge_account()
+                    self._send_json(200, {"ok": True})
                 return
             if self.path == "/api/albums/backfill":
                 if self._require_api():

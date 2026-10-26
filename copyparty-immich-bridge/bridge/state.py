@@ -54,6 +54,7 @@ class StateStore:
             """
         )
         self._db.execute("CREATE INDEX IF NOT EXISTS idx_files_status ON files(status)")
+        self._db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         self._db.commit()
 
     def close(self) -> None:
@@ -140,6 +141,27 @@ class StateStore:
         with self._lock:
             rows = self._db.execute("SELECT status, COUNT(*) FROM files GROUP BY status").fetchall()
         return {status: n for status, n in rows}
+
+    def get_meta(self, key: str) -> str | None:
+        with self._lock:
+            row = self._db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+            self._db.commit()
+
+    def forget_all(self) -> int:
+        """Forgets every file's import record (never touches the files or anything in Immich), so the next
+        scan treats them all as new. Returns how many records were dropped."""
+        with self._lock:
+            n = self._db.execute("DELETE FROM files").rowcount
+            self._db.commit()
+        return n
 
     def done_assets(self) -> list[tuple[str, str]]:
         """(path, immich asset id) of every file that was imported / found already in Immich."""

@@ -50,6 +50,14 @@ says which account that is ("Importing into the Immich account …") and lists t
 as a link that opens in Immich. Fix: create the API key while logged in as the account you actually use, and
 re-run the installer with `IMMICH_API_KEY=… ` in front (or share the albums with your account in Immich).
 
+Files imported **before** you switched keys are in the old account, and the bridge remembers them as done. If the
+bridge notices the key now belongs to a different account, the Status tab shows an amber notice with a button
+**Re-import everything into the new account**; the same button lives on the Folders & settings tab
+(**Re-import everything…**). It makes the bridge forget what it imported and import everything again into the
+account the key belongs to now. Nothing on the NAS or in Immich is changed or deleted, files the new account already
+has are recognised as duplicates, and it re-uploads over your network, so it can take a long time. Files the bridge
+moved or deleted after importing (`POST_IMPORT_ACTION`) cannot be imported again.
+
 ## Pausing
 
 The **Pause imports** button (top right of the settings page) stops new imports so you can check what has been

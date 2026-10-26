@@ -317,3 +317,18 @@ def test_account_and_album_links_are_behind_the_token_not_in_the_open_status(app
     assert status == 200
     assert "immich_user" in body["readonly"] and body["readonly"]["albums"] == []
     assert call(base, "GET", "/api/config", token=None)[0] == 401
+
+
+def test_reimport_endpoint_needs_the_token_and_an_explicit_confirm(app):
+    make, _ = app
+    base, _, cfg, _, scans = make()
+    assert call(base, "POST", "/api/reimport", {"confirm": True}, token=None)[0] == 401
+    assert call(base, "POST", "/api/reimport", {})[0] == 400
+    assert call(base, "POST", "/api/reimport", {"confirm": "yes"})[0] == 400  # must be the boolean true
+    assert scans == []
+    status, body, _ = call(base, "POST", "/api/reimport", {"confirm": True})
+    assert status == 200 and body == {"forgotten": 0}
+    assert scans == [1]  # a scan is started straight away
+    assert call(base, "POST", "/api/account/ack", {}, token=None)[0] == 401
+    assert call(base, "POST", "/api/account/ack", {})[0] == 200
+    assert call(base, "GET", "/api/config")[1]["readonly"]["account_change"] is None

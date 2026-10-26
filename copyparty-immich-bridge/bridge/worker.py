@@ -37,6 +37,8 @@ class ImportWorker:
         self._pending: set[str] = set()
         self.album_permission: dict = {"ok": None, "missing": []}
         self.immich_user: dict | None = None
+        # Set when the API key now belongs to a different Immich account than the one files were imported into.
+        self.account_change: dict | None = None
         self.backfill: dict = {"running": False, "total": 0, "done": 0, "failed": 0}
         self._backfill_lock = threading.Lock()
         self._lock = threading.Lock()
@@ -204,8 +206,49 @@ class ImportWorker:
         who = getattr(self._client, "whoami", lambda: None)()
         if who is not None:
             self.immich_user = who
+            self._track_account(who)
             log.info("importing into the Immich account %s <%s> - log in as this user to see the photos and albums", who["name"], who["email"])
         return who
+
+    def _track_account(self, who: dict) -> None:
+        """Remembers which Immich account files are imported into; flags it when the key moves to another one."""
+        if not who.get("id"):
+            return
+        stored = self._state.get_meta("immich_user_id")
+        if stored is None:
+            self._remember_account(who)
+            self.account_change = None
+        elif stored != who["id"]:
+            was = f"{self._state.get_meta('immich_user_name') or '?'} <{self._state.get_meta('immich_user_email') or '?'}>"
+            now = f"{who['name']} <{who['email']}>"
+            self.account_change = {"was": was, "now": now}
+            log.warning(
+                "the API key now belongs to a DIFFERENT Immich account (was %s, now %s). Files imported before are in "
+                "the old account; use 'Re-import everything' on the settings page to import them into the new one.",
+                was,
+                now,
+            )
+        else:
+            self.account_change = None
+
+    def _remember_account(self, who: dict) -> None:
+        self._state.set_meta("immich_user_id", who["id"])
+        self._state.set_meta("immich_user_name", who.get("name", ""))
+        self._state.set_meta("immich_user_email", who.get("email", ""))
+
+    def acknowledge_account(self) -> None:
+        """The user says the current account is the right one: stop warning about the change."""
+        if self.immich_user and self.immich_user.get("id"):
+            self._remember_account(self.immich_user)
+        self.account_change = None
+
+    def reimport_everything(self) -> int:
+        """Forgets that anything was imported (files and Immich are untouched) so the next scan imports it all
+        again, into whichever account the key belongs to now. Returns how many records were forgotten."""
+        forgotten = self._state.forget_all()
+        self.acknowledge_account()
+        log.warning("forgot %d imported-file record(s): everything will be imported again", forgotten)
+        return forgotten
 
     def album_links(self, immich_url: str) -> list[dict]:
         known = getattr(self._client, "known_albums", dict)()

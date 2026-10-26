@@ -431,8 +431,71 @@ def test_identity_and_album_links_after_an_import(tmp_path, caplog):
         stub.user_name, stub.user_email = "Ann Example", "ann@example.test"
         worker, state, _ = make_worker(tmp_path, stub)
         with caplog.at_level("INFO", logger="bridge.worker"):
-            assert worker.refresh_identity() == {"name": "Ann Example", "email": "ann@example.test"}
+            assert worker.refresh_identity() == {"id": "user-1", "name": "Ann Example", "email": "ann@example.test"}
         assert "Ann Example" in caplog.text and "log in as this user" in caplog.text
         worker._process(write_file(tmp_path, "Day 1/a.jpg", b"a"))
         links = worker.album_links(stub.url + "/")
         assert links == [{"name": "Day 1", "id": "album-1", "url": f"{stub.url}/albums/album-1"}]
+
+
+# -- account tracking + re-import everything -------------------------------------------------------------------
+
+
+def test_first_run_remembers_the_account_without_raising_a_flag(tmp_path):
+    with StubImmich() as stub:
+        worker, state, _ = make_worker(tmp_path, stub)
+        worker.refresh_identity()
+        assert state.get_meta("immich_user_id") == "user-1"
+        assert worker.account_change is None
+
+
+def test_key_moving_to_another_account_is_flagged_and_acknowledging_clears_it(tmp_path, caplog):
+    with StubImmich() as stub:
+        stub.user_name, stub.user_email = "Old Admin", "admin@example.test"
+        worker, state, _ = make_worker(tmp_path, stub)
+        worker.refresh_identity()
+        stub.user_id, stub.user_name, stub.user_email = "user-2", "Ann Example", "ann@example.test"
+        with caplog.at_level("WARNING", logger="bridge.worker"):
+            worker.refresh_identity()
+        assert worker.account_change == {"was": "Old Admin <admin@example.test>", "now": "Ann Example <ann@example.test>"}
+        assert "DIFFERENT Immich account" in caplog.text
+        worker.refresh_identity()  # still flagged on every check until the user decides
+        assert worker.account_change is not None
+        worker.acknowledge_account()
+        assert worker.account_change is None
+        worker.refresh_identity()
+        assert worker.account_change is None  # the new account is now the remembered one
+
+
+def test_reimport_everything_imports_it_all_again_into_the_new_account(tmp_path):
+    with StubImmich() as stub:
+        worker, state, cfg = make_worker(tmp_path, stub)
+        paths = [write_file(tmp_path, f"Day 1/{n}.jpg", n.encode()) for n in "abc"]
+        worker.refresh_identity()
+        for p in paths:
+            worker._process(p)
+        assert len(stub.uploads) == 3 and worker.sweep() == 0  # all done: a scan finds nothing new
+        # the key now belongs to somebody else; Immich in that account has none of these files
+        stub.user_id, stub.user_name = "user-2", "Ann"
+        stub.known_checksums.clear()
+        worker.refresh_identity()
+        assert worker.account_change is not None
+        assert worker.reimport_everything() == 3
+        assert worker.account_change is None
+        assert all(state.get(p) is None for p in paths)  # forgotten
+        assert worker.sweep() == 3  # and a scan now queues them all again
+        for _ in range(3):
+            worker._process(worker._queue.get_nowait()[2])
+        assert len(stub.uploads) == 6
+        assert all(state.get(p).status == "imported" for p in paths)
+        assert all(os.path.exists(p) for p in paths)  # the source files were never touched
+
+
+def test_reimport_does_not_touch_the_files_or_the_unrelated_state(tmp_path):
+    with StubImmich() as stub:
+        worker, state, _ = make_worker(tmp_path, stub)
+        p = write_file(tmp_path, "Day 1/a.jpg", b"a")
+        worker._process(p)
+        state.set_meta("anything", "kept")
+        worker.reimport_everything()
+        assert os.path.exists(p) and state.get_meta("anything") == "kept"

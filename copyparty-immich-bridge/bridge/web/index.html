@@ -161,6 +161,11 @@
         </p>
       </div>
       <div class="card">
+        <h2>Re-import everything</h2>
+        <p class="muted">Makes the bridge forget what it has imported and import every file in the watched folders again, into the Immich account the API key belongs to now (see the Status tab). Use it after switching the API key to a different Immich account. Nothing on the NAS or already in Immich is changed or deleted; files Immich already has in that account are simply recognised as duplicates. It uploads everything again over your network, so it can take a long time.</p>
+        <p><button id="reimport" class="danger">Re-import everything…</button> <span class="muted" id="reimportState"></span></p>
+      </div>
+      <div class="card">
         <h2>Set by the installer (read-only here)</h2>
         <dl id="readonly"></dl>
         <p class="muted">The port, Immich address and API key live in <code>docker-compose.override.yml</code> / <code>immich-bridge.env</code> on the VM. To change the port, re-run the installer with <code>BRIDGE_PORT=9000</code> in front. A container cannot safely rewrite its own port mapping or mounts.</p>
@@ -278,9 +283,31 @@
     renderAlbums(s.albums);
     renderPaused(s.paused, s.queue);
   }
+  function doReimport() {
+    var who = lastIdentity && lastIdentity.immich_user ? lastIdentity.immich_user.name + ' (' + lastIdentity.immich_user.email + ')' : 'the current Immich account';
+    var warn = (cfg && cfg.values.post_import_action !== 'keep') ? '\n\nNote: files this bridge already moved or deleted after importing cannot be imported again.' : '';
+    if (!confirm('Forget everything that was imported and import it all again into ' + who + '?\n\nNothing on the NAS or in Immich is deleted or changed. This uploads every file again over the network and can take a long time.' + warn)) { return; }
+    api('POST', '/api/reimport', { confirm: true }).then(function (r) {
+      $('reimportState').textContent = ' Forgot ' + r.forgotten + ' file record' + (r.forgotten === 1 ? '' : 's') + ' - importing everything again now. Watch the Status tab.';
+      refresh();
+    });
+  }
+  $('reimport').onclick = doReimport;
+  var lastIdentity = null;
   function renderIdentity(r) {
+    lastIdentity = r;
     var box = $('identity'); box.textContent = '';
     if (!r) { return; }
+    if (r.account_change) {
+      var ch = el('div', { 'class': 'errs' }, 'The API key now belongs to a different Immich account (was ' + r.account_change.was + ', now ' + r.account_change.now +
+        '). Files imported earlier went into the old account, so you will not see them in the new one.');
+      ch.style.color = 'var(--warn)'; ch.style.borderColor = 'var(--warn)'; ch.style.margin = '10px 0 0';
+      var row = el('div'); row.style.marginTop = '8px';
+      var yes = el('button', { 'class': 'primary' }, 'Re-import everything into the new account'); yes.onclick = doReimport;
+      var no = el('button', {}, 'The new account is right — stop warning'); no.style.marginLeft = '8px';
+      no.onclick = function () { api('POST', '/api/account/ack', {}).then(refresh); };
+      row.appendChild(yes); row.appendChild(no); ch.appendChild(row); box.appendChild(ch);
+    }
     var line = function (text) { var d = el('div', { 'class': 'muted' }, text); d.style.margin = '8px 0 0'; box.appendChild(d); return d; };
     if (r.immich_user) {
       line('Importing into the Immich account ' + (r.immich_user.name || '?') + (r.immich_user.email ? ' (' + r.immich_user.email + ')' : '') +

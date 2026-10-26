@@ -126,7 +126,7 @@ read-write (installer option `WRITABLE=1`); the page refuses them while it is re
 - `GET /healthz` — liveness (open)
 - `GET /` — the web page (the page itself is public; all data behind it needs the token)
 - `GET|PUT /api/config`, `POST /api/config/reset`, `GET /api/fs?path=`, `GET /api/logs`,
-  `GET /api/logs/download`, `POST /api/scan`, `POST /api/pause` (`{"paused": true|false}`), `POST /api/albums/backfill` (add everything already imported to its folder album), `POST /api/albums/recheck` (re-test the key's album permissions) — the web page's backend. Send the token as
+  `GET /api/logs/download`, `POST /api/scan`, `POST /api/pause` (`{"paused": true|false}`), `POST /api/reimport` (`{"confirm": true}`: forget what was imported and import it all again), `POST /api/account/ack` (accept the current Immich account), `POST /api/albums/backfill` (add everything already imported to its folder album), `POST /api/albums/recheck` (re-test the key's album permissions) — the web page's backend. Send the token as
   `X-Bridge-Token: <token>` or `Authorization: Bearer <token>`
 
 ## Notes & limits

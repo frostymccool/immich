@@ -66,3 +66,17 @@ def test_counts_and_recent(tmp_path):
     store.record_skip("/c.xmp", 3, 3.0, "unsupported extension")
     assert store.counts() == {"imported": 1, "duplicate": 1, "skipped": 1}
     assert len(store.recent(10)) == 3
+
+
+def test_meta_roundtrip_and_forget_all(tmp_path):
+    st = StateStore(str(tmp_path / "s.db"))
+    assert st.get_meta("k") is None
+    st.set_meta("k", "v1")
+    st.set_meta("k", "v2")
+    assert st.get_meta("k") == "v2"
+    st.record_success("/a", 1, 1.0, "sha", "imported", "asset-1")
+    st.record_failure("/b", 1, 1.0, None, "boom")
+    st.record_skip("/c", 1, 1.0, "no")
+    assert st.forget_all() == 3
+    assert st.counts() == {} and st.get_meta("k") == "v2"
+    assert st.is_done("/a", 1, 1.0) is False

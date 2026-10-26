@@ -130,7 +130,7 @@ def test_already_in_the_album_counts_as_success(tmp_path):
 def test_whoami_names_the_account_the_key_belongs_to(tmp_path):
     with StubImmich() as stub:
         stub.user_name, stub.user_email = "Ann Example", "ann@example.test"
-        assert ImmichClient(stub.url, "k", "dev").whoami() == {"name": "Ann Example", "email": "ann@example.test"}
+        assert ImmichClient(stub.url, "k", "dev").whoami() == {"id": "user-1", "name": "Ann Example", "email": "ann@example.test"}
     assert ImmichClient("http://127.0.0.1:1", "k", "dev").whoami() is None  # unreachable: no exception
 
 
