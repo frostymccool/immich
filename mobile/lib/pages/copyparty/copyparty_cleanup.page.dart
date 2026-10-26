@@ -72,6 +72,10 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   final Set<int> _uploading = {};
   final Set<int> _deleted = {};
   final Map<int, double> _progress = {}; // 0..1 during verify/upload (FB2/FB8)
+  // "Verify then delete" run: one file at a time, each deleted right after ITS OWN verification passes.
+  bool _bulkRunning = false;
+  bool _bulkStop = false;
+  String _bulkStatus = '';
   final Set<String> _collapsed = {}; // group keys currently collapsed (item 7)
   String _password = '';
   bool _loading = true;
@@ -433,6 +437,106 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     );
   }
 
+  /// Deletes one source file and records it. Returns true when the file is gone.
+  Future<bool> _deleteReceiptFile(CopypartyReceipt receipt) async {
+    try {
+      await File(receipt.localPath).delete();
+      await ref.read(copypartyReceiptRepositoryProvider).markSourceDeleted(receipt.id!);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// "Verify then delete": for every ticked file, in order, run the full live verification and
+  /// delete THAT file immediately if (and only if) it passes the same safe-to-delete rule as the
+  /// all-clear delete (hash-verified on copyparty AND present in Immich where applicable).
+  /// Each file is deleted as soon as its own verification finishes — never batched at the end —
+  /// so an interruption leaves everything already verified deleted and everything else untouched.
+  Future<void> _verifyThenDeleteSelected() async {
+    if (_bulkRunning) {
+      return;
+    }
+    final targets = _existing.where((r) => _selected.contains(r.id) && !_deleted.contains(r.id)).toList();
+    if (targets.isEmpty) {
+      return;
+    }
+    final go =
+        (await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: Text('Verify, then delete ${targets.length} file${targets.length == 1 ? '' : 's'}?'),
+            content: const Text(
+              'Each ticked file is verified in turn (re-hashed against copyparty, and checked in Immich where '
+              'it applies). A file that passes is deleted from this device straight away; a file that fails is '
+              'left untouched. Deleting cannot be undone.',
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+              FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Verify then delete')),
+            ],
+          ),
+        )) ??
+        false;
+    if (!go || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _bulkRunning = true;
+      _bulkStop = false;
+    });
+    var deletedCount = 0;
+    final notDeleted = <String>[];
+    var processed = 0;
+    for (final r in targets) {
+      if (!mounted) {
+        return;
+      }
+      if (_bulkStop) {
+        break;
+      }
+      processed++;
+      setState(() => _bulkStatus = 'Verifying $processed of ${targets.length}…');
+      await _verifyFile(r);
+      if (!mounted) {
+        return;
+      }
+      final safe = _verify[r.id]?.safeToDeleteAt(DateTime.now()) ?? false;
+      if (!safe) {
+        notDeleted.add(r.filename);
+        continue;
+      }
+      if (await _deleteReceiptFile(r)) {
+        deletedCount++;
+        if (mounted) {
+          setState(() {
+            _deleted.add(r.id!);
+            _selected.remove(r.id);
+          });
+        }
+      } else {
+        notDeleted.add(r.filename);
+      }
+    }
+    if (!mounted) {
+      return;
+    }
+    final stopped = _bulkStop;
+    setState(() {
+      _bulkRunning = false;
+      _bulkStatus = '';
+    });
+    final untouched = targets.length - processed;
+    final parts = <String>[
+      'Verified and deleted $deletedCount of ${targets.length}',
+      if (notDeleted.isNotEmpty) '${notDeleted.length} not verified, left untouched',
+      if (stopped && untouched > 0) 'stopped with $untouched not checked',
+    ];
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(parts.join(' · '))));
+    ref.invalidate(pendingCleanupProvider);
+  }
+
   Future<void> _deleteSelected() async {
     final now = DateTime.now();
     // Exclude already-deleted rows defensively — they can't be deleted twice
@@ -509,14 +613,11 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       return;
     }
 
-    final repo = ref.read(copypartyReceiptRepositoryProvider);
     final deletedIds = <int>[];
     for (final receipt in toDelete) {
-      try {
-        await File(receipt.localPath).delete();
-        await repo.markSourceDeleted(receipt.id!);
+      if (await _deleteReceiptFile(receipt)) {
         deletedIds.add(receipt.id!);
-      } catch (_) {}
+      }
     }
     if (mounted) {
       // Keep deleted rows visible, struck-through and unticked (FB7) — don't
@@ -535,7 +636,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
-    final busy = _verifying.isNotEmpty || _uploading.isNotEmpty;
+    final busy = _verifying.isNotEmpty || _uploading.isNotEmpty || _bulkRunning;
     final selectable = _existing.where((r) => !_deleted.contains(r.id)).map((r) => r.id!).toSet();
     final allSelected = selectable.isNotEmpty && selectable.every(_selected.contains);
     final allSelectedSafe =
@@ -677,30 +778,64 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                   SafeArea(
                     child: Padding(
                       padding: const EdgeInsets.all(16.0),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.icon(
-                          onPressed: _selected.isEmpty ? null : _deleteSelected,
-                          icon: Icon(allSelectedSafe ? Icons.delete_outline_rounded : Icons.warning_amber_rounded),
-                          label: Text(
-                            _selected.isEmpty
-                                ? 'Select verified files to delete'
-                                : 'Delete ${_selected.length} '
-                                      'file${_selected.length == 1 ? '' : 's'}'
-                                      '${allSelectedSafe ? '' : ' (unverified!)'}',
+                      child: Row(
+                        children: [
+                          // Left: verify each ticked file, deleting each one right after it passes.
+                          Expanded(
+                            child: FilledButton.tonalIcon(
+                              onPressed: _bulkRunning
+                                  ? () => setState(() => _bulkStop = true)
+                                  : ((_selected.isEmpty || busy) ? null : _verifyThenDeleteSelected),
+                              icon: _bulkRunning
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.verified_outlined),
+                              label: Text(
+                                _bulkRunning
+                                    ? (_bulkStop ? 'Stopping…' : '$_bulkStatus Tap to stop')
+                                    : 'Verify then delete',
+                                textAlign: TextAlign.center,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                            ),
                           ),
-                          style: FilledButton.styleFrom(
-                            minimumSize: const Size.fromHeight(52),
-                            // Destructive-red ONLY when the selection contains
-                            // unverified files; the all-clear delete uses the
-                            // normal primary colour so safe vs unsafe are
-                            // visually distinct before the dialog. (M2)
-                            backgroundColor: (_selected.isEmpty || allSelectedSafe) ? null : context.colorScheme.error,
-                            foregroundColor: (_selected.isEmpty || allSelectedSafe)
-                                ? null
-                                : context.colorScheme.onError,
+                          const SizedBox(width: 12),
+                          // Right: delete the ticked files as they are (warns when any are unverified).
+                          Expanded(
+                            child: FilledButton.icon(
+                              onPressed: (_selected.isEmpty || _bulkRunning) ? null : _deleteSelected,
+                              icon: Icon(allSelectedSafe ? Icons.delete_outline_rounded : Icons.warning_amber_rounded),
+                              label: Text(
+                                _selected.isEmpty
+                                    ? 'Delete'
+                                    : 'Delete ${_selected.length} '
+                                          'file${_selected.length == 1 ? '' : 's'}'
+                                          '${allSelectedSafe ? '' : ' (unverified!)'}',
+                                textAlign: TextAlign.center,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              style: FilledButton.styleFrom(
+                                minimumSize: const Size.fromHeight(52),
+                                // Destructive-red ONLY when the selection contains
+                                // unverified files; the all-clear delete uses the
+                                // normal primary colour so safe vs unsafe are
+                                // visually distinct before the dialog. (M2)
+                                backgroundColor: (_selected.isEmpty || allSelectedSafe)
+                                    ? null
+                                    : context.colorScheme.error,
+                                foregroundColor: (_selected.isEmpty || allSelectedSafe)
+                                    ? null
+                                    : context.colorScheme.onError,
+                              ),
+                            ),
                           ),
-                        ),
+                        ],
                       ),
                     ),
                   ),

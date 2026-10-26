@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.3.3-custom.N+<3048+N>  →  3.3.3-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.3.5-custom.214+3262** (next push → `215+3263`; 214 = CI gives Gradle -Xmx6144M via ~/.gradle/gradle.properties after repeat "Java heap space" failures (builds 204, 209); 213 = audit is a first step in the APK build job (no reusable-workflow `./` call, zizmor), shellcheck-clean; build 211 = fork audit wired into every pipeline, 212 = audit checks the real PR head commit instead of GitHub's synthetic merge; build 209 = the "config upgrade" below; synced to upstream v3.3.5 — clean linear fast-forward, only version/Fastfile/Info.plist changed on mobile). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
+Latest pushed to the build branch: **3.3.5-custom.214+3262**. **215+3263 = "Verify then delete" button, committed but deliberately NOT pushed to `feature/copyparty-up2k-import` (user wants to batch more changes before an APK build); it lives on `claude/new-session-8acn1l`, which does not trigger the APK workflow. When releasing, merge it into the feature branch and bump again (next → `216+3264`).** (earlier: 214 = CI gives Gradle -Xmx6144M via ~/.gradle/gradle.properties after repeat "Java heap space" failures (builds 204, 209); 213 = audit is a first step in the APK build job (no reusable-workflow `./` call, zizmor), shellcheck-clean; build 211 = fork audit wired into every pipeline, 212 = audit checks the real PR head commit instead of GitHub's synthetic merge; build 209 = the "config upgrade" below; synced to upstream v3.3.5 — clean linear fast-forward, only version/Fastfile/Info.plist changed on mobile). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
 
 Note: another Claude Code session may also be working on this fork in parallel on branch
 `claude/auto-immich-copyparty-upload-eq80lh` (not `feature/copyparty-up2k-import` itself — it
@@ -219,6 +219,11 @@ optional). Cancel/resume, "add folders" mid-upload, and per-file phase status
 LIVE (name/size/partial via `?ls`, content hash via re-handshake, Immich by
 checksum) before any delete. Collapsible groups, rolled-up per-group status,
 select-verified, per-file "Upload now" recovery + "Remove from list".
+
+**Verify then delete** (Pending Cleanup bottom bar, left of "Delete N files"): active when any file is ticked;
+after one confirmation it verifies each ticked file in turn (`_verifyFile`, the same live re-hash + Immich check) and
+deletes THAT file immediately if `safeToDeleteAt` passes (never batched at the end); failed files are left untouched
+and ticked; the button turns into a "tap to stop" control while running. No widget test exists for this page yet.
 
 **Entry points** — main app-bar memory-card indicator (spins while uploading) +
 the copyparty settings pages (main = full config; backup-embedded = simplified,
