@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.3.3-custom.N+<3048+N>  →  3.3.3-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.3.5-custom.209+3257** (next push → `210+3258`; build 209 = the "config upgrade" below; synced to upstream v3.3.5 — clean linear fast-forward, only version/Fastfile/Info.plist changed on mobile). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
+Latest pushed: **3.3.5-custom.210+3258** (next push → `211+3259`; build 210 = privacy/.gitignore audit, examples now use generic IPs/hosts; build 209 = the "config upgrade" below; synced to upstream v3.3.5 — clean linear fast-forward, only version/Fastfile/Info.plist changed on mobile). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
 
 Note: another Claude Code session may also be working on this fork in parallel on branch
 `claude/auto-immich-copyparty-upload-eq80lh` (not `feature/copyparty-up2k-import` itself — it
@@ -128,6 +128,14 @@ Whenever an HTML page (flow diagram, mockup, review page) describes something th
 "see", include a realistic example of it (fabricated data is fine, say so on the page): real-looking
 terminal output, log lines, JSON, file names, the app tile as rendered. Prose alone is ambiguous
 to the user. See `copyparty-immich-bridge/docs/bridge-flow.html` (the `EX` table).
+
+### Keep personal details out of the repo (public fork)
+Never commit real LAN IPs, hostnames, user names, NAS paths, tokens, API keys, `.env` files,
+keystores or logs. Use generic examples (`192.168.1.50`, `user@docker-vm`, `/mnt/uploads`, an obviously
+fake token). `.gitignore` covers `immich-bridge*.env`, `docker-compose.override.yml`, `key.properties`,
+`*.jks/*.keystore/*.p12/*.pem`, bridge `state.db`/`settings.json`/logs. Audit done at build 210: no secrets in
+the fork's own commits; earlier commits (pre-210) still contain the owner's private LAN IP/hostnames in examples —
+history was deliberately NOT rewritten (non-routable, and a rewrite of a 129-commit public fork is destructive).
 
 ### APK builds
 `Build Custom APK` (`.github/workflows/build-custom-apk.yml`) triggers

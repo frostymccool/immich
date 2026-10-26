@@ -935,7 +935,7 @@ class _BridgeUrlTile extends ConsumerWidget {
         onTap: () => _showTextDialog(
           context,
           title: 'Bridge status URL',
-          hint: 'http://192.168.5.21:8099',
+          hint: 'http://192.168.1.50:8099',
           initialValue: url,
           onSave: (value) => ref.read(settingsProvider).write(SettingsKey.copypartyBridgeUrl, value.trim()),
         ),
@@ -986,7 +986,7 @@ class _BridgeStatusTile extends ConsumerWidget {
               padding: const EdgeInsets.only(left: 8.0),
               child: SettingListTile(
                 title: 'Import bridge: invalid URL',
-                subtitle: 'Enter an address like http://192.168.5.21:8099',
+                subtitle: 'Enter an address like http://192.168.1.50:8099',
                 leading: Icon(Icons.error_outline, color: scheme.error),
               ),
             );

@@ -19,7 +19,7 @@
 //
 // Usage (from the mobile/ directory):
 //   dart run bin/copyparty_test_harness.dart \
-//     --host https://192.168.5.21:3923 \
+//     --host https://192.168.1.50:3923 \
 //     --path /uploads/_test_harness \
 //     --password <delete-capable password> \
 //     --scenario all --size-mb 64 --repeat 3
@@ -440,7 +440,7 @@ Usage:
   dart run bin/copyparty_test_harness.dart --host <url> --path <path> --password <pw> [options]
 
 Required:
-  --host <url>       e.g. https://192.168.5.21:3923
+  --host <url>       e.g. https://192.168.1.50:3923
   --path <path>      upload subfolder — use an ISOLATED test folder, e.g. /uploads/_test_harness
   --password <pw>    a DELETE-CAPABLE copyparty login (or set COPYPARTY_TEST_PASSWORD)
 

@@ -15,7 +15,7 @@ ImmichBridgeStatusService _service(MockClient client) =>
 void main() {
   group('normalizeBaseUrl', () {
     test('adds http:// when the scheme is missing', () {
-      expect(ImmichBridgeStatusService.normalizeBaseUrl('192.168.5.21:8099')?.toString(), 'http://192.168.5.21:8099');
+      expect(ImmichBridgeStatusService.normalizeBaseUrl('192.168.1.50:8099')?.toString(), 'http://192.168.1.50:8099');
     });
 
     test('rejects blank and non-http(s) values', () {

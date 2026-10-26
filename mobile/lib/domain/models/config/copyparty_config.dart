@@ -42,7 +42,7 @@ class CopypartyConfig {
   final int cacheSizeMb;
 
   /// Optional base URL of the copyparty-immich-bridge status endpoint (e.g.
-  /// http://192.168.5.21:8099). Empty = feature off. Purely informational: the
+  /// http://192.168.1.50:8099). Empty = feature off. Purely informational: the
   /// app never requires the bridge, and nothing else reads this value.
   final String bridgeUrl;
 
