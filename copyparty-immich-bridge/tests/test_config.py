@@ -81,3 +81,10 @@ def test_priority_dirs_parsed_and_must_be_inside_watch_dirs():
     with pytest.raises(ConfigError):
         # a sibling that merely shares a name prefix is NOT inside the watch dir
         Config.from_env(dict(BASE_ENV, WATCH_DIRS="/w/up", PRIORITY_DIRS="/w/uploads"))
+
+
+def test_album_from_folder_defaults_on_and_can_be_disabled():
+    assert Config.from_env(BASE_ENV).album_from_folder is True
+    for off in ("false", "0", "no", "off", "FALSE"):
+        assert Config.from_env(dict(BASE_ENV, ALBUM_FROM_FOLDER=off)).album_from_folder is False
+    assert Config.from_env(dict(BASE_ENV, ALBUM_FROM_FOLDER="true")).album_from_folder is True

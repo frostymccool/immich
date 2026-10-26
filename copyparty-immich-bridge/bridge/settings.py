@@ -34,6 +34,7 @@ EDITABLE = (
     "max_attempts",
     "post_import_action",
     "album_name",
+    "album_from_folder",
     "include_extensions",
     "log_level",
 )
@@ -138,6 +139,15 @@ def validate(cfg: Config, changes: dict[str, Any], browse_roots: list[str]) -> d
             problems.append("album_name is too long")
         else:
             out["album_name"] = album
+
+    if "album_from_folder" in changes:
+        raw = changes["album_from_folder"]
+        if isinstance(raw, bool):
+            out["album_from_folder"] = raw
+        elif isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
+            out["album_from_folder"] = raw.strip().lower() == "true"
+        else:
+            problems.append("album_from_folder must be true or false")
 
     if "include_extensions" in changes:
         raw = changes["include_extensions"]

@@ -18,6 +18,8 @@ class StubImmich:
         self.uploads: list[dict] = []
         self.albums: list[dict] = []
         self.album_assets: dict[str, list[str]] = {}
+        self._album_seq = 0
+        self.removed_albums: set[str] = set()
         self.media_types_route = media_types_route
         self._counter = 0
 
@@ -71,7 +73,8 @@ class StubImmich:
                     self._json(201, {"id": asset_id, "status": "created"})
                 elif self.path == "/api/albums":
                     name = json.loads(body)["albumName"]
-                    album = {"id": f"album-{len(stub.albums) + 1}", "albumName": name}
+                    stub._album_seq += 1
+                    album = {"id": f"album-{stub._album_seq}", "albumName": name}
                     stub.albums.append(album)
                     stub.album_assets[album["id"]] = []
                     self._json(201, album)
@@ -81,7 +84,9 @@ class StubImmich:
             def do_PUT(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 m = re.fullmatch(r"/api/albums/([^/]+)/assets", self.path)
-                if m:
+                if m and m.group(1) in stub.removed_albums:
+                    self._json(404, {"message": "Not found or no album.update access"})
+                elif m:
                     ids = json.loads(body)["ids"]
                     stub.album_assets.setdefault(m.group(1), []).extend(ids)
                     self._json(200, [{"id": i, "success": True} for i in ids])
@@ -91,6 +96,13 @@ class StubImmich:
         self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self._httpd.server_port}"
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+
+    def remove_album(self, name: str) -> None:
+        """Simulates the user deleting an album in Immich."""
+        for album in list(self.albums):
+            if album["albumName"] == name:
+                self.albums.remove(album)
+                self.removed_albums.add(album["id"])
 
     def __enter__(self) -> "StubImmich":
         self._thread.start()

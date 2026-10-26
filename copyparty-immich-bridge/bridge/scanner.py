@@ -29,6 +29,16 @@ def is_within_dirs(path: str, dirs: list[str]) -> bool:
     return False
 
 
+def folder_album_name(path: str) -> str | None:
+    """Album name for a file: the name of the folder it sits in (whitespace tidied, max 200 chars).
+    None for hidden folders (e.g. the post-import `.imported`) or when there is no usable name."""
+    parent = os.path.basename(os.path.dirname(os.path.normpath(path)))
+    name = " ".join(parent.split())
+    if not name or name.startswith("."):
+        return None
+    return name[:200]
+
+
 def is_candidate_name(name: str) -> bool:
     """Cheap name-based filter: no dotfiles, no copyparty partials."""
     if name.startswith("."):

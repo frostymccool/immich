@@ -56,3 +56,34 @@ def test_album_created_once_and_assets_added(tmp_path):
         client.add_to_album("Copyparty", "asset-y")
         assert len(stub.albums) == 1
         assert stub.album_assets["album-1"] == ["asset-x", "asset-y"]
+
+
+def test_each_album_name_is_looked_up_once_and_kept_separate(tmp_path):
+    with StubImmich() as stub:
+        client = ImmichClient(stub.url, "k", "dev")
+        assert client.add_to_album("Day 1", "a1") is True
+        assert client.add_to_album("Day 2", "a2") is True
+        assert client.add_to_album("Day 1", "a3") is True
+        assert [a["albumName"] for a in stub.albums] == ["Day 1", "Day 2"]
+        assert stub.album_assets["album-1"] == ["a1", "a3"]
+        assert stub.album_assets["album-2"] == ["a2"]
+
+
+def test_existing_album_is_reused_not_duplicated(tmp_path):
+    with StubImmich() as stub:
+        stub.albums.append({"id": "album-9", "albumName": "Day 1"})
+        client = ImmichClient(stub.url, "k", "dev")
+        assert client.add_to_album("Day 1", "a1") is True
+        assert len(stub.albums) == 1
+        assert stub.album_assets["album-9"] == ["a1"]
+
+
+def test_album_deleted_in_immich_is_recreated_on_the_next_file(tmp_path):
+    with StubImmich() as stub:
+        client = ImmichClient(stub.url, "k", "dev")
+        assert client.add_to_album("Day 1", "a1") is True
+        stub.remove_album("Day 1")  # user deletes it in Immich
+        assert client.add_to_album("Day 1", "a2") is True  # cached id is stale -> retried once with a fresh album
+        assert [a["albumName"] for a in stub.albums] == ["Day 1"]
+        assert stub.albums[0]["id"] != "album-1"
+        assert stub.album_assets[stub.albums[0]["id"]] == ["a2"]

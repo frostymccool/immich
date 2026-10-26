@@ -35,7 +35,7 @@ uploader ──► copyparty ──(xau event hook: JSON POST)──► bridge �
      as a duplicate and skipped,
    - otherwise uploads via `POST /api/assets` (with the `x-immich-checksum`
      header so a concurrent upload of the same bytes is also handled),
-   - optionally adds the asset to an album (`IMMICH_ALBUM_NAME`),
+   - adds the asset to an album named after its folder (`ALBUM_FROM_FOLDER`, on by default; created on demand) and, optionally, one fixed album (`IMMICH_ALBUM_NAME`),
    - applies the post-import action (`keep` / `move` / `delete`, default `keep`),
    - records the outcome in a SQLite state DB (`/data/state.db`) so nothing is
      re-hashed or re-imported unless the file's size/mtime changes.
@@ -78,7 +78,8 @@ starts the bridge, asks only for the Immich API key). The manual steps below are
 | `MAX_ATTEMPTS` | `5` | Retry budget per file version before giving up |
 | `POST_IMPORT_ACTION` | `keep` | `keep`, `move` (to `MOVE_SUBDIR`), or `delete` — move/delete need a `rw` mount |
 | `MOVE_SUBDIR` | `.imported` | Subfolder (next to the file) used by `move` |
-| `IMMICH_ALBUM_NAME` | *(empty)* | If set, imported assets are added to this album (created on demand) |
+| `ALBUM_FROM_FOLDER` | `true` | Add every imported file to an Immich album named after the folder it sits in (e.g. `Day 3 hike/IMG_1.jpg` → album `Day 3 hike`), created on demand. Only the immediate folder is used; hidden folders are ignored. `false` turns it off |
+| `IMMICH_ALBUM_NAME` | *(empty)* | If set, imported assets are ALSO added to this one fixed album (created on demand) |
 | `INCLUDE_EXTENSIONS` | *(empty)* | Comma-separated extension allow-list; empty = ask Immich |
 | `STATE_DB` | `/data/state.db` | SQLite state DB path |
 | `BIND_HOST` / `BIND_PORT` | `0.0.0.0` / `8099` | Hook/status HTTP listener |
@@ -97,7 +98,7 @@ is behind `BRIDGE_TOKEN`:
 
 - **Status** — counts, queue, recent files with errors.
 - **Folders & settings** — add/remove several watched folders with a folder picker, star the
-  ones imported first, scan interval, file-age guard, retry budget, post-import action, album,
+  ones imported first, scan interval, file-age guard, retry budget, post-import action, folder-named albums, one fixed album,
   allowed file types, log detail. Changes apply **immediately, no restart**, are validated
   first (nothing is applied if any field is wrong) and are saved on the state volume.
   Saved values win over the compose/env values until you press **Reset to installer defaults**.

@@ -180,3 +180,97 @@ def test_no_priority_dirs_keeps_fifo_order(tmp_path):
             worker.enqueue(p, "test")
         order = [worker._queue.get()[2] for _ in paths]
         assert order == paths
+
+
+# -- folder-named albums ------------------------------------------------------------------------------------
+
+
+def album_names(stub):
+    return [a["albumName"] for a in stub.albums]
+
+
+def test_folder_album_is_the_default_and_is_named_after_the_folder(tmp_path):
+    with StubImmich() as stub:
+        worker, state, cfg = make_worker(tmp_path, stub)
+        assert cfg.album_from_folder is True
+        path = write_file(tmp_path, "Day 3 hike/VID_20260101_120000_001.mp4", b"clip")
+        worker._process(path)
+        assert album_names(stub) == ["Day 3 hike"]
+        assert stub.album_assets["album-1"] == ["asset-1"]
+
+
+def test_files_from_the_same_folder_share_one_album_and_other_folders_get_their_own(tmp_path):
+    with StubImmich() as stub:
+        worker, state, _ = make_worker(tmp_path, stub)
+        for rel, data in [("Day 1/a.jpg", b"a"), ("Day 1/b.jpg", b"b"), ("Day 2/c.jpg", b"c")]:
+            worker._process(write_file(tmp_path, rel, data))
+        assert album_names(stub) == ["Day 1", "Day 2"]
+        assert stub.album_assets["album-1"] == ["asset-1", "asset-2"]
+        assert stub.album_assets["album-2"] == ["asset-3"]
+
+
+def test_only_the_immediate_parent_folder_names_the_album(tmp_path):
+    with StubImmich() as stub:
+        worker, state, _ = make_worker(tmp_path, stub)
+        worker._process(write_file(tmp_path, "Trips/Summer/Day 3/x.jpg", b"x"))
+        assert album_names(stub) == ["Day 3"]
+
+
+def test_folder_albums_can_be_switched_off(tmp_path):
+    with StubImmich() as stub:
+        worker, state, _ = make_worker(tmp_path, stub, album_from_folder=False)
+        worker._process(write_file(tmp_path, "Day 1/a.jpg", b"a"))
+        assert stub.albums == []
+        assert state.get(str(tmp_path / "watch" / "Day 1" / "a.jpg")).status == "imported"
+
+
+def test_fixed_album_and_folder_album_both_apply(tmp_path):
+    with StubImmich() as stub:
+        worker, state, _ = make_worker(tmp_path, stub, album_name="Everything")
+        worker._process(write_file(tmp_path, "Day 1/a.jpg", b"a"))
+        assert album_names(stub) == ["Everything", "Day 1"]
+        assert stub.album_assets["album-1"] == ["asset-1"]
+        assert stub.album_assets["album-2"] == ["asset-1"]
+
+
+def test_fixed_album_with_the_same_name_as_the_folder_is_not_added_twice(tmp_path):
+    with StubImmich() as stub:
+        worker, state, _ = make_worker(tmp_path, stub, album_name="Day 1")
+        worker._process(write_file(tmp_path, "Day 1/a.jpg", b"a"))
+        assert album_names(stub) == ["Day 1"]
+        assert stub.album_assets["album-1"] == ["asset-1"]
+
+
+def test_hidden_folders_do_not_become_albums(tmp_path):
+    with StubImmich() as stub:
+        worker, state, _ = make_worker(tmp_path, stub)
+        worker._process(write_file(tmp_path, ".imported/a.jpg", b"a"))
+        assert stub.albums == []
+
+
+def test_a_file_already_in_immich_is_still_put_in_the_folder_album(tmp_path):
+    with StubImmich() as stub:
+        worker, state, _ = make_worker(tmp_path, stub)
+        worker._process(write_file(tmp_path, "Day 1/a.jpg", b"same bytes"))
+        worker._process(write_file(tmp_path, "Day 2/copy.jpg", b"same bytes"))  # identical content
+        assert album_names(stub) == ["Day 1", "Day 2"]
+        assert stub.album_assets["album-2"] == ["asset-1"]  # the existing asset, not a new upload
+        assert len(stub.uploads) == 1
+
+
+def test_album_failure_never_fails_the_import(tmp_path):
+    with StubImmich() as stub:
+        worker, state, _ = make_worker(tmp_path, stub)
+        stub.removed_albums.update({"album-1", "album-2", "album-3"})  # every PUT answers 404
+        path = write_file(tmp_path, "Day 1/a.jpg", b"a")
+        worker._process(path)
+        assert state.get(path).status == "imported"
+
+
+def test_album_name_tidying_and_limits():
+    from bridge.scanner import folder_album_name
+
+    assert folder_album_name("/w/Trips/  Day   3  /x.jpg") == "Day 3"
+    assert folder_album_name("/w/.imported/x.jpg") is None
+    assert folder_album_name("/x.jpg") is None
+    assert len(folder_album_name("/w/" + "a" * 300 + "/x.jpg")) == 200

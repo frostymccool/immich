@@ -131,7 +131,12 @@
           <option value="delete">Delete it</option>
         </select>
         <div class="muted" id="postWarn"></div>
-        <label class="f" for="album_name">Add imports to this Immich album (optional) <span class="changed" id="c_album_name"></span></label>
+        <label class="f" style="display:flex;gap:8px;align-items:center;cursor:pointer">
+          <input id="album_from_folder" type="checkbox" style="width:auto">
+          Add each file to an album named after its folder <span class="changed" id="c_album_from_folder"></span>
+        </label>
+        <div class="muted">e.g. a file in the folder “Day 3 hike” goes into the Immich album “Day 3 hike”, which is created if it doesn’t exist yet. Only the folder the file sits directly in is used. On by default.</div>
+        <label class="f" for="album_name">Also add everything to this one Immich album (optional) <span class="changed" id="c_album_name"></span></label>
         <input id="album_name" type="text" placeholder="e.g. Summer trip 2026">
         <label class="f" for="include_extensions">Only these file types (optional) <span class="changed" id="c_include_extensions"></span></label>
         <input id="include_extensions" type="text" placeholder="blank = whatever Immich supports, e.g. jpg heic mp4">
@@ -184,7 +189,7 @@
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   var token = '', cfg = null, draft = null, pollT = null, lastLogId = 0, logLines = [], tab = 'status';
-  var FIELDS = ['sweep_interval', 'min_file_age', 'max_attempts', 'post_import_action', 'album_name', 'include_extensions', 'log_level'];
+  var FIELDS = ['sweep_interval', 'min_file_age', 'max_attempts', 'post_import_action', 'album_from_folder', 'album_name', 'include_extensions', 'log_level'];
 
   function el(tag, attrs, text) {
     var e = document.createElement(tag);
@@ -298,7 +303,7 @@
     if (!draft.watch_dirs.length) { box.appendChild(el('p', { 'class': 'muted' }, 'No folders. Add at least one.')); }
     FIELDS.forEach(function (f) {
       var inp = $(f); var v = draft[f];
-      inp.value = Array.isArray(v) ? v.join(' ') : (v === null || v === undefined ? '' : v);
+      if (inp.type === 'checkbox') { inp.checked = !!v; } else { inp.value = Array.isArray(v) ? v.join(' ') : (v === null || v === undefined ? '' : v); }
       $('c_' + f).textContent = JSON.stringify(cfg.values[f]) !== JSON.stringify(cfg.defaults[f]) ? 'changed from installer default' : '';
       inp.oninput = inp.onchange = function () { readField(f); };
     });
@@ -315,7 +320,8 @@
   }
   function readField(f) {
     var v = $(f).value;
-    if (f === 'include_extensions') { draft[f] = v.split(/[\s,]+/).filter(Boolean); }
+    if ($(f).type === 'checkbox') { draft[f] = $(f).checked; }
+    else if (f === 'include_extensions') { draft[f] = v.split(/[\s,]+/).filter(Boolean); }
     else if (['sweep_interval', 'min_file_age', 'max_attempts'].indexOf(f) >= 0) { draft[f] = v === '' ? '' : Number(v); }
     else { draft[f] = v; }
     renderSettingsLite();

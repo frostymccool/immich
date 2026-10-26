@@ -12,7 +12,7 @@ import requests
 
 from bridge.config import Config
 from bridge.immich import ImmichClient, ImmichError, UploadOutcome, sha1_hex
-from bridge.scanner import extension_of, is_candidate_name, is_within_dirs, iter_candidates
+from bridge.scanner import extension_of, folder_album_name, is_candidate_name, is_within_dirs, iter_candidates
 from bridge.state import StateStore
 
 log = logging.getLogger("bridge.worker")
@@ -145,14 +145,26 @@ class ImportWorker:
                 outcome = self._client.upload(path, sha1)
                 log.info("%s: %s -> asset %s", outcome.status, name, outcome.asset_id)
 
-            if self._cfg.album_name and outcome.asset_id and outcome.asset_id != "present":
-                self._client.add_to_album(self._cfg.album_name, outcome.asset_id)
+            if outcome.asset_id and outcome.asset_id != "present":
+                for album in self._albums_for(path):
+                    self._client.add_to_album(album, outcome.asset_id)
 
             self._state.record_success(path, size, mtime, sha1, outcome.status, outcome.asset_id)
             self._post_import(path)
         except (ImmichError, requests.RequestException, OSError) as ex:
             log.warning("import failed for %s: %s", path, ex)
             self._state.record_failure(path, size, mtime, sha1, str(ex))
+
+    def _albums_for(self, path: str) -> list[str]:
+        """Albums this file goes into: the fixed album (if set) and the folder-named one (if enabled)."""
+        albums: list[str] = []
+        if self._cfg.album_name:
+            albums.append(self._cfg.album_name)
+        if self._cfg.album_from_folder:
+            folder = folder_album_name(path)
+            if folder and folder not in albums:
+                albums.append(folder)
+        return albums
 
     def _post_import(self, path: str) -> None:
         """Applies the configured post-import action. Only reached after the

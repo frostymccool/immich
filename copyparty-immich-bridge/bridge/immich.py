@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -61,7 +62,9 @@ class ImmichClient:
         self._session = requests.Session()
         self._session.verify = verify_tls
         self._session.headers.update({"x-api-key": api_key, "Accept": "application/json"})
-        self._album_id: str | None = None
+        # album name -> id, so a folder-named album is looked up/created once, not per file
+        self._album_ids: dict[str, str] = {}
+        self._album_lock = threading.Lock()
 
     def close(self) -> None:
         self._session.close()
@@ -141,34 +144,52 @@ class ImmichClient:
 
     # -- albums ---------------------------------------------------------------
 
-    def add_to_album(self, album_name: str, asset_id: str) -> None:
+    def add_to_album(self, album_name: str, asset_id: str) -> bool:
         """Adds an asset to the named album, creating the album on first use.
-        Errors are logged, never raised — album placement is best-effort."""
-        try:
-            album_id = self._get_or_create_album(album_name)
-            resp = self._session.put(
-                f"{self._base}/api/albums/{album_id}/assets",
-                json={"ids": [asset_id]},
+        Best-effort: errors are logged, never raised. Returns True when the asset is in the album.
+
+        If the cached album was deleted in Immich since, the first attempt fails with 400/404; the cache
+        entry is dropped and the album is looked up / created again once."""
+        for attempt in (1, 2):
+            try:
+                album_id = self._get_or_create_album(album_name)
+                resp = self._session.put(
+                    f"{self._base}/api/albums/{album_id}/assets",
+                    json={"ids": [asset_id]},
+                    timeout=self._timeout,
+                )
+                resp.raise_for_status()
+                return True
+            except requests.HTTPError as ex:
+                status = ex.response.status_code if ex.response is not None else 0
+                if attempt == 1 and status in (400, 404):
+                    with self._album_lock:
+                        self._album_ids.pop(album_name, None)
+                    continue
+                log.warning("album add failed for %s -> %r: %s", asset_id, album_name, ex)
+                return False
+            except requests.RequestException as ex:
+                log.warning("album add failed for %s -> %r: %s", asset_id, album_name, ex)
+                return False
+        return False
+
+    def _get_or_create_album(self, album_name: str) -> str:
+        with self._album_lock:
+            cached = self._album_ids.get(album_name)
+            if cached:
+                return cached
+            resp = self._session.get(self._base + "/api/albums", timeout=self._timeout)
+            resp.raise_for_status()
+            for album in resp.json():
+                if album.get("albumName") == album_name:
+                    self._album_ids[album_name] = album["id"]
+                    return album["id"]
+            resp = self._session.post(
+                self._base + "/api/albums",
+                json={"albumName": album_name},
                 timeout=self._timeout,
             )
             resp.raise_for_status()
-        except requests.RequestException as ex:
-            log.warning("album add failed for %s: %s", asset_id, ex)
-
-    def _get_or_create_album(self, album_name: str) -> str:
-        if self._album_id:
-            return self._album_id
-        resp = self._session.get(self._base + "/api/albums", timeout=self._timeout)
-        resp.raise_for_status()
-        for album in resp.json():
-            if album.get("albumName") == album_name:
-                self._album_id = album["id"]
-                return self._album_id
-        resp = self._session.post(
-            self._base + "/api/albums",
-            json={"albumName": album_name},
-            timeout=self._timeout,
-        )
-        resp.raise_for_status()
-        self._album_id = resp.json()["id"]
-        return self._album_id
+            self._album_ids[album_name] = resp.json()["id"]
+            log.info("created Immich album %r", album_name)
+            return self._album_ids[album_name]

@@ -152,3 +152,17 @@ def test_log_names_only_what_really_changed(tmp_path, caplog):
         store.update({"sweep_interval": 900, "max_attempts": 5, "album_name": "Trip"})
     assert "settings changed: album_name" in caplog.text
     assert "sweep_interval" not in caplog.text
+
+
+def test_album_from_folder_is_editable_and_validated(tmp_path):
+    cfg, store, a, b = make(tmp_path)
+    assert cfg.album_from_folder is True
+    store.update({"album_from_folder": False})
+    assert cfg.album_from_folder is False
+    assert "album_from_folder" in store.overridden()
+    store.update({"album_from_folder": "true"})
+    assert cfg.album_from_folder is True
+    assert "album_from_folder" not in store.overridden()  # back to the default
+    with pytest.raises(SettingsError):
+        store.update({"album_from_folder": "maybe"})
+    assert cfg.album_from_folder is True

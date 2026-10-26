@@ -41,6 +41,13 @@ curl -fsSL https://raw.githubusercontent.com/frostymccool/immich/feature/copypar
 You can change the watched folders any time on the settings page (no re-install needed).
 Source files are never moved or deleted (the bridge mounts them read-only).
 
+## Albums
+
+Every imported file is also added to an Immich album named after the folder it sits in (a file in
+`Day 3 hike/` goes into the album **Day 3 hike**, which is created the first time it is needed). Switch it off with the
+checkbox on the settings page, or `ALBUM_FROM_FOLDER=false`. Files imported before you updated are not added
+retroactively.
+
 ## Update, remove, options
 
 | Want | Do |
