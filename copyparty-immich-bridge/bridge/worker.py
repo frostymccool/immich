@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import itertools
 import logging
 import os
@@ -43,7 +44,11 @@ class ImportWorker:
         self.backfill: dict = {"running": False, "total": 0, "done": 0, "failed": 0}
         self._backfill_lock = threading.Lock()
         self._lock = threading.Lock()
-        self._active: dict[str, tuple[float, str, int | None]] = {}  # path -> (started, phase) of files being imported now
+        # path -> progress of a file being imported now: started, phase, bytes sent/total, when the upload began
+        self._active: dict[str, dict] = {}
+        self._sizes: dict[str, int] = {}  # size of each queued/active file, for the backlog estimate
+        self._sent_total = 0  # bytes uploaded since start
+        self._samples: collections.deque[tuple[float, int]] = collections.deque(maxlen=400)  # (time, _sent_total)
         self._held = 0  # files a worker has taken from the queue but is holding because imports are paused
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -72,18 +77,71 @@ class ImportWorker:
             return self._queue.qsize() + self._held
 
     def active(self) -> list[dict]:
-        """Files being imported right now: name, phase (hashing/checking/uploading) and seconds so far."""
+        """Files being imported right now: name, phase, seconds so far, upload percent/bytes and an ETA."""
         now = time.time()
         with self._lock:
-            return [
-                {"name": os.path.basename(p), "phase": ph, "seconds": int(now - t0), "percent": pct}
-                for p, (t0, ph, pct) in self._active.items()
-            ]
+            out = []
+            for p, a in self._active.items():
+                item = {
+                    "name": os.path.basename(p),
+                    "phase": a["phase"],
+                    "seconds": int(now - a["t0"]),
+                    "percent": int(a["sent"] * 100 / a["total"]) if a["total"] else None,
+                    "sent": a["sent"],
+                    "total": a["total"],
+                    "eta_seconds": None,
+                    "rate": None,
+                }
+                up = now - a["up0"] if a["up0"] else 0
+                if a["phase"] == "uploading" and up >= 3 and a["sent"] > 0:
+                    item["rate"] = int(a["sent"] / up)
+                    item["eta_seconds"] = int((a["total"] - a["sent"]) / (a["sent"] / up))
+                out.append(item)
+            return out
 
-    def _phase(self, path: str, phase: str, percent: int | None = None) -> None:
+    def _recent_rate(self, now: float) -> float | None:
+        """Bytes/second actually uploaded over the last two minutes (all workers together, hashing included)."""
+        recent = [x for x in self._samples if now - x[0] <= 120]
+        if len(recent) < 2 or now - recent[-1][0] > 30:
+            return None
+        dt = recent[-1][0] - recent[0][0]
+        if dt < 3:
+            return None
+        return (recent[-1][1] - recent[0][1]) / dt
+
+    def backlog(self) -> dict:
+        """Everything still to import (queued + running): file count, bytes left and an ETA for all of it.
+        An estimate: files Immich already has are skipped without uploading, so it is an upper bound."""
+        now = time.time()
         with self._lock:
-            started = self._active.get(path, (time.time(), "", None))[0]
-            self._active[path] = (started, phase, percent)
+            files = len(self._pending)
+            left = 0
+            for p in self._pending:
+                a = self._active.get(p)
+                if a and a["total"]:
+                    left += a["total"] - a["sent"]
+                else:
+                    left += self._sizes.get(p, 0)
+            rate = self._recent_rate(now)
+        return {
+            "files": files,
+            "bytes_left": left,
+            "rate": int(rate) if rate else None,
+            "eta_seconds": int(left / rate) if rate and left else None,
+        }
+
+    def _phase(self, path: str, phase: str, sent: int = 0, total: int = 0) -> None:
+        now = time.time()
+        with self._lock:
+            a = self._active.setdefault(path, {"t0": now, "phase": "", "sent": 0, "total": 0, "up0": None})
+            a["phase"] = phase
+            if phase == "uploading":
+                if a["up0"] is None:
+                    a["up0"] = now
+                self._sent_total += max(0, sent - a["sent"])
+                a["sent"], a["total"] = sent, total
+                if not self._samples or now - self._samples[-1][0] >= 0.5 or sent == total:
+                    self._samples.append((now, self._sent_total))
 
     # -- producers ---------------------------------------------------------------
 
@@ -93,6 +151,10 @@ class ImportWorker:
             if path in self._pending:
                 return False
             self._pending.add(path)
+            try:
+                self._sizes[path] = os.stat(path).st_size
+            except OSError:
+                pass
             seq = next(self._seq)
         priority = 0 if is_within_dirs(path, self._cfg.priority_dirs) else 1
         log.info("queued (%s%s): %s", source, ", priority" if priority == 0 else "", path)
@@ -152,6 +214,7 @@ class ImportWorker:
             finally:
                 with self._lock:
                     self._pending.discard(path)
+                    self._sizes.pop(path, None)
 
     def _process(self, path: str) -> None:
         name = os.path.basename(path)
@@ -189,9 +252,9 @@ class ImportWorker:
                 outcome = UploadOutcome(status="duplicate", asset_id=None if existing == "present" else existing)
                 log.info("already in Immich (checksum): %s -> %s", name, existing)
             else:
-                self._phase(path, "uploading")
+                self._phase(path, "uploading", 0, 0)
                 outcome = self._client.upload(
-                    path, sha1, progress=lambda sent, total: self._phase(path, "uploading", int(sent * 100 / total) if total else 0)
+                    path, sha1, progress=lambda sent, total: self._phase(path, "uploading", sent, total)
                 )
                 log.info("%s: %s -> asset %s", outcome.status, name, outcome.asset_id)
 
@@ -208,6 +271,7 @@ class ImportWorker:
         finally:
             with self._lock:
                 self._active.pop(path, None)
+                self._sizes.pop(path, None)
 
     # -- albums: permission check + back-fill of files imported before folder albums existed ----------------
 

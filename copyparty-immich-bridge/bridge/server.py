@@ -173,6 +173,7 @@ def make_handler(
                         "queue": worker.queue_size,
                         "paused": cfg.paused,
                         "active": worker.active(),
+                        "backlog": worker.backlog(),
                         "watch_dirs": cfg.watch_dirs,
                         "priority_dirs": cfg.priority_dirs,
                         "albums": worker.album_info(),

@@ -102,6 +102,7 @@
         <h2>Imports</h2>
         <div id="pauseNote"></div>
         <div class="tiles" id="tiles"></div>
+        <div id="backlogNote"></div>
         <p class="muted" id="watching"></p>
         <div id="albumNote"></div>
         <div id="identity"></div>
@@ -269,15 +270,26 @@
       tiles.appendChild(t);
     });
     var q = el('div', { 'class': 'tile' }); q.appendChild(el('b', {}, String(s.queue))); q.appendChild(el('span', { 'class': 'muted' }, 'Queued')); tiles.appendChild(q);
+    var bl = s.backlog || {}; var bn = $('backlogNote'); bn.textContent = '';
+    if (bl.files) {
+      var txt = 'Backlog: ' + bl.files + ' file' + (bl.files === 1 ? '' : 's') + ' · ' + fmtBytes(bl.bytes_left) + ' left';
+      if (bl.eta_seconds) { txt += ' · about ' + fmtDur(bl.eta_seconds) + ' to finish at ' + fmtBytes(bl.rate) + '/s'; }
+      else if (!s.paused) { txt += ' · estimating speed...'; }
+      bn.appendChild(el('p', {}, txt));
+    }
     $('watching').textContent = 'Watching: ' + s.watch_dirs.join(', ') + (s.priority_dirs.length ? '   ·   Imported first: ' + s.priority_dirs.join(', ') : '');
     var tb = $('recent'); tb.textContent = '';
     var act = s.active || [];
     act.forEach(function (a) {
       var tr = el('tr'); var c1 = el('td', { 'class': 'path' }); c1.appendChild(el('div', {}, a.name));
+      if (a.phase === 'uploading' && a.total) {
+        c1.appendChild(el('div', { 'class': 'muted' }, fmtBytes(a.sent) + ' of ' + fmtBytes(a.total) + (a.rate ? ' · ' + fmtBytes(a.rate) + '/s' : '')));
+      }
       var label = a.phase === 'uploading' ? 'uploading .. (' + (a.percent || 0) + '%)' : a.phase + ' ..';
       var c2 = el('td'); c2.appendChild(el('span', { 'class': 'pill imported' }, label));
-      var m = Math.floor(a.seconds / 60);
-      tr.appendChild(c1); tr.appendChild(c2); tr.appendChild(el('td', {}, 'running ' + (m ? m + ' min ' + (a.seconds % 60) + ' s' : a.seconds + ' s')));
+      var when = 'running ' + fmtDur(a.seconds);
+      if (a.eta_seconds !== null && a.eta_seconds !== undefined) { when += ' · ' + fmtDur(a.eta_seconds) + ' left'; }
+      tr.appendChild(c1); tr.appendChild(c2); tr.appendChild(el('td', {}, when));
       tb.appendChild(tr);
     });
     if (!act.length && s.queue && !s.paused) {
@@ -336,6 +348,18 @@
     }
   }
   var isPaused = false;
+  function fmtDur(sec) {
+    if (sec < 60) { return sec + ' s'; }
+    var m = Math.floor(sec / 60), h = Math.floor(m / 60);
+    if (h < 1) { return m + ' min ' + (sec % 60) + ' s'; }
+    if (h < 48) { return h + ' h ' + (m % 60) + ' min'; }
+    return Math.round(h / 24) + ' days';
+  }
+  function fmtBytes(n) {
+    var u = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + ' ' + u[i];
+  }
   function renderPaused(paused, queue) {
     isPaused = !!paused;
     $('pause').textContent = isPaused ? 'Resume imports' : 'Pause imports';

@@ -506,3 +506,20 @@ def test_active_shows_file_being_imported_and_clears(tmp_path):
     from bridge.worker import ImportWorker
 
     assert "active" in dir(ImportWorker) and not inspect.isabstract(ImportWorker)
+
+
+def test_backlog_and_eta_estimates(tmp_path):
+    with StubImmich() as stub:
+        w, _state, _cfg = make_worker(tmp_path, stub)
+        path = write_file(tmp_path, "a.mp4", b"x" * 1000)
+        w._pending.add(path)
+        w._sizes[path] = 1000
+        assert w.backlog()["bytes_left"] == 1000 and w.backlog()["eta_seconds"] is None
+        t = time.time()
+        w._samples.extend([(t - 10, 0), (t, 500)])  # 50 B/s
+        w._phase(path, "uploading", 400, 1000)
+        w._active[path]["up0"] = t - 8
+        b = w.backlog()
+        assert b["bytes_left"] == 600 and b["rate"] == 50 and b["eta_seconds"] == 12
+        a = w.active()[0]
+        assert a["percent"] == 40 and 45 <= a["rate"] <= 50 and a["eta_seconds"] in (11, 12, 13)
