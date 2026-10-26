@@ -66,6 +66,13 @@ jobs:
           ls pigeon/*.dart | xargs -n1 -P4 -I{} dart run pigeon --input {}
           dart format lib/platform/
 
+      # Intermittent "Java heap space" in Gradle's JetifyTransform with the project default (-Xmx4096M).
+      # ~/.gradle/gradle.properties takes precedence over the project's file, so upstream's stays untouched.
+      - name: Give Gradle more memory
+        run: |
+          mkdir -p ~/.gradle
+          printf 'org.gradle.jvmargs=-Xmx6144M -XX:MaxMetaspaceSize=1024M -XX:+HeapDumpOnOutOfMemoryError\n' >> ~/.gradle/gradle.properties
+
       - name: Decode keystore
         run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > mobile/android/key.jks
 
