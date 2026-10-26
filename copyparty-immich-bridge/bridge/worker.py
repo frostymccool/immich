@@ -53,6 +53,10 @@ class ImportWorker:
             self._queue.put((-1, next(self._seq), ""))  # wake blocked workers
 
     @property
+    def allowed_extensions(self) -> set[str]:
+        return self._allowed
+
+    @property
     def queue_size(self) -> int:
         return self._queue.qsize()
 
@@ -107,6 +111,10 @@ class ImportWorker:
     def _process(self, path: str) -> None:
         name = os.path.basename(path)
         if not is_candidate_name(name):
+            return
+        if not is_within_dirs(path, self._cfg.watch_dirs):
+            # queued before a watched folder was removed in the settings page
+            log.info("skipped, no longer in a watched folder: %s", path)
             return
         try:
             stat = os.stat(path)

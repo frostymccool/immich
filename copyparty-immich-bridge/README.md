@@ -86,13 +86,43 @@ starts the bridge, asks only for the Immich API key). The manual steps below are
 | `IMMICH_VERIFY_TLS` | `true` | Set `false` for self-signed Immich certs |
 | `WORKERS` | `1` | Parallel import workers (1 is right for most setups) |
 | `LOG_LEVEL` | `INFO` | `DEBUG` for per-request detail |
+| `BRIDGE_TOKEN` | *(empty)* | Secret for the web page / `/api/*` and for `/hook`. **Empty = the settings API is switched off** and `/hook` stays open (old behaviour). The installer generates one |
+| `BROWSE_ROOTS` | *(empty)* | Folders the web page's folder picker may list, and watched folders must sit inside (the installer sets it to copyparty's data mount). Empty = no folder picker |
+| `SETTINGS_FILE` | `/data/settings.json` | Where settings saved from the web page are kept (on the state volume) |
+
+## Web page (settings, folder picker, status, logs)
+
+Open `http://<vm>:8099/` (the installer prints a link with the token in it). Everything below
+is behind `BRIDGE_TOKEN`:
+
+- **Status** — counts, queue, recent files with errors.
+- **Folders & settings** — add/remove several watched folders with a folder picker, star the
+  ones imported first, scan interval, file-age guard, retry budget, post-import action, album,
+  allowed file types, log detail. Changes apply **immediately, no restart**, are validated
+  first (nothing is applied if any field is wrong) and are saved on the state volume.
+  Saved values win over the compose/env values until you press **Reset to installer defaults**.
+- **Logs** — live tail with level + text filter and a **Download log** button (last 2000 lines
+  since the container started; `docker logs immich-bridge` for older history).
+- **Scan now** — runs the sweep immediately.
+
+What the page deliberately cannot change (needs a compose change or restart): the Immich
+URL and API key, the port, the worker count, and which host folders are mounted. A container
+cannot see the host filesystem beyond what is mounted into it, so the folder picker lists
+only what is mounted (the installer mounts copyparty's whole data root). To add a folder from
+somewhere else, add a volume mount and re-run the installer. To change the port re-run the
+installer with `BRIDGE_PORT=9000`. `move`/`delete` after import also need the data mounted
+read-write (installer option `WRITABLE=1`); the page refuses them while it is read-only.
 
 ## Endpoints
 
 - `POST /hook` — copyparty event receiver (single JSON object, or a list for
-  `xiu` batch hooks)
-- `GET /status` — counters by status, queue depth, watch/priority dirs, 20 most recent items
-- `GET /healthz` — liveness
+  `xiu` batch hooks). Needs the token when `BRIDGE_TOKEN` is set
+- `GET /status` — counters by status, queue depth, watch/priority dirs, 20 most recent items (open; the phone app reads it)
+- `GET /healthz` — liveness (open)
+- `GET /` — the web page (the page itself is public; all data behind it needs the token)
+- `GET|PUT /api/config`, `POST /api/config/reset`, `GET /api/fs?path=`, `GET /api/logs`,
+  `GET /api/logs/download`, `POST /api/scan` — the web page's backend. Send the token as
+  `X-Bridge-Token: <token>` or `Authorization: Bearer <token>`
 
 ## Notes & limits
 

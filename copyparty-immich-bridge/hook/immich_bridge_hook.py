@@ -14,7 +14,8 @@ flags: xau = execute after upload, f = fork (never blocks the upload),
 j = pass upload info as JSON, t30 = 30s timeout.
 
 The bridge URL comes from the IMMICH_BRIDGE_URL environment variable set on
-the copyparty container (e.g. http://immich-bridge:8099). Delivery is
+the copyparty container (e.g. http://immich-bridge:8099). If the bridge has a
+BRIDGE_TOKEN, set the same value as IMMICH_BRIDGE_TOKEN on the copyparty container. Delivery is
 best-effort: the bridge's periodic sweep catches anything missed here.
 """
 
@@ -42,12 +43,11 @@ def main() -> int:
         return 0
 
     body = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        url + "/hook",
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    headers = {"Content-Type": "application/json"}
+    token = os.environ.get("IMMICH_BRIDGE_TOKEN", "").strip()
+    if token:
+        headers["X-Bridge-Token"] = token
+    req = urllib.request.Request(url + "/hook", data=body, headers=headers, method="POST")
     for attempt in range(3):
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:

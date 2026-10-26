@@ -24,7 +24,7 @@ def _split_list(raw: str) -> list[str]:
     return parts
 
 
-def _normalize_ext(ext: str) -> str:
+def normalize_ext(ext: str) -> str:
     return ext.strip().lstrip(".").lower()
 
 
@@ -59,6 +59,14 @@ class Config:
     bind_port: int = 8099
 
     state_db: str = "/data/state.db"
+
+    # Web page / API. Empty token = the page can be viewed but nothing behind it
+    # (settings, folder browser, logs) answers, and /hook stays open as before.
+    token: str = ""
+    settings_file: str = "/data/settings.json"
+    # Folders the in-page folder browser may list (and watched folders must sit in).
+    browse_roots: list[str] = field(default_factory=list)
+
     device_id: str = "copyparty-immich-bridge"
     verify_tls: bool = True
     workers: int = 1
@@ -111,7 +119,7 @@ class Config:
         if action not in VALID_POST_IMPORT_ACTIONS:
             raise ConfigError(f"POST_IMPORT_ACTION must be one of {VALID_POST_IMPORT_ACTIONS}, got {action!r}")
 
-        include_extensions = {_normalize_ext(x) for x in _split_list(e.get("INCLUDE_EXTENSIONS", ""))}
+        include_extensions = {normalize_ext(x) for x in _split_list(e.get("INCLUDE_EXTENSIONS", ""))}
         include_extensions.discard("")
 
         def _int(name: str, default: int, minimum: int = 0) -> int:
@@ -142,6 +150,9 @@ class Config:
             bind_host=e.get("BIND_HOST", "0.0.0.0").strip() or "0.0.0.0",
             bind_port=_int("BIND_PORT", 8099, minimum=1),
             state_db=e.get("STATE_DB", "/data/state.db").strip() or "/data/state.db",
+            token=e.get("BRIDGE_TOKEN", "").strip(),
+            settings_file=e.get("SETTINGS_FILE", "/data/settings.json").strip() or "/data/settings.json",
+            browse_roots=[d.rstrip("/") or "/" for d in _split_list(e.get("BROWSE_ROOTS", ""))],
             device_id=e.get("DEVICE_ID", "copyparty-immich-bridge").strip() or "copyparty-immich-bridge",
             verify_tls=e.get("IMMICH_VERIFY_TLS", "true").strip().lower() not in ("0", "false", "no"),
             workers=_int("WORKERS", 1, minimum=1),

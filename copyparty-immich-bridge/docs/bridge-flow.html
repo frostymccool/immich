@@ -70,6 +70,7 @@
   .exh { font-size: 12px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; margin: 12px 0 4px; }
   pre.ex { margin: 0; padding: 10px 12px; background: #11151b; color: #d7dde8; border-radius: 8px; overflow-x: auto; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
   pre.ex.phone { background: var(--panel); color: var(--text); border: 2px solid var(--app-b); border-radius: 16px; white-space: pre-wrap; font-family: system-ui, sans-serif; font-size: 13.5px; max-width: 420px; }
+  img.shot { max-width: 100%; border: 1px solid var(--line); border-radius: 10px; }
   ol.steps { list-style: none; counter-reset: s; margin: 14px 0 0; padding: 0; display: grid; gap: 4px; }
   ol.steps li { counter-increment: s; cursor: pointer; padding: 6px 10px; border-radius: 8px; font-size: 14px; color: var(--muted); display: flex; gap: 10px; }
   ol.steps li::before { content: counter(s); font-weight: 700; min-width: 20px; text-align: center; color: var(--muted); }
@@ -82,7 +83,7 @@
 <body>
 <main>
   <h1>copyparty → Immich bridge: how it works</h1>
-  <p class="sub">Three flows. Pick a tab, press play (or step through). Click any box to jump to the step that uses it.</p>
+  <p class="sub">Four flows. Pick a tab, press play (or step through). Click any box to jump to the step that uses it.</p>
 
   <div class="tabs" role="tablist" id="tabs"></div>
 
@@ -205,6 +206,34 @@
         { t: 'What you read', d: 'A healthy bridge shows live numbers. If the URL is blank, malformed, the service is stopped or the VM is off, the tile just says so.', nodes: ['s6', 's7'], edges: [['s6', 's7']] },
         { t: 'Never a blocker', d: 'Every failure mode (blank or bad URL, down, slow, garbage JSON) maps to a status and is never thrown. No upload, backup, sync or copyparty code reads the bridge URL, so the APK works the same with the bridge absent.', nodes: ['s6', 's8'], edges: [['s6', 's8']] }
       ]
+    },
+    {
+      name: '4 · Config upgrade (web page)',
+      h: 290,
+      nodes: [
+        n('c1', 5, 30, 'user', 'Open the link', 'installer prints', 'http://vm:8099/#token=…'),
+        n('c2', 210, 30, 'br', 'Page loads', 'public HTML only,', 'no data inside it'),
+        n('c3', 415, 30, 'br', 'Token check', 'every /api call must', 'carry the token'),
+        n('c4', 620, 30, 'br', 'Read config + folders', 'GET /api/config', 'GET /api/fs (picker)'),
+        n('c5', 825, 30, 'user', 'You edit', 'add folders, star,', 'intervals, album…'),
+        n('c6', 825, 190, 'br', 'Validate', 'PUT /api/config:', 'all-or-nothing'),
+        n('c7', 620, 190, 'st', 'Apply live + save', 'no restart;', 'settings.json on volume'),
+        n('c8', 415, 190, 'br', 'Sweep wakes', 'new folders scanned', 'straight away'),
+        n('c9', 210, 190, 'app', 'Status + logs', 'tabs 1 and 3 show', 'the new folders'),
+        n('c10', 5, 190, 'st', 'What stays fixed', 'port, Immich URL/key,', 'mounts: installer')
+      ],
+      steps: [
+        { t: 'Open the link once', d: 'The installer ends by printing a link with the token after the # (a URL fragment, which browsers never send to the server). The page stores the token in this browser and removes it from the address bar. After that you just open http://<vm>:8099/ .', nodes: ['c1'], edges: [] },
+        { t: 'The page itself is public, the data is not', d: 'GET / returns plain HTML with no settings, paths or file names in it. Anyone on your network can load the empty page but sees nothing.', nodes: ['c1', 'c2'], edges: [['c1', 'c2']] },
+        { t: 'Every request carries the token', d: 'The page sends X-Bridge-Token on every /api call. A wrong or missing token gets 401 (after a short delay to slow guessing). If the bridge was installed without a token at all, the settings API refuses to answer (403), so settings can never be changed anonymously. The copyparty hook uses the same token for /hook.', nodes: ['c2', 'c3'], edges: [['c2', 'c3']] },
+        { t: 'It reads the settings and lists folders', d: 'GET /api/config returns the current values, which ones differ from the installer defaults, and the read-only items (the API key is never sent, only whether it is set). The folder picker calls GET /api/fs?path=… which lists sub-folders only, and only inside BROWSE_ROOTS (copyparty’s data mount). Symlinks that point outside, and hidden folders such as .hist, are not shown.', nodes: ['c3', 'c4'], edges: [['c3', 'c4']] },
+        { t: 'You make changes in the browser', d: 'Add several watched folders with the picker, star the one imported first, change scan interval, retry budget, album, file types, post-import action and log detail. The page keeps your edits as a draft until you press Save, and sends only the fields you actually changed.', nodes: ['c4', 'c5'], edges: [['c4', 'c5']] },
+        { t: 'Validated all-or-nothing', d: 'PUT /api/config checks every change first: folders must exist and be inside the browsable roots, starred folders must sit inside a watched folder, numbers must be in range, and move/delete need a read-write mount. If any one check fails nothing is applied and the page lists every problem.', nodes: ['c5', 'c6'], edges: [['c5', 'c6']] },
+        { t: 'Applied immediately and remembered', d: 'The values are written into the running bridge (worker, sweep and hook receiver read them live) and saved to settings.json on the state volume, so they survive restarts and installer re-runs. Values equal to the installer defaults are dropped from the file. If a saved folder is not mounted at the next start it is skipped, never fatal.', nodes: ['c6', 'c7'], edges: [['c6', 'c7']] },
+        { t: 'The sweep runs straight away', d: 'Saving wakes the sweep thread, so a newly added folder is scanned within seconds instead of waiting for the next 15-minute tick. “Scan now” in the header does the same on demand.', nodes: ['c7', 'c8'], edges: [['c7', 'c8']] },
+        { t: 'See it in Status and Logs', d: 'The Status tab (and the phone app tile) show the new watch folders and counts. The Logs tab has a live tail with a level and text filter, and Download log saves the buffered lines as a .log file for debugging.', nodes: ['c8', 'c9'], edges: [['c8', 'c9']] },
+        { t: 'What can’t be changed here, and why', d: 'The Immich address and API key, the port, worker count and which host folders are mounted live in the compose files. A container cannot see the host disk beyond what is mounted into it, so the folder picker can only show mounted folders; adding a different host folder means a new mount via the installer. Reset to installer defaults removes everything saved on the page.', nodes: ['c9', 'c10'], edges: [['c9', 'c10']] }
+      ]
     }
   ];
 
@@ -245,6 +274,18 @@
       [['Tile on your phone (what the app really renders)', 'Import bridge: running (v0.1.0)\n12 imported · 3 already in Immich · 4 queued\n1 failed (retried automatically)\nWatching: /w/Australia/Asia2026\nImported first: /w/Australia/Asia2026\nLast activity 2 min ago\n\n☁ IMG_4821.JPG      imported · 2 min ago\n⧉ IMG_5002.HEIC     duplicate · 2 min ago\n⚠ IMG_5099.MOV      failed · 14 min ago\n                    upload failed: HTTP 500', 'phone']],
       [['Same tile, other states', 'Blank URL:      no tile (feature off, no request made)\nBad URL:        Import bridge: invalid URL — Enter an address like http://192.168.5.21:8099\nVM / bridge off: Import bridge: not reachable — Uploads to copyparty and Immich are unaffected. Anything uploaded meanwhile is picked up automatically when the bridge is back. Tap to retry.']],
       [['What stays unaffected when the tile says "not reachable"', 'Phone backup to Immich  ✓ normal\nImport from Memory Card → copyparty  ✓ normal\nImmich timeline, search, sync  ✓ normal']]
+    ],
+    [
+      [['What the installer prints at the end', 'Settings page:   http://192.168.5.21:8099/#token=ORST9KdnykQpewJKYcT0SUCddXAnuXXf\n                 (open that link once; the browser remembers it. Choose folders, see logs, scan now.)']],
+      [['Browser address bar before and after', 'before:  http://192.168.5.21:8099/#token=ORST9K…\nafter:   http://192.168.5.21:8099/        (token stored in this browser only)'], ['Exactly what the page shows', 'ui-status.png', 'img']],
+      [['Without the token (curl from another PC)', '$ curl -s http://192.168.5.21:8099/api/config\n{"error": "missing or wrong token"}        ← HTTP 401\n\nBridge installed with no token at all:\n{"error": "BRIDGE_TOKEN is not set, so the settings API is switched off"}   ← HTTP 403']],
+      [['GET /api/fs?path=/w/Australia (what the folder picker lists)', '{"path": "/w/Australia", "parent": "/w", "roots": ["/w"],\n "dirs": [{"name": "Asia2026", "path": "/w/Australia/Asia2026"},\n          {"name": "Old",      "path": "/w/Australia/Old"},\n          {"name": "Work",     "path": "/w/Australia/Work"}],\n "files": 0, "truncated": false}'], ['The picker on screen', 'ui-picker.png', 'img'], ['Refused, not listed', 'GET /api/fs?path=/etc            → 403 "that folder is outside the folders this container can see"\n/w/.hist, /w/.cache             → hidden folders are never offered\n/w/escape -> /etc (symlink)     → not offered, and opening it is refused']],
+      [['The settings page', 'ui-settings.png', 'img']],
+      [['Saving something invalid (real response)', 'PUT /api/config  {"max_attempts": 0, "watch_dirs": ["/nope"]}\n← HTTP 400 {"error": "/nope is outside the folders this container can see (/w); max_attempts must be between 1 and 100"}\n(nothing was applied)'], ['Other checks', 'priority folder /w/Other must be inside one of the watched folders\npost_import_action \'delete\' needs write access, but /w/Australia is mounted read-only']],
+      [['/data/settings.json afterwards (only differences from the installer are stored)', '{\n  "overrides": {\n    "sweep_interval": 300,\n    "watch_dirs": ["/w/Australia/Asia2026", "/w/Australia/Old"]\n  },\n  "version": 1\n}'], ['Page confirms', 'Saved. Applied now, no restart needed.     (label turns orange: "changed from installer default")'], ['Result on screen', 'ui-saved.png', 'img']],
+      [['Bridge log, seconds after pressing Save (real output)', '09:03:07 INFO settings changed: sweep_interval, watch_dirs\n09:03:07 INFO queued (sweep): /w/Australia/Old/2019/IMG_0007.JPG\n09:03:07 INFO sweep queued 1 file(s)\n09:03:07 INFO imported: IMG_0007.JPG -> asset asset-5']],
+      [['Logs tab', 'ui-logs.png', 'img'], ['Download log button saves', 'immich-bridge-2026-10-26T09-03-10-202Z.log']],
+      [['Rows on the page that are read-only', 'Immich address          http://192.168.5.21:2283\nImmich API key          set (hidden)\nWeb/hook port           8099\nImport workers          1\nFolders this page may browse   /w\n\nTo change the port:  curl … | BRIDGE_PORT=9000 bash\nTo allow move/delete: curl … | WRITABLE=1 bash\nTo undo page edits:   press "Reset to installer defaults"']]
     ]
   ];
 
@@ -356,8 +397,15 @@
     exEl.innerHTML = '';
     ((EX[scene] || [])[step] || []).forEach(function (blk) {
       var h = document.createElement('div'); h.className = 'exh'; h.textContent = 'Example · ' + blk[0];
-      var pre = document.createElement('pre'); pre.className = 'ex' + (blk[2] ? ' ' + blk[2] : ''); pre.textContent = blk[1];
-      exEl.appendChild(h); exEl.appendChild(pre);
+      exEl.appendChild(h);
+      if (blk[2] === 'img') {
+        var img = document.createElement('img'); img.src = blk[1]; img.alt = blk[0]; img.className = 'shot';
+        img.onerror = function () { img.replaceWith(Object.assign(document.createElement('p'), { className: 'muted', textContent: 'Screenshot ' + blk[1] + ' not found next to this page.' })); };
+        exEl.appendChild(img);
+      } else {
+        var pre = document.createElement('pre'); pre.className = 'ex' + (blk[2] ? ' ' + blk[2] : ''); pre.textContent = blk[1];
+        exEl.appendChild(pre);
+      }
     });
     countEl.textContent = 'Step ' + (step + 1) + ' of ' + sc.steps.length;
     var lis = stepsEl.children;

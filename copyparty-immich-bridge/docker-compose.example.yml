@@ -18,6 +18,7 @@ services:
       - ./hook/immich_bridge_hook.py:/hooks/immich_bridge_hook.py:ro
     environment:
       IMMICH_BRIDGE_URL: http://immich-bridge:8099
+      IMMICH_BRIDGE_TOKEN: "<same value as the bridge's BRIDGE_TOKEN>"
     command:
       # your existing flags, plus the event hook:
       #   xau = execute after upload; f = fork (non-blocking);
@@ -40,6 +41,8 @@ services:
       IMMICH_URL: http://immich-server:2283
       IMMICH_API_KEY: "<paste an Immich API key here (or use IMMICH_API_KEY_FILE)>"
       WATCH_DIRS: /w/uploads
+      BRIDGE_TOKEN: "<a long random string: protects the web page and /hook>"
+      BROWSE_ROOTS: /w/uploads            # folders the web page's folder picker may show
       # PRIORITY_DIRS: /w/uploads/Trip2026   # imported first (e.g. the app's upload folder); must be inside WATCH_DIRS
       # PATH_MAP: /w/uploads=/mnt/somewhere-else   # only if mount paths differ
       # SWEEP_INTERVAL_SECONDS: "900"    # reconciliation sweep; 0 = startup only

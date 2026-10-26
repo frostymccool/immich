@@ -108,6 +108,7 @@ void main() {
 
       final status = await service.fetch('http://bridge:8099/');
       expect(status.health, BridgeHealth.running);
+      expect(status.baseUrl.toString(), 'http://bridge:8099/');
       expect(status.version, '0.1.0');
       expect(status.imported, 12);
       expect(status.duplicates, 3);

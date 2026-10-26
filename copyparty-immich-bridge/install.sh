@@ -21,12 +21,14 @@ CONTAINER="${CONTAINER:-copyparty}"
 BASE_FOLDER="${BASE_FOLDER:-Australia}"
 APP_FOLDER="${APP_FOLDER:-Australia/Asia2026}"
 WIDE="${WIDE:-0}"
+WRITABLE="${WRITABLE:-0}"   # 1 = mount the data read-write so the page can enable move/delete after import
 HOOK="${HOOK:-1}"
 BRIDGE_PORT="${BRIDGE_PORT:-8099}"
 
 MARKER="# managed by the immich-bridge installer"
 OVERRIDE="$COPYPARTY_DIR/docker-compose.override.yml"
 ENVFILE="$COPYPARTY_DIR/immich-bridge.env"
+HOOKENV="$COPYPARTY_DIR/immich-bridge-hook.env"   # only the web-page token, for copyparty's hook
 
 say() { printf '\n==> %s\n' "$*"; }
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
@@ -46,7 +48,7 @@ fi
 if [ "${1:-}" = "--uninstall" ]; then
   say "Removing the bridge"
   if [ -f "$OVERRIDE" ] && grep -qF "$MARKER" "$OVERRIDE"; then
-    rm -f "$OVERRIDE" "$ENVFILE"
+    rm -f "$OVERRIDE" "$ENVFILE" "$HOOKENV"
     dc up -d --remove-orphans
     echo "Done. Bridge removed; copyparty restarted without the hook."
     echo "(Its small state volume is kept; 'docker volume rm copyparty_bridge-state' deletes it.)"
@@ -72,7 +74,7 @@ while IFS='|' read -r msrc mdest; do
   MOUNT_SRC="$msrc"; MOUNT_DEST="$mdest"; break
 done < <(docker inspect -f '{{range .Mounts}}{{.Source}}|{{.Destination}}{{"\n"}}{{end}}' "$CONTAINER")
 [ -n "$MOUNT_SRC" ] || die "could not find copyparty's data mount"
-echo "copyparty data: $MOUNT_SRC -> $MOUNT_DEST (mounted read-only into the bridge)"
+echo "copyparty data: $MOUNT_SRC -> $MOUNT_DEST (mounted into the bridge; read-only unless WRITABLE=1)"
 
 HOST_IP="${HOST_IP:-$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}')}"
 [ -n "$HOST_IP" ] || HOST_IP="$(hostname -I | awk '{print $1}')"
@@ -85,6 +87,7 @@ fi
 
 if [ "$WIDE" = "1" ]; then WATCH="$MOUNT_DEST/$BASE_FOLDER"; else WATCH="$MOUNT_DEST/$APP_FOLDER"; fi
 PRIORITY="$MOUNT_DEST/$APP_FOLDER"
+if [ "$WRITABLE" = "1" ]; then MOUNT_MODE=rw; else MOUNT_MODE=ro; fi
 
 # --- bridge source -------------------------------------------------------------
 say "Fetching the bridge (branch $BRANCH)"
@@ -113,13 +116,24 @@ if [ -z "$KEY" ]; then
 fi
 [ -n "$KEY" ] || die "no API key given"
 
+# Token for the bridge's web page and its /hook endpoint: reused on re-runs so links keep working.
+TOKEN="${BRIDGE_TOKEN:-}"
+if [ -z "$TOKEN" ] && [ -f "$ENVFILE" ]; then
+  TOKEN="$(sed -n 's/^BRIDGE_TOKEN=//p' "$ENVFILE" | head -n1)"
+fi
+if [ -z "$TOKEN" ]; then
+  TOKEN="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32 || true)"
+fi
+[ "${#TOKEN}" -ge 16 ] || die "could not create a web-page token (set BRIDGE_TOKEN=... of at least 16 characters)"
+
 say "Checking Immich at $IMMICH_URL"
 curl -fsS -m 10 "$IMMICH_URL/api/server/ping" >/dev/null || die "cannot reach Immich at $IMMICH_URL (set IMMICH_URL=...)"
 curl -fsS -m 10 -H "x-api-key: $KEY" "$IMMICH_URL/api/users/me" >/dev/null || die "Immich rejected that API key"
 echo "Immich reachable, API key accepted."
 
 umask 077
-printf 'IMMICH_API_KEY=%s\n' "$KEY" > "$ENVFILE"
+printf 'IMMICH_API_KEY=%s\nBRIDGE_TOKEN=%s\n' "$KEY" "$TOKEN" > "$ENVFILE"
+printf 'IMMICH_BRIDGE_TOKEN=%s\n' "$TOKEN" > "$HOOKENV"
 umask 022
 
 # --- compose override ------------------------------------------------------------
@@ -132,6 +146,8 @@ write_override() {
   $CONTAINER:
     volumes:
       - $BRIDGE_DIR/hook/immich_bridge_hook.py:/hooks/immich_bridge_hook.py:ro
+    env_file:
+      - ./immich-bridge-hook.env
     environment:
       IMMICH_BRIDGE_URL: http://immich-bridge:8099
     command: ["--xau", "f,j,t30,/hooks/immich_bridge_hook.py"]
@@ -150,8 +166,9 @@ EOF
       IMMICH_URL: $IMMICH_URL
       WATCH_DIRS: $WATCH
       PRIORITY_DIRS: $PRIORITY
+      BROWSE_ROOTS: $MOUNT_DEST
     volumes:
-      - $MOUNT_SRC:$MOUNT_DEST:ro
+      - $MOUNT_SRC:$MOUNT_DEST:$MOUNT_MODE
       - bridge-state:/data
 volumes:
   bridge-state:
@@ -190,6 +207,10 @@ echo "Watching:        $WATCH"
 echo "Imported first:  $PRIORITY"
 if [ "$HOOK" = "1" ]; then echo "Instant import:  on (copyparty hook)"; else echo "Instant import:  off (the sweep checks every 15 minutes)"; fi
 [ "$WIDE" = "1" ] || echo "Only the app's folder is watched. To also import the rest of '$BASE_FOLDER', re-run with WIDE=1 in front."
+echo
+echo "Settings page:   http://$HOST_IP:$BRIDGE_PORT/#token=$TOKEN"
+echo "                 (open that link once; the browser remembers it. Choose folders, see logs, scan now.)"
+echo "                 Folders you save there are kept and win over the ones above; 'Reset to installer defaults' undoes that."
 echo
 echo "LAST STEP, on your phone: Settings > copyparty > Import Bridge > URL:  http://$HOST_IP:$BRIDGE_PORT"
 }

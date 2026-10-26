@@ -11,7 +11,9 @@ import time
 from bridge import __version__
 from bridge.config import Config, ConfigError
 from bridge.immich import DEFAULT_EXTENSIONS, ImmichClient, ImmichError
+from bridge.logbuffer import RingLogHandler
 from bridge.server import serve
+from bridge.settings import SettingsStore
 from bridge.state import StateStore
 from bridge.worker import ImportWorker
 
@@ -48,6 +50,10 @@ def main() -> int:
         level=getattr(logging, cfg.log_level, logging.INFO),
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
+    # Recent log lines are also kept in memory for the web page's log viewer. The
+    # handler takes everything; the root logger's level still decides what exists.
+    logs = RingLogHandler()
+    logging.getLogger().addHandler(logs)
     log.info("copyparty-immich-bridge %s starting", __version__)
     log.info("watching %s -> %s", cfg.watch_dirs, cfg.immich_url)
 
@@ -55,10 +61,19 @@ def main() -> int:
     client = ImmichClient(cfg.immich_url, cfg.api_key, cfg.device_id, verify_tls=cfg.verify_tls)
     allowed = resolve_extensions(cfg, client)
 
+    stop_event = threading.Event()
+    wake_sweep = threading.Event()  # "scan now", or settings changed
+
+    # Saved settings must be applied BEFORE the first sweep, so it uses them.
+    settings = SettingsStore(cfg, cfg.settings_file, cfg.browse_roots, on_change=wake_sweep.set)
+    settings.load()
+    if cfg.token:
+        log.info("web page: http://<host>:%d/ (token required)", cfg.bind_port)
+    else:
+        log.warning("BRIDGE_TOKEN is not set: the settings web page is switched off; /hook is unauthenticated")
+
     worker = ImportWorker(cfg, state, client, allowed)
     worker.start()
-
-    stop_event = threading.Event()
 
     def sweep_loop() -> None:
         while not stop_event.is_set():
@@ -66,17 +81,18 @@ def main() -> int:
                 worker.sweep()
             except Exception:
                 log.exception("sweep failed")
-            if cfg.sweep_interval <= 0:
-                return  # startup sweep only
-            stop_event.wait(cfg.sweep_interval)
+            # interval 0 = no periodic sweep: only wake on "scan now" / a settings change
+            wake_sweep.wait(cfg.sweep_interval if cfg.sweep_interval > 0 else None)
+            wake_sweep.clear()
 
     threading.Thread(target=sweep_loop, name="sweep", daemon=True).start()
 
-    httpd = serve(cfg, state, worker)
+    httpd = serve(cfg, state, worker, settings, logs, scan_now=wake_sweep.set)
 
     def shutdown(signum, frame) -> None:
         log.info("signal %d — shutting down", signum)
         stop_event.set()
+        wake_sweep.set()
         worker.stop()
         threading.Thread(target=httpd.shutdown, daemon=True).start()
 

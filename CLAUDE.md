@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.3.3-custom.N+<3048+N>  →  3.3.3-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.3.5-custom.208+3256** (next push → `209+3257`; synced to upstream v3.3.5 — clean linear fast-forward, only version/Fastfile/Info.plist changed on mobile). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
+Latest pushed: **3.3.5-custom.209+3257** (next push → `210+3258`; build 209 = the "config upgrade" below; synced to upstream v3.3.5 — clean linear fast-forward, only version/Fastfile/Info.plist changed on mobile). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
 
 Note: another Claude Code session may also be working on this fork in parallel on branch
 `claude/auto-immich-copyparty-upload-eq80lh` (not `feature/copyparty-up2k-import` itself — it
@@ -225,11 +225,28 @@ re-imported; default `POST_IMPORT_ACTION=keep` never touches source files. Confi
 vars (see its README). `PRIORITY_DIRS` (inside `WATCH_DIRS`) are imported first via a priority
 queue — set it to the folder the phone app uploads into; the rest of the copyparty base is still
 imported afterwards, and `/status` reports both so the app tile can show them. Known gap: `/hook` has no auth (it now ignores any path outside `WATCH_DIRS`) — keep port 8099 on the internal Docker
-network only. **Install: `copyparty-immich-bridge/install.sh`** (documented in its `INSTALL.md`) is a one-line `curl | bash` that auto-detects the copyparty container/data mount, validates the Immich API key, clones the sparse bridge source, writes a separate `docker-compose.override.yml` (never edits the user's compose; delete it to undo), builds/starts, falls back to sweep-only if the hook stops copyparty starting, and supports `WIDE=1`, `HOOK=0`, `--uninstall`. It was tested only against stubbed docker/git/curl (no Docker daemon in the sandbox) — if the VM run misbehaves, check that first. Tests: `cd copyparty-immich-bridge && python -m pytest tests/` (48 tests); CI is
+network only. **Install: `copyparty-immich-bridge/install.sh`** (documented in its `INSTALL.md`) is a one-line `curl | bash` that auto-detects the copyparty container/data mount, validates the Immich API key, clones the sparse bridge source, writes a separate `docker-compose.override.yml` (never edits the user's compose; delete it to undo), builds/starts, falls back to sweep-only if the hook stops copyparty starting, and supports `WIDE=1`, `HOOK=0`, `--uninstall`. It was tested only against stubbed docker/git/curl (no Docker daemon in the sandbox) — if the VM run misbehaves, check that first. Tests: `cd copyparty-immich-bridge && python -m pytest tests/` (~90 tests; `pip install pytest requests` first); CI is
 `.github/workflows/bridge-tests.yml`, path-scoped to that directory. Originally built by a
 parallel Claude session (branch `claude/auto-immich-copyparty-upload-eq80lh`, now retired).
 
-Animated walkthrough of install / import / status flows: `copyparty-immich-bridge/docs/bridge-flow.html` (self-contained, open in any browser; update it if the pipeline changes).
+**Config upgrade (build 209) — web page on the bridge itself.** `GET /` serves `bridge/web/index.html`
+(single file, vanilla JS): Status, Folders & settings (multi-folder picker, ★ priority, scan interval,
+file-age guard, retry budget, post-import action, album, file types, log level), Logs (live tail,
+filter, download), Scan now. Backend is `/api/config` (GET/PUT), `/api/config/reset`, `/api/fs`,
+`/api/logs[/download]`, `/api/scan` in `server.py`; `bridge/settings.py` validates all-or-nothing, applies to the
+live `Config` (no restart) and persists only differences from env to `SETTINGS_FILE` (`/data/settings.json`,
+saved values WIN over compose/installer values until "Reset"); `bridge/browse.py` lists only dirs inside
+`BROWSE_ROOTS` (symlink-safe; the container can only see what's mounted — installer mounts the whole copyparty
+data root, `WRITABLE=1` for rw); `bridge/logbuffer.py` is the 2000-line ring buffer. **Auth:** `BRIDGE_TOKEN`
+(installer generates, stores in `immich-bridge.env`, reuses on re-run, prints `http://ip:8099/#token=…`); with no
+token `/api/*` answers 403 (settings can never change anonymously); when set it is also required on `/hook`
+(hook script sends `IMMICH_BRIDGE_TOKEN` from `immich-bridge-hook.env`, a file holding ONLY the token so the
+Immich API key never reaches copyparty). `/healthz` + `/status` stay open (the phone app reads them). Port, Immich
+URL/key, workers and mounts stay installer-only by design. App side: the running tile gained an "Open bridge
+settings page" row (`BridgeStatus.baseUrl`, `launchUrl`; still only on the settings page, hard rule intact).
+Screens: `copyparty-immich-bridge/docs/ui-*.png`, shown in tab 4 of the flow page.
+
+Animated walkthrough of install / import / status / config-upgrade flows: `copyparty-immich-bridge/docs/bridge-flow.html` (self-contained, open in any browser; update it if the pipeline changes).
 
 **App-side status display (build 202):** Settings → copyparty → "Import Bridge (optional)" has a
 `bridgeUrl` setting (`SettingsKey.copypartyBridgeUrl`, blank = feature off) and a live status tile.

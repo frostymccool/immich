@@ -30,6 +30,9 @@ class BridgeStatus {
   final List<BridgeRecentItem> recent;
   final DateTime checkedAt;
 
+  /// The normalised bridge address (also serves its web page); null unless the URL parsed.
+  final Uri? baseUrl;
+
   const BridgeStatus({
     required this.health,
     required this.checkedAt,
@@ -39,6 +42,7 @@ class BridgeStatus {
     this.watchDirs = const [],
     this.priorityDirs = const [],
     this.recent = const [],
+    this.baseUrl,
   });
 
   int get imported => counts['imported'] ?? 0;
@@ -116,6 +120,7 @@ class ImmichBridgeStatusService {
           return BridgeStatus(
             health: BridgeHealth.running,
             checkedAt: checkedAt,
+            baseUrl: base,
             version: version,
             counts: _parseCounts(statusBody['counts']),
             queue: statusBody['queue'] is int ? statusBody['queue'] as int : 0,
@@ -127,7 +132,7 @@ class ImmichBridgeStatusService {
       } catch (_) {
         // fall through to the health-only result
       }
-      return BridgeStatus(health: BridgeHealth.running, checkedAt: checkedAt, version: version);
+      return BridgeStatus(health: BridgeHealth.running, checkedAt: checkedAt, version: version, baseUrl: base);
     } catch (_) {
       return BridgeStatus(health: BridgeHealth.unreachable, checkedAt: checkedAt);
     }

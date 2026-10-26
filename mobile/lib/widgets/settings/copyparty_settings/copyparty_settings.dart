@@ -16,6 +16,7 @@ import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:immich_mobile/utils/disk_space.dart';
 import 'package:immich_ui/immich_ui.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart' show LaunchMode, launchUrl;
 
 class CopypartySettings extends ConsumerWidget {
   /// When false, the "Copyparty Server" connection section is hidden — used for
@@ -1025,6 +1026,16 @@ class _BridgeStatusTile extends ConsumerWidget {
                     onTap: refresh,
                   ),
                 ),
+                if (status.baseUrl != null)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 8.0),
+                    child: SettingListTile(
+                      title: 'Open bridge settings page',
+                      subtitle: 'Choose folders to watch, change behaviour, view and download logs, scan now',
+                      leading: const Icon(Icons.open_in_new_rounded),
+                      onTap: () => unawaited(_openBridgePage(status.baseUrl!)),
+                    ),
+                  ),
                 if (status.recent.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(left: 8.0),
@@ -1039,6 +1050,15 @@ class _BridgeStatusTile extends ConsumerWidget {
         }
       },
     );
+  }
+}
+
+/// Opens the bridge's own web page in the browser. Best-effort: a missing browser must never throw.
+Future<void> _openBridgePage(Uri baseUrl) async {
+  try {
+    await launchUrl(baseUrl, mode: LaunchMode.externalApplication);
+  } catch (_) {
+    // nothing to do: the tile itself keeps working
   }
 }
 
