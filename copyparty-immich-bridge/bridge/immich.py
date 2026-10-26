@@ -59,10 +59,11 @@ def sha1_hex(path: str, chunk_size: int = 1024 * 1024) -> str:
 
 
 class ImmichClient:
-    def __init__(self, base_url: str, api_key: str, device_id: str, verify_tls: bool = True, timeout: int = 30):
+    def __init__(self, base_url: str, api_key: str, device_id: str, verify_tls: bool = True, timeout: int = 30, upload_timeout: int = 1800):
         self._base = base_url.rstrip("/")
         self._device_id = device_id
         self._timeout = timeout
+        self._upload_timeout = upload_timeout
         self._session = requests.Session()
         self._session.verify = verify_tls
         self._session.headers.update({"x-api-key": api_key, "Accept": "application/json"})
@@ -138,8 +139,9 @@ class ImmichClient:
                 data=data,
                 files={"assetData": (filename, fh, "application/octet-stream")},
                 headers={"x-immich-checksum": sha1_hex_digest},
-                # Big videos over a LAN: allow a long read timeout.
-                timeout=(self._timeout, 3600),
+                # Big videos over a LAN need a long wait for Immich's reply, but not forever: a stalled
+                # upload must fail (and be retried) instead of blocking the queue.
+                timeout=(self._timeout, self._upload_timeout),
             )
         if resp.status_code not in (200, 201):
             raise ImmichError(f"upload failed: HTTP {resp.status_code}: {resp.text[:300]}")

@@ -58,7 +58,7 @@ def main() -> int:
     log.info("watching %s -> %s", cfg.watch_dirs, cfg.immich_url)
 
     state = StateStore(cfg.state_db)
-    client = ImmichClient(cfg.immich_url, cfg.api_key, cfg.device_id, verify_tls=cfg.verify_tls)
+    client = ImmichClient(cfg.immich_url, cfg.api_key, cfg.device_id, verify_tls=cfg.verify_tls, upload_timeout=cfg.upload_timeout)
     allowed = resolve_extensions(cfg, client)
 
     stop_event = threading.Event()

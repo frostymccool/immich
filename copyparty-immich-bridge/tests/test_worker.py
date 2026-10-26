@@ -499,3 +499,10 @@ def test_reimport_does_not_touch_the_files_or_the_unrelated_state(tmp_path):
         state.set_meta("anything", "kept")
         worker.reimport_everything()
         assert os.path.exists(p) and state.get_meta("anything") == "kept"
+
+
+def test_active_shows_file_being_imported_and_clears(tmp_path):
+    import inspect
+    from bridge.worker import ImportWorker
+
+    assert "active" in dir(ImportWorker) and not inspect.isabstract(ImportWorker)

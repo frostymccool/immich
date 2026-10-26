@@ -101,6 +101,7 @@
       <div class="card">
         <h2>Imports</h2>
         <div id="pauseNote"></div>
+        <div id="activeNote"></div>
         <div class="tiles" id="tiles"></div>
         <p class="muted" id="watching"></p>
         <div id="albumNote"></div>
@@ -282,6 +283,18 @@
     $('recentEmpty').classList.toggle('hidden', s.recent.length > 0);
     renderAlbums(s.albums);
     renderPaused(s.paused, s.queue);
+    renderActive(s.active || [], s.queue, s.paused);
+  }
+  function renderActive(list, queue, paused) {
+    var box = $('activeNote'); box.textContent = '';
+    if (list.length) {
+      list.forEach(function (a) {
+        var m = Math.floor(a.seconds / 60), t = m ? m + ' min ' + (a.seconds % 60) + ' s' : a.seconds + ' s';
+        box.appendChild(el('p', { 'class': 'muted' }, 'Importing now: ' + a.name + ' - ' + a.phase + ' for ' + t));
+      });
+    } else if (queue && !paused) {
+      box.appendChild(el('p', { 'class': 'errs' }, queue + ' file' + (queue === 1 ? ' is' : 's are') + ' waiting but nothing is importing. Open the Logs tab.'));
+    }
   }
   function doReimport() {
     var who = lastIdentity && lastIdentity.immich_user ? lastIdentity.immich_user.name + ' (' + lastIdentity.immich_user.email + ')' : 'the current Immich account';

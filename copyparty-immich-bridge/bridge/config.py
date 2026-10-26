@@ -77,6 +77,7 @@ class Config:
     device_id: str = "copyparty-immich-bridge"
     verify_tls: bool = True
     workers: int = 1
+    upload_timeout: int = 1800
     log_level: str = "INFO"
 
     @classmethod
@@ -164,6 +165,7 @@ class Config:
             device_id=e.get("DEVICE_ID", "copyparty-immich-bridge").strip() or "copyparty-immich-bridge",
             verify_tls=e.get("IMMICH_VERIFY_TLS", "true").strip().lower() not in ("0", "false", "no"),
             workers=_int("WORKERS", 1, minimum=1),
+            upload_timeout=_int("UPLOAD_TIMEOUT", 1800, minimum=60),
             log_level=e.get("LOG_LEVEL", "INFO").strip().upper() or "INFO",
         )
 

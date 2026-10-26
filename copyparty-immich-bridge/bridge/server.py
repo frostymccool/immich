@@ -172,6 +172,7 @@ def make_handler(
                         "counts": state.counts(),
                         "queue": worker.queue_size,
                         "paused": cfg.paused,
+                        "active": worker.active(),
                         "watch_dirs": cfg.watch_dirs,
                         "priority_dirs": cfg.priority_dirs,
                         "albums": worker.album_info(),

@@ -7,6 +7,7 @@ import logging
 import os
 import queue
 import threading
+import time
 
 import requests
 
@@ -42,6 +43,7 @@ class ImportWorker:
         self.backfill: dict = {"running": False, "total": 0, "done": 0, "failed": 0}
         self._backfill_lock = threading.Lock()
         self._lock = threading.Lock()
+        self._active: dict[str, tuple[float, str]] = {}  # path -> (started, phase) of files being imported now
         self._held = 0  # files a worker has taken from the queue but is holding because imports are paused
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -68,6 +70,19 @@ class ImportWorker:
         """Files waiting to be imported (includes the ones held back while paused)."""
         with self._lock:
             return self._queue.qsize() + self._held
+
+    def active(self) -> list[dict]:
+        """Files being imported right now: name, phase (hashing/checking/uploading) and seconds so far."""
+        now = time.time()
+        with self._lock:
+            return [
+                {"name": os.path.basename(p), "phase": ph, "seconds": int(now - t0)} for p, (t0, ph) in self._active.items()
+            ]
+
+    def _phase(self, path: str, phase: str) -> None:
+        with self._lock:
+            started = self._active.get(path, (time.time(), ""))[0]
+            self._active[path] = (started, phase)
 
     # -- producers ---------------------------------------------------------------
 
@@ -163,14 +178,17 @@ class ImportWorker:
             return
 
         sha1: str | None = None
+        self._phase(path, "hashing")
         try:
             sha1 = sha1_hex(path)
+            self._phase(path, "checking Immich")
 
             existing = self._client.find_by_checksum(sha1, ref_id=path)
             if existing is not None:
                 outcome = UploadOutcome(status="duplicate", asset_id=None if existing == "present" else existing)
                 log.info("already in Immich (checksum): %s -> %s", name, existing)
             else:
+                self._phase(path, "uploading")
                 outcome = self._client.upload(path, sha1)
                 log.info("%s: %s -> asset %s", outcome.status, name, outcome.asset_id)
 
@@ -184,6 +202,9 @@ class ImportWorker:
         except (ImmichError, requests.RequestException, OSError) as ex:
             log.warning("import failed for %s: %s", path, ex)
             self._state.record_failure(path, size, mtime, sha1, str(ex))
+        finally:
+            with self._lock:
+                self._active.pop(path, None)
 
     # -- albums: permission check + back-fill of files imported before folder albums existed ----------------
 
