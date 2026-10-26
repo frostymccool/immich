@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
-import 'package:immich_mobile/pages/copyparty/copyparty_import.page.dart';
+import 'package:immich_mobile/pages/copyparty/copyparty_snackbar.dart';
 import 'package:immich_mobile/providers/api.provider.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
@@ -426,15 +426,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Queued ${r.filename} for upload'),
-        action: SnackBarAction(
-          label: 'View',
-          onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CopypartyImportPage())),
-        ),
-      ),
-    );
+    showQueuedForUploadSnackBar(context, 'Queued ${r.filename} for upload');
   }
 
   /// Deletes one source file and records it. Returns true when the file is gone.

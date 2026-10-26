@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
-import 'package:immich_mobile/pages/copyparty/copyparty_import.page.dart';
+import 'package:immich_mobile/pages/copyparty/copyparty_snackbar.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_staging.service.dart';
@@ -100,14 +100,9 @@ class _CopypartyCachePageState extends ConsumerState<CopypartyCachePage> {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Queued ${completeTargets.length} file${completeTargets.length == 1 ? '' : 's'} for upload'),
-        action: SnackBarAction(
-          label: 'View',
-          onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CopypartyImportPage())),
-        ),
-      ),
+    showQueuedForUploadSnackBar(
+      context,
+      'Queued ${completeTargets.length} file${completeTargets.length == 1 ? '' : 's'} for upload',
     );
     setState(() => _selected.clear());
   }
