@@ -42,6 +42,12 @@ curl -fsSL https://raw.githubusercontent.com/frostymccool/immich/feature/copypar
 You can change the watched folders any time on the settings page (no re-install needed).
 Source files are never moved or deleted (the bridge mounts them read-only).
 
+## Pausing
+
+The **Pause imports** button (top right of the settings page) stops new imports so you can check what has been
+done; **Resume imports** carries on. New uploads keep being queued meanwhile. The pause survives restarts.
+(`docker stop immich-bridge` also works as a hard stop.)
+
 ## Albums
 
 Every imported file is also added to an Immich album named after the folder it sits in (a file in

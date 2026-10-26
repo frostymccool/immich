@@ -39,6 +39,7 @@ class ImportWorker:
         self.backfill: dict = {"running": False, "total": 0, "done": 0, "failed": 0}
         self._backfill_lock = threading.Lock()
         self._lock = threading.Lock()
+        self._held = 0  # files a worker has taken from the queue but is holding because imports are paused
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
 
@@ -61,7 +62,9 @@ class ImportWorker:
 
     @property
     def queue_size(self) -> int:
-        return self._queue.qsize()
+        """Files waiting to be imported (includes the ones held back while paused)."""
+        with self._lock:
+            return self._queue.qsize() + self._held
 
     # -- producers ---------------------------------------------------------------
 
@@ -98,11 +101,31 @@ class ImportWorker:
 
     # -- pipeline ----------------------------------------------------------------
 
+    def _wait_while_paused(self) -> bool:
+        """Blocks while imports are paused. False when the bridge is stopping."""
+        while self._cfg.paused and not self._stop.is_set():
+            self._stop.wait(0.5)
+        return not self._stop.is_set()
+
     def _run(self) -> None:
         while not self._stop.is_set():
+            if not self._wait_while_paused():
+                break
             _, _, path = self._queue.get()
             if not path or self._stop.is_set():
                 break
+            # Paused while this worker was waiting for work: hold the file (it stays marked as pending, so it
+            # is not queued twice) until imports resume. A file already being imported always finishes.
+            if self._cfg.paused:
+                with self._lock:
+                    self._held += 1
+                try:
+                    proceed = self._wait_while_paused()
+                finally:
+                    with self._lock:
+                        self._held -= 1
+                if not proceed:
+                    break
             try:
                 self._process(path)
             except Exception:

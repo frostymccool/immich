@@ -347,3 +347,80 @@ def test_backfill_ignores_failed_and_skipped_files(tmp_path):
         state.record_failure("/w/x/bad.jpg", 1, 1.0, None, "boom")
         state.record_skip("/w/x/doc.txt", 1, 1.0, "unsupported extension")
         assert state.done_assets() == []
+
+
+# -- pause / resume ------------------------------------------------------------------------------------------
+
+
+def _wait_for(predicate, timeout=10.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_paused_imports_nothing_new_but_keeps_the_arrivals_queued(tmp_path):
+    with StubImmich() as stub:
+        worker, state, cfg = make_worker(tmp_path, stub, paused=True)
+        a = write_file(tmp_path, "Day 1/a.jpg", b"a")
+        b = write_file(tmp_path, "Day 1/b.jpg", b"b")
+        worker.start()
+        try:
+            assert worker.enqueue(a, "hook") and worker.enqueue(b, "hook")
+            time.sleep(1.2)  # long enough for a worker to take one and hold it
+            assert state.get(a) is None and state.get(b) is None
+            assert stub.uploads == []
+            assert worker.queue_size == 2  # one held by the worker + one still queued: both counted
+            assert worker.enqueue(a, "sweep") is False  # a held file is not queued a second time
+        finally:
+            cfg.paused = False
+            worker.stop()
+
+
+def test_resume_imports_everything_that_waited(tmp_path):
+    with StubImmich() as stub:
+        worker, state, cfg = make_worker(tmp_path, stub, paused=True)
+        paths = [write_file(tmp_path, f"Day 1/{n}.jpg", n.encode()) for n in "abc"]
+        worker.start()
+        try:
+            for p in paths:
+                worker.enqueue(p, "hook")
+            time.sleep(0.8)
+            assert all(state.get(p) is None for p in paths)
+            cfg.paused = False  # resume
+            assert _wait_for(lambda: all(state.get(p) is not None and state.get(p).status == "imported" for p in paths))
+            assert worker.queue_size == 0
+            assert len(stub.uploads) == 3
+        finally:
+            worker.stop()
+
+
+def test_pausing_while_running_stops_new_work_after_the_current_file(tmp_path):
+    with StubImmich() as stub:
+        worker, state, cfg = make_worker(tmp_path, stub)
+        first = write_file(tmp_path, "Day 1/a.jpg", b"a")
+        worker.start()
+        try:
+            worker.enqueue(first, "hook")
+            assert _wait_for(lambda: state.get(first) is not None)  # imported normally
+            cfg.paused = True
+            later = write_file(tmp_path, "Day 1/b.jpg", b"b")
+            worker.enqueue(later, "hook")
+            time.sleep(1.0)
+            assert state.get(later) is None
+            cfg.paused = False
+            assert _wait_for(lambda: state.get(later) is not None)
+        finally:
+            worker.stop()
+
+
+def test_stopping_while_paused_does_not_hang(tmp_path):
+    with StubImmich() as stub:
+        worker, state, cfg = make_worker(tmp_path, stub, paused=True)
+        worker.start()
+        worker.enqueue(write_file(tmp_path, "Day 1/a.jpg", b"a"), "hook")
+        time.sleep(0.8)
+        worker.stop()
+        assert _wait_for(lambda: not any(t.is_alive() for t in worker._threads), timeout=5)

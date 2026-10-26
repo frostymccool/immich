@@ -168,6 +168,7 @@ def make_handler(
                     {
                         "counts": state.counts(),
                         "queue": worker.queue_size,
+                        "paused": cfg.paused,
                         "watch_dirs": cfg.watch_dirs,
                         "priority_dirs": cfg.priority_dirs,
                         "albums": worker.album_info(),
@@ -236,6 +237,23 @@ def make_handler(
                         self._send_json(500, {"error": f"could not save settings: {ex}"})
                         return
                     self._send_json(200, self._config_payload())
+                return
+            if self.path == "/api/pause" and settings is not None:
+                if not self._require_api():
+                    return
+                body = self._read_json_body()
+                if body is None:
+                    return
+                if not isinstance(body.get("paused"), bool):
+                    self._send_json(400, {"error": "send {\"paused\": true} or {\"paused\": false}"})
+                    return
+                try:
+                    settings.update({"paused": body["paused"]})
+                except OSError as ex:
+                    self._send_json(500, {"error": f"could not save the pause state: {ex}"})
+                    return
+                log.info("imports %s from the web page", "PAUSED" if body["paused"] else "RESUMED")
+                self._send_json(200, {"paused": cfg.paused, "queue": worker.queue_size})
                 return
             if self.path == "/api/albums/backfill":
                 if self._require_api():

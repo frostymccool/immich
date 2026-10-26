@@ -290,3 +290,18 @@ def test_status_reports_album_health_and_backfill_endpoint_needs_the_token(app):
     status, body, _ = call(base, "POST", "/api/albums/backfill", {})
     assert status == 200 and "started" in body
     assert call(base, "POST", "/api/albums/recheck", {}, token="bad")[0] == 401
+
+
+def test_pause_and_resume_endpoint(app):
+    make, _ = app
+    base, _, cfg, *_ = make()
+    assert call(base, "GET", "/status", token=None)[1]["paused"] is False
+    assert call(base, "POST", "/api/pause", {"paused": True}, token=None)[0] == 401
+    assert cfg.paused is False
+    status, body, _ = call(base, "POST", "/api/pause", {"paused": True})
+    assert status == 200 and body["paused"] is True and cfg.paused is True
+    assert call(base, "GET", "/status", token=None)[1]["paused"] is True  # the phone app / page can see it
+    assert call(base, "POST", "/api/pause", {"paused": False})[1]["paused"] is False
+    assert cfg.paused is False
+    assert call(base, "POST", "/api/pause", {"paused": "yes"})[0] == 400
+    assert call(base, "POST", "/api/pause", {})[0] == 400

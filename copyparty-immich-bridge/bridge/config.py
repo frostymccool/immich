@@ -52,6 +52,10 @@ class Config:
 
     album_name: str = ""
 
+    # Imports are paused: nothing new is imported (the file being imported finishes); arrivals keep queuing.
+    # Switched from the web page, saved with the other settings so a restart does not silently resume.
+    paused: bool = False
+
     # Also add every imported file to an album named after the folder it sits in (created on demand).
     album_from_folder: bool = True
 

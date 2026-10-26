@@ -35,6 +35,7 @@ EDITABLE = (
     "post_import_action",
     "album_name",
     "album_from_folder",
+    "paused",
     "include_extensions",
     "log_level",
 )
@@ -140,14 +141,15 @@ def validate(cfg: Config, changes: dict[str, Any], browse_roots: list[str]) -> d
         else:
             out["album_name"] = album
 
-    if "album_from_folder" in changes:
-        raw = changes["album_from_folder"]
-        if isinstance(raw, bool):
-            out["album_from_folder"] = raw
-        elif isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
-            out["album_from_folder"] = raw.strip().lower() == "true"
-        else:
-            problems.append("album_from_folder must be true or false")
+    for flag in ("album_from_folder", "paused"):
+        if flag in changes:
+            raw = changes[flag]
+            if isinstance(raw, bool):
+                out[flag] = raw
+            elif isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
+                out[flag] = raw.strip().lower() == "true"
+            else:
+                problems.append(f"{flag} must be true or false")
 
     if "include_extensions" in changes:
         raw = changes["include_extensions"]

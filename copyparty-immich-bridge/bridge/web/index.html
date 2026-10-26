@@ -75,7 +75,9 @@
   <span class="dot" id="dot" title="bridge health"></span>
   <h1>Immich Bridge</h1>
   <span class="muted" id="ver"></span>
+  <span class="pill hidden" id="pausedPill" style="color:var(--warn);border-color:var(--warn)">Paused</span>
   <span class="grow"></span>
+  <button id="pause" class="hidden">Pause imports</button>
   <button id="scan" class="primary hidden">Scan now</button>
 </header>
 
@@ -98,6 +100,7 @@
     <section id="tab-status">
       <div class="card">
         <h2>Imports</h2>
+        <div id="pauseNote"></div>
         <div class="tiles" id="tiles"></div>
         <p class="muted" id="watching"></p>
         <div id="albumNote"></div>
@@ -228,11 +231,11 @@
   function signOut(msg) {
     try { localStorage.removeItem('bridgeToken'); } catch (e) { /* ignore */ }
     token = ''; clearTimeout(pollT);
-    $('app').classList.add('hidden'); $('scan').classList.add('hidden'); $('gate').classList.remove('hidden');
+    $('app').classList.add('hidden'); $('scan').classList.add('hidden'); $('pause').classList.add('hidden'); $('pausedPill').classList.add('hidden'); $('gate').classList.remove('hidden');
     if (msg) { $('gateErr').textContent = msg; $('gateErr').classList.remove('hidden'); }
   }
   function start() {
-    $('gate').classList.add('hidden'); $('app').classList.remove('hidden'); $('scan').classList.remove('hidden');
+    $('gate').classList.add('hidden'); $('app').classList.remove('hidden'); $('scan').classList.remove('hidden'); $('pause').classList.remove('hidden');
     loadConfig().then(function () { refresh(); });
   }
   var m = /[#&]token=([^&]+)/.exec(location.hash);
@@ -272,7 +275,31 @@
     });
     $('recentEmpty').classList.toggle('hidden', s.recent.length > 0);
     renderAlbums(s.albums);
+    renderPaused(s.paused, s.queue);
   }
+  var isPaused = false;
+  function renderPaused(paused, queue) {
+    isPaused = !!paused;
+    $('pause').textContent = isPaused ? 'Resume imports' : 'Pause imports';
+    $('pause').className = isPaused ? 'primary' : '';
+    $('pausedPill').classList.toggle('hidden', !isPaused);
+    var box = $('pauseNote'); box.textContent = '';
+    if (isPaused) {
+      var d = el('div', { 'class': 'errs' }, 'Imports are paused' + (queue ? ' — ' + queue + ' file' + (queue === 1 ? ' is' : 's are') + ' waiting' : '') +
+        '. A file already being imported finishes first; nothing new starts until you press Resume imports. New uploads keep being noticed and queued. The pause survives a restart.');
+      d.style.color = 'var(--warn)'; d.style.borderColor = 'var(--warn)'; d.style.margin = '0 0 10px';
+      box.appendChild(d);
+    }
+  }
+  $('pause').onclick = function () {
+    var want = !isPaused;
+    api('POST', '/api/pause', { paused: want }).then(function (r) {
+      renderPaused(r.paused, r.queue);
+      if (cfg) { cfg.values.paused = r.paused; }
+      if (draft) { draft.paused = r.paused; }
+      refresh();
+    });
+  };
   function renderAlbums(a) {
     var box = $('albumNote'); box.textContent = '';
     if (!a || !a.enabled) { return; }
@@ -305,7 +332,7 @@
   // ---- settings ----------------------------------------------------------------
   function loadConfig() {
     return api('GET', '/api/config').then(function (c) {
-      cfg = c; draft = JSON.parse(JSON.stringify(c.values)); renderSettings();
+      cfg = c; draft = JSON.parse(JSON.stringify(c.values)); renderSettings(); renderPaused(c.values.paused, null);
     }).catch(function (e) { if (e.message !== 'auth') { $('gateErr').textContent = e.message; } });
   }
   function dirty() { return JSON.stringify(draft) !== JSON.stringify(cfg.values); }

@@ -88,6 +88,8 @@ def main() -> int:
 
     threading.Thread(target=sweep_loop, name="sweep", daemon=True).start()
 
+    if cfg.paused:
+        log.warning("imports are PAUSED (saved setting) - press Resume on the web page to continue")
     httpd = serve(cfg, state, worker, settings, logs, scan_now=wake_sweep.set)
 
     def shutdown(signum, frame) -> None:

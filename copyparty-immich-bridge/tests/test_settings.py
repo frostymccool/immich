@@ -166,3 +166,17 @@ def test_album_from_folder_is_editable_and_validated(tmp_path):
     with pytest.raises(SettingsError):
         store.update({"album_from_folder": "maybe"})
     assert cfg.album_from_folder is True
+
+
+def test_paused_is_persisted_and_survives_a_restart(tmp_path):
+    cfg, store, a, b = make(tmp_path)
+    assert cfg.paused is False
+    store.update({"paused": True})
+    assert cfg.paused is True and "paused" in store.overridden()
+    cfg2, store2, _, _ = make(tmp_path)
+    store2.load()
+    assert cfg2.paused is True  # a restart does not silently resume
+    store2.update({"paused": False})
+    assert "paused" not in store2.overridden()
+    with pytest.raises(SettingsError):
+        store2.update({"paused": "maybe"})

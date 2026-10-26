@@ -105,6 +105,10 @@ is behind `BRIDGE_TOKEN`:
 - **Logs** — live tail with level + text filter and a **Download log** button (last 2000 lines
   since the container started; `docker logs immich-bridge` for older history).
 - **Scan now** — runs the sweep immediately.
+- **Pause imports / Resume imports** (header button) — stops anything new being imported while you check
+  what it has done. The file being imported at that moment finishes; new uploads are still noticed and queued
+  (the Status tab shows how many are waiting) and import as soon as you resume. The pause is saved, so a
+  restart does not silently resume. Copyparty uploads and the rest of Immich are unaffected.
 
 What the page deliberately cannot change (needs a compose change or restart): the Immich
 URL and API key, the port, the worker count, and which host folders are mounted. A container
@@ -118,11 +122,11 @@ read-write (installer option `WRITABLE=1`); the page refuses them while it is re
 
 - `POST /hook` — copyparty event receiver (single JSON object, or a list for
   `xiu` batch hooks). Needs the token when `BRIDGE_TOKEN` is set
-- `GET /status` — counters by status, queue depth, watch/priority dirs, album health (`albums`: key permission check, added/failed counts, last error, back-fill progress), 20 most recent items (open; the phone app reads it)
+- `GET /status` — counters by status, queue depth, `paused`, watch/priority dirs, album health (`albums`: key permission check, added/failed counts, last error, back-fill progress), 20 most recent items (open; the phone app reads it)
 - `GET /healthz` — liveness (open)
 - `GET /` — the web page (the page itself is public; all data behind it needs the token)
 - `GET|PUT /api/config`, `POST /api/config/reset`, `GET /api/fs?path=`, `GET /api/logs`,
-  `GET /api/logs/download`, `POST /api/scan`, `POST /api/albums/backfill` (add everything already imported to its folder album), `POST /api/albums/recheck` (re-test the key's album permissions) — the web page's backend. Send the token as
+  `GET /api/logs/download`, `POST /api/scan`, `POST /api/pause` (`{"paused": true|false}`), `POST /api/albums/backfill` (add everything already imported to its folder album), `POST /api/albums/recheck` (re-test the key's album permissions) — the web page's backend. Send the token as
   `X-Bridge-Token: <token>` or `Authorization: Bearer <token>`
 
 ## Notes & limits
