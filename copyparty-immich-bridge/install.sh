@@ -69,13 +69,26 @@ if [ -f "$OVERRIDE" ] && ! grep -qF "$MARKER" "$OVERRIDE"; then
   die "$OVERRIDE already exists and was not created by this installer; refusing to overwrite it"
 fi
 
-# copyparty's data mount: the first mount that is not its /cfg config dir
+# copyparty's data mount. Docker lists a container's mounts alphabetically, and on a RE-run the list also
+# holds the hook script this installer mounted last time (/hooks/...), so "the first mount" is not good
+# enough. Skip config/hook/file mounts, and on a re-run prefer the mount we used last time.
 MOUNT_SRC="" MOUNT_DEST=""
-while IFS='|' read -r msrc mdest; do
-  [ -n "$mdest" ] || continue
-  case "$mdest" in /cfg*) continue ;; esac
-  MOUNT_SRC="$msrc"; MOUNT_DEST="$mdest"; break
-done < <(docker inspect -f '{{range .Mounts}}{{.Source}}|{{.Destination}}{{"\n"}}{{end}}' "$CONTAINER")
+mapfile -t MOUNTS < <(docker inspect -f '{{range .Mounts}}{{.Type}}|{{.Source}}|{{.Destination}}{{"\n"}}{{end}}' "$CONTAINER")
+PREV_ROOT=""
+if [ -f "$OVERRIDE" ] && grep -qF "$MARKER" "$OVERRIDE"; then
+  PREV_ROOT="$(sed -n 's/^[[:space:]]*BROWSE_ROOTS:[[:space:]]*//p' "$OVERRIDE" | head -n1)"
+fi
+for pass in prev auto; do
+  for m in "${MOUNTS[@]}"; do
+    IFS='|' read -r mtype msrc mdest <<<"$m"
+    [ -n "$mdest" ] || continue
+    case "$mdest" in /cfg|/cfg/*|/hooks|/hooks/*) continue ;; esac
+    case "$mtype" in bind|volume) ;; *) continue ;; esac
+    [ -f "$msrc" ] && continue
+    if [ "$pass" = prev ] && [ "$mdest" != "$PREV_ROOT" ]; then continue; fi
+    MOUNT_SRC="$msrc"; MOUNT_DEST="$mdest"; break 2
+  done
+done
 [ -n "$MOUNT_SRC" ] || die "could not find copyparty's data mount"
 echo "copyparty data: $MOUNT_SRC -> $MOUNT_DEST (mounted into the bridge; read-only unless WRITABLE=1)"
 
@@ -98,10 +111,26 @@ if [ -z "$APP_FOLDER" ] && [ -f "$OVERRIDE" ] && grep -qF "$MARKER" "$OVERRIDE";
 fi
 if [ -z "$APP_FOLDER" ]; then
   echo
-  echo "Which folder does the phone app upload into? Give it relative to copyparty's data folder"
-  echo "(inside $MOUNT_DEST), for example  Trips/Summer2026 . Leave blank to watch everything there."
+  echo "Which folder does the phone app upload into?"
+  # Offer the folders that actually exist (newest first - the one you just uploaded into is usually on top).
+  CHOICES=()
+  if [ -d "$MOUNT_SRC" ] && [ -r "$MOUNT_SRC" ]; then
+    mapfile -t CHOICES < <(cd "$MOUNT_SRC" && find . -mindepth 1 -maxdepth 2 -type d ! -path '*/.*' -printf '%T@ %P\n' 2>/dev/null \
+      | sort -rn | head -n 20 | cut -d' ' -f2-)
+  fi
+  if [ "${#CHOICES[@]}" -gt 0 ]; then
+    n=0
+    for c in "${CHOICES[@]}"; do n=$((n + 1)); printf '  %2d) %s\n' "$n" "$c"; done
+    echo "Type the number, or type a folder path, or just press Enter to watch everything."
+  else
+    echo "Type it relative to copyparty's data folder (inside $MOUNT_DEST), for example  Trips/Summer2026 ,"
+    echo "or just press Enter to watch everything."
+  fi
   if ! read -r -p "Folder: " APP_FOLDER </dev/tty 2>/dev/null; then
     die "no terminal to ask on; re-run with APP_FOLDER=... in front (or APP_FOLDER=. to watch everything)"
+  fi
+  if [[ "$APP_FOLDER" =~ ^[0-9]+$ ]] && [ "$APP_FOLDER" -ge 1 ] && [ "$APP_FOLDER" -le "${#CHOICES[@]}" ]; then
+    APP_FOLDER="${CHOICES[$((APP_FOLDER - 1))]}"
   fi
   [ -n "$APP_FOLDER" ] || APP_FOLDER="."
 fi

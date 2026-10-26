@@ -28,11 +28,12 @@ When it finishes it prints two links:
 
 ## What it watches by default
 
-The folder your phone app uploads into, imported first. **The installer asks for it once** (relative to
-copyparty's data folder, for example `Trips/Summer2026`; blank = everything under the data folder) and
-**remembers it on every re-run**, so updating never asks again. Nothing else on the NAS is touched, so the
-first run can't surprise you. To also import the rest of the folder that contains it (anything Immich
-doesn't already have, deduplicated by checksum), re-run with `WIDE=1`:
+The folder your phone app uploads into, imported first. **The installer asks for it once, and shows you the
+folders that actually exist** (newest first, so the one you just uploaded into is usually number 1): type its
+number, or type a path, or just press Enter to watch everything. It **remembers your answer on every re-run**,
+so updating never asks again. Nothing else on the NAS is touched, so the first run can't surprise you. To also
+import the rest of the folder that contains it (anything Immich doesn't already have, deduplicated by checksum),
+re-run with `WIDE=1`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/frostymccool/immich/feature/copyparty-up2k-import/copyparty-immich-bridge/install.sh | WIDE=1 bash
