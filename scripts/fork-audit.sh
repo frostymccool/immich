@@ -117,7 +117,7 @@ if [ "$ce" = "noreply@github.com" ] && [ "$parents" -ge 3 ]; then
 fi
 for e in "$ae" "$ce"; do
   case "$e" in
-    ""|*noreply*|*@users.noreply.github.com|*github-actions*|*@anthropic.com) ;;
+    ""|*noreply*|*github-actions*|*@anthropic.com) ;;
     *) fail "tip commit uses a personal e-mail ($e); set git config user.email to a noreply address" ;;
   esac
 done

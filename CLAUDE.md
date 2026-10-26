@@ -14,7 +14,7 @@ code runs 3048 ahead of the custom number):
 ```
 3.3.3-custom.N+<3048+N>  →  3.3.3-custom.(N+1)+<3049+N>
 ```
-Latest pushed: **3.3.5-custom.212+3260** (next push → `213+3261`; build 211 = fork audit wired into every pipeline, 212 = audit checks the real PR head commit instead of GitHub's synthetic merge; build 209 = the "config upgrade" below; synced to upstream v3.3.5 — clean linear fast-forward, only version/Fastfile/Info.plist changed on mobile). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
+Latest pushed: **3.3.5-custom.213+3261** (next push → `214+3262`; 213 = audit is a first step in the APK build job (no reusable-workflow `./` call, zizmor), shellcheck-clean; build 211 = fork audit wired into every pipeline, 212 = audit checks the real PR head commit instead of GitHub's synthetic merge; build 209 = the "config upgrade" below; synced to upstream v3.3.5 — clean linear fast-forward, only version/Fastfile/Info.plist changed on mobile). Jumped 132→200 on purpose to mark the copyparty-immich-bridge addition.
 
 Note: another Claude Code session may also be working on this fork in parallel on branch
 `claude/auto-immich-copyparty-upload-eq80lh` (not `feature/copyparty-up2k-import` itself — it
