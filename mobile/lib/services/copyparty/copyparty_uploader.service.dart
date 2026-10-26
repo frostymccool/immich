@@ -9,6 +9,22 @@ import 'package:http/io_client.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
 
+/// Outcome of [CopypartyUploaderService.removeStrayPartials]; it never throws.
+class StrayPartialCleanup {
+  /// Server file names that were deleted.
+  final List<String> removed;
+
+  /// Names the server refused or that errored (typically no delete permission), with the reason.
+  final List<String> failed;
+
+  /// Set when nothing was attempted (complete file not found, listing failed).
+  final String? skipped;
+
+  const StrayPartialCleanup({this.removed = const [], this.failed = const [], this.skipped});
+
+  bool get nothingToDo => removed.isEmpty && failed.isEmpty && skipped == null;
+}
+
 /// Implements the copyparty up2k upload protocol.
 ///
 /// Three-step flow per file:
@@ -426,12 +442,67 @@ class CopypartyUploaderService {
   Future<Map<String, int>> listUploadFolder(String hostUrl, String uploadPath, String password) =>
       listFolderSizes(_buildUri(hostUrl, uploadPath, ''), password);
 
+  /// Removes the stray `.PARTIAL` copyparty sometimes leaves next to a file that uploaded successfully.
+  ///
+  /// This is the ONLY server-side delete in the normal app flow, so it is deliberately narrow: it
+  /// re-lists the folder first and does nothing unless the COMPLETE file ([filename], non-empty) is
+  /// there, and it only ever removes the two exact partial names of that file (`<name>.PARTIAL` and
+  /// `.<name>.PARTIAL`) — never the suffixed `<name>-<time>-<token>.<ext>.PARTIAL` form, which can belong
+  /// to a different upload. Needs a credential with delete rights; without one the server answers
+  /// 403 and the failure is reported, never thrown.
+  Future<StrayPartialCleanup> removeStrayPartials({
+    required String fileUrl,
+    required String filename,
+    required String password,
+  }) async {
+    try {
+      final fileUri = Uri.parse(fileUrl);
+      final segs = List<String>.from(fileUri.pathSegments)..removeLast();
+      final folderUri = fileUri.replace(pathSegments: [...segs, ''], query: '');
+      final sizes = await listFolderSizes(folderUri, password);
+      final completeSize = sizes[filename];
+      if (completeSize == null || completeSize <= 0) {
+        return const StrayPartialCleanup(skipped: 'the complete file was not found on the server');
+      }
+      final removed = <String>[];
+      final failed = <String>[];
+      for (final name in ['$filename.PARTIAL', '.$filename.PARTIAL']) {
+        if (!sizes.containsKey(name)) {
+          continue;
+        }
+        final target = Uri(
+          scheme: fileUri.scheme,
+          host: fileUri.host,
+          port: fileUri.hasPort ? fileUri.port : null,
+          pathSegments: [...segs, name],
+          queryParameters: password.isNotEmpty ? {'pw': password} : null,
+        );
+        try {
+          _log?.request('DELETE', target, const {});
+          final resp = await _client.delete(target).timeout(const Duration(seconds: 30));
+          _log?.response(resp.statusCode, headers: resp.headers, body: resp.body);
+          if (resp.statusCode < 300) {
+            removed.add(name);
+          } else {
+            failed.add('$name (HTTP ${resp.statusCode})');
+          }
+        } catch (e) {
+          failed.add('$name ($e)');
+        }
+      }
+      return StrayPartialCleanup(removed: removed, failed: failed);
+    } catch (e) {
+      return StrayPartialCleanup(skipped: '$e');
+    }
+  }
+
   /// Deletes [filename] from the server via a plain HTTP DELETE. copyparty
   /// accepts standard HTTP verbs on a file's own URL; auth is the same `?pw=`
-  /// query param used everywhere else in this file. NOT used by any normal
-  /// app flow (imports/cleanup only ever delete the LOCAL source, never
-  /// anything server-side) — this exists solely for the scripted test
-  /// harness (bin/copyparty_test_harness.dart) to clean up after itself using
+  /// query param used everywhere else in this file. NOT used by the import or
+  /// cleanup flows (they only ever delete the LOCAL source; the single
+  /// exception is the narrowly-guarded [removeStrayPartials]) — this general
+  /// delete exists solely for the scripted test harness
+  /// (bin/copyparty_test_harness.dart) to clean up after itself using
   /// a separate, delete-capable credential.
   Future<void> deleteFile(String hostUrl, String uploadPath, String filename, String password) async {
     final folderUri = _buildUri(hostUrl, uploadPath, password);
@@ -542,15 +613,17 @@ class CopypartyUploaderService {
           sizeMatches: VerifyState.yes,
           partialExists: VerifyState.no,
           hashValidatedAt: now ?? DateTime.now(),
+          // The content is fully on the server, so a `.PARTIAL` the listing showed is a leftover, not a failure.
+          strayPartial: base.partialExists == VerifyState.yes || base.strayPartial,
         );
       }
       // Server still needs chunks → the upload is incomplete/different content.
       // Clear any prior fresh-hash stamp: this re-verify just FAILED, so the
       // file must drop out of "safe to delete" rather than coast on a stale ✓.
-      return base.copyWith(partialExists: VerifyState.yes, clearHash: true);
+      return base.copyWith(partialExists: VerifyState.yes, clearHash: true, strayPartial: false);
     } on CopypartyUploadException catch (e) {
       // 422 stale-partial path throws here — that IS a partial.
-      return base.copyWith(partialExists: VerifyState.yes, error: e.message, clearHash: true);
+      return base.copyWith(partialExists: VerifyState.yes, error: e.message, clearHash: true, strayPartial: false);
     } catch (e) {
       // Network/offline: we could not re-prove the hash, so drop the stale ✓.
       return base.copyWith(error: e.toString(), clearHash: true);

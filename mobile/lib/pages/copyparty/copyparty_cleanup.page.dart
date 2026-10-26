@@ -177,6 +177,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
           filenamePresent: v.filenamePresent,
           sizeMatches: v.sizeMatches,
           partialExists: v.partialExists,
+          strayPartial: v.partialExists == VerifyState.yes ? cur.strayPartial : false,
           error: v.error,
         ),
       );
@@ -429,16 +430,33 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     showQueuedForUploadSnackBar(context, 'Queued ${r.filename} for upload');
   }
 
-  /// Deletes one source file and records it. Returns true when the file is gone.
-  Future<bool> _deleteReceiptFile(CopypartyReceipt receipt) async {
+  /// Deletes one source file and records it. When the file was hash-verified AND a leftover `.PARTIAL`
+  /// sits next to it on copyparty, that stray partial is removed from the server too (best effort; the
+  /// local delete has already succeeded and is never undone by a failure here).
+  Future<({bool deleted, int partialsRemoved, int partialsFailed})> _deleteReceiptFile(CopypartyReceipt receipt) async {
     try {
       await File(receipt.localPath).delete();
       await ref.read(copypartyReceiptRepositoryProvider).markSourceDeleted(receipt.id!);
-      return true;
     } catch (_) {
-      return false;
+      return (deleted: false, partialsRemoved: 0, partialsFailed: 0);
     }
+    var removed = 0;
+    var failed = 0;
+    if (_verify[receipt.id]?.strayPartial ?? false) {
+      final res = await ref
+          .read(copypartyUploaderProvider)
+          .removeStrayPartials(fileUrl: receipt.copypartyUrl, filename: receipt.filename, password: _password);
+      removed = res.removed.length;
+      failed = res.failed.length + (res.skipped != null ? 1 : 0);
+    }
+    return (deleted: true, partialsRemoved: removed, partialsFailed: failed);
   }
+
+  /// Snackbar suffix describing what happened to leftover server-side partials.
+  static String _partialsNote(int removed, int failed) => [
+    if (removed > 0) 'removed $removed leftover .partial from copyparty',
+    if (failed > 0) "couldn't remove $failed leftover .partial (needs a delete-capable copyparty login)",
+  ].join(' · ');
 
   /// "Verify then delete": for every ticked file, in order, run the full live verification and
   /// delete THAT file immediately if (and only if) it passes the same safe-to-delete rule as the
@@ -460,8 +478,8 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
             title: Text('Verify, then delete ${targets.length} file${targets.length == 1 ? '' : 's'}?'),
             content: const Text(
               'Each ticked file is verified in turn (re-hashed against copyparty, and checked in Immich where '
-              'it applies). A file that passes is deleted from this device straight away; a file that fails is '
-              'left untouched. Deleting cannot be undone.',
+              'it applies). A file that passes is deleted from this device straight away (and a leftover .partial '
+              'next to it on copyparty is removed too); a file that fails is left untouched. Deleting cannot be undone.',
             ),
             actions: [
               TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
@@ -479,6 +497,8 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       _bulkStop = false;
     });
     var deletedCount = 0;
+    var partialsRemoved = 0;
+    var partialsFailed = 0;
     final notDeleted = <String>[];
     var processed = 0;
     for (final r in targets) {
@@ -499,7 +519,10 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         notDeleted.add(r.filename);
         continue;
       }
-      if (await _deleteReceiptFile(r)) {
+      final outcome = await _deleteReceiptFile(r);
+      partialsRemoved += outcome.partialsRemoved;
+      partialsFailed += outcome.partialsFailed;
+      if (outcome.deleted) {
         deletedCount++;
         if (mounted) {
           setState(() {
@@ -524,6 +547,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       'Verified and deleted $deletedCount of ${targets.length}',
       if (notDeleted.isNotEmpty) '${notDeleted.length} not verified, left untouched',
       if (stopped && untouched > 0) 'stopped with $untouched not checked',
+      if (partialsRemoved > 0 || partialsFailed > 0) _partialsNote(partialsRemoved, partialsFailed),
     ];
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(parts.join(' · '))));
     ref.invalidate(pendingCleanupProvider);
@@ -557,6 +581,12 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _AllClearLine('All ${toDelete.length} are hash-verified on copyparty.'),
+                  if (toDelete.any((r) => _verify[r.id]?.strayPartial ?? false))
+                    _AllClearLine(
+                      '${toDelete.where((r) => _verify[r.id]?.strayPartial ?? false).length} '
+                      'also ha${toDelete.where((r) => _verify[r.id]?.strayPartial ?? false).length == 1 ? 's' : 've'} '
+                      'a leftover .partial on copyparty, which is removed too.',
+                    ),
                   if (immichBound > 0)
                     _AllClearLine(
                       'All $immichBound Immich-bound '
@@ -606,8 +636,13 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     }
 
     final deletedIds = <int>[];
+    var partialsRemoved = 0;
+    var partialsFailed = 0;
     for (final receipt in toDelete) {
-      if (await _deleteReceiptFile(receipt)) {
+      final outcome = await _deleteReceiptFile(receipt);
+      partialsRemoved += outcome.partialsRemoved;
+      partialsFailed += outcome.partialsFailed;
+      if (outcome.deleted) {
         deletedIds.add(receipt.id!);
       }
     }
@@ -618,9 +653,16 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
         _deleted.addAll(deletedIds);
         _selected.removeAll(deletedIds);
       });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Deleted ${deletedIds.length} / ${toDelete.length} files')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            [
+              'Deleted ${deletedIds.length} / ${toDelete.length} files',
+              if (partialsRemoved > 0 || partialsFailed > 0) _partialsNote(partialsRemoved, partialsFailed),
+            ].join(' · '),
+          ),
+        ),
+      );
       ref.invalidate(pendingCleanupProvider);
     }
   }
@@ -972,7 +1014,8 @@ class _CleanupGroupSection extends StatelessWidget {
   /// Rolls up the group's per-file verification into compact chips. Denominators
   /// are per-axis KNOWN counts so an unchecked axis never reads as "absent".
   Widget _summary(BuildContext context) {
-    final partial = verifications.where((v) => v.partialExists == VerifyState.yes).length;
+    final partial = verifications.where((v) => v.partialExists == VerifyState.yes && !v.looksLikeStrayPartial).length;
+    final strayPartials = verifications.where((v) => v.hasStrayPartial).length;
     final hashFresh = verifications.where((v) => v.hashFreshAt(now)).length;
     final immichPool = verifications.where((v) => v.immichApplicable).toList();
     final immichYes = immichPool.where((v) => v.immich == VerifyState.yes).length;
@@ -1005,6 +1048,13 @@ class _CleanupGroupSection extends StatelessWidget {
               'partial $partial/${verifications.length}',
               context.colorScheme.error,
               Icons.error_outline,
+            ),
+          if (strayPartials > 0)
+            _rawChip(
+              context,
+              'duplicate partial $strayPartials/${verifications.length}',
+              Colors.amber.shade700,
+              Icons.warning_amber_rounded,
             ),
           // hash: 0 means "not checked" (grey, fingerprint), not "absent".
           _countChip(
@@ -1098,7 +1148,7 @@ class _CleanupTile extends StatelessWidget {
     final cpFailed =
         v.filenamePresent == VerifyState.no ||
         v.sizeMatches == VerifyState.no ||
-        v.partialExists == VerifyState.yes ||
+        (v.partialExists == VerifyState.yes && !v.looksLikeStrayPartial) ||
         (hashTried && !v.hashFreshAt(now));
 
     return Padding(
@@ -1142,7 +1192,11 @@ class _CleanupTile extends StatelessWidget {
                           _StateChip(label: 'size', state: v.sizeMatches),
                           // Affirmative wording (Issue 9): show "partial exists" in red
                           // when one is present; "no partial" in green only when none.
-                          if (v.partialExists == VerifyState.yes)
+                          // Complete file + a .partial = copyparty left a duplicate behind after a
+                          // successful upload: amber "potential duplicate", not the red failure.
+                          if (v.hasStrayPartial)
+                            const _RawChip(label: 'duplicate partial', state: VerifyState.unknown, warn: true)
+                          else if (v.partialExists == VerifyState.yes)
                             const _RawChip(label: 'partial exists', state: VerifyState.no)
                           else if (v.partialExists == VerifyState.no)
                             const _RawChip(label: 'no partial', state: VerifyState.yes)
@@ -1156,6 +1210,17 @@ class _CleanupTile extends StatelessWidget {
                           _ImmichChip(verification: v),
                         ],
                       ),
+                      if (v.hasStrayPartial)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            v.strayPartial
+                                ? 'Verified. A leftover .partial sits next to it on copyparty; deleting also removes it.'
+                                : 'Potential duplication: a .partial exists next to the complete file. '
+                                      'Verify, then delete — the .partial is removed too.',
+                            style: context.textTheme.labelSmall?.copyWith(color: Colors.amber.shade700),
+                          ),
+                        ),
                       if (v.error != null)
                         Padding(
                           padding: const EdgeInsets.only(top: 4),
@@ -1189,9 +1254,11 @@ class _CleanupTile extends StatelessWidget {
                       Row(
                         children: [
                           // batch3 item 16: a hash Verify is pointless when the file
-                          // is known absent (name missing) or a partial exists — the
-                          // recovery there is "Upload now", not a verify.
-                          if (v.filenamePresent != VerifyState.no && v.partialExists != VerifyState.yes)
+                          // is known absent (name missing) or a genuine partial exists (a
+                          // 0-byte/wrong-size file) — the recovery there is "Upload now". A
+                          // complete file with a stray duplicate .partial IS verifiable.
+                          if (v.filenamePresent != VerifyState.no &&
+                              (v.partialExists != VerifyState.yes || v.looksLikeStrayPartial))
                             TextButton.icon(
                               onPressed: (verifying || uploading) ? null : onVerify,
                               icon: verifying
@@ -1295,15 +1362,20 @@ class _CleanupTile extends StatelessWidget {
 class _RawChip extends StatelessWidget {
   final String label;
   final VerifyState state;
-  const _RawChip({required this.label, required this.state});
+
+  /// Amber warning styling (overrides [state]) for "attention, but not a failure".
+  final bool warn;
+  const _RawChip({required this.label, required this.state, this.warn = false});
 
   @override
   Widget build(BuildContext context) {
-    final (icon, color) = switch (state) {
-      VerifyState.yes => (Icons.check_circle, Colors.green),
-      VerifyState.no => (Icons.cancel, context.colorScheme.error),
-      VerifyState.unknown => (Icons.help_outline, context.colorScheme.onSurfaceVariant),
-    };
+    final (icon, color) = warn
+        ? (Icons.warning_amber_rounded, Colors.amber.shade700)
+        : switch (state) {
+            VerifyState.yes => (Icons.check_circle, Colors.green),
+            VerifyState.no => (Icons.cancel, context.colorScheme.error),
+            VerifyState.unknown => (Icons.help_outline, context.colorScheme.onSurfaceVariant),
+          };
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [

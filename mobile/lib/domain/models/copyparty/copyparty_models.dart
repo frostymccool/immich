@@ -297,6 +297,12 @@ class ServerFileVerification {
   /// Set when the listing/verification call itself failed (network, auth…).
   final String? error;
 
+  /// The COMPLETE file is proven on the server (the hash handshake needed zero chunks) but a leftover
+  /// `.PARTIAL` for it was listed too. copyparty sometimes leaves one behind after a successful upload.
+  /// It is a stray duplicate, not a failed upload, so it does not block deletion; deleting the local
+  /// file also removes it from the server.
+  final bool strayPartial;
+
   const ServerFileVerification({
     this.filenamePresent = VerifyState.unknown,
     this.sizeMatches = VerifyState.unknown,
@@ -305,7 +311,17 @@ class ServerFileVerification {
     this.immich = VerifyState.unknown,
     this.immichApplicable = false,
     this.error,
+    this.strayPartial = false,
   });
+
+  /// The listing shows the complete file (name present AND size equal) next to a `.PARTIAL` for it. That is
+  /// the "potential duplicate" case, not an unfinished upload (an unfinished one has a 0-byte or wrong-size
+  /// file). Hash-verify to confirm.
+  bool get looksLikeStrayPartial =>
+      filenamePresent == VerifyState.yes && sizeMatches == VerifyState.yes && partialExists == VerifyState.yes;
+
+  /// Either suspected from the listing or confirmed by the hash check.
+  bool get hasStrayPartial => strayPartial || looksLikeStrayPartial;
 
   /// A hash validation counts as fresh for 10 minutes — long enough that a
   /// slow sequential "Verify all" over many large clips doesn't expire the
@@ -319,7 +335,7 @@ class ServerFileVerification {
   bool copypartyVerifiedAt(DateTime now) =>
       filenamePresent == VerifyState.yes &&
       sizeMatches == VerifyState.yes &&
-      partialExists != VerifyState.yes &&
+      (partialExists != VerifyState.yes || strayPartial) &&
       hashFreshAt(now);
 
   /// Immich axis is satisfied: either it doesn't apply (CP-only) or the file
@@ -347,6 +363,7 @@ class ServerFileVerification {
     bool? immichApplicable,
     String? error,
     bool clearError = false,
+    bool? strayPartial,
   }) => ServerFileVerification(
     filenamePresent: filenamePresent ?? this.filenamePresent,
     sizeMatches: sizeMatches ?? this.sizeMatches,
@@ -355,6 +372,7 @@ class ServerFileVerification {
     immich: immich ?? this.immich,
     immichApplicable: immichApplicable ?? this.immichApplicable,
     error: clearError ? null : (error ?? this.error),
+    strayPartial: strayPartial ?? this.strayPartial,
   );
 }
 

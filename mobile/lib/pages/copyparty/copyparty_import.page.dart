@@ -1582,7 +1582,10 @@ class _LiveChips extends StatelessWidget {
       children: [
         _state(context, 'name', v.filenamePresent),
         _state(context, 'size', v.sizeMatches),
-        if (v.partialExists == VerifyState.yes)
+        if (v.looksLikeStrayPartial)
+          // Complete file + a .partial: copyparty left a duplicate behind (not a failed upload).
+          _chip(context, Icons.warning_amber_rounded, Colors.amber.shade700, 'duplicate partial')
+        else if (v.partialExists == VerifyState.yes)
           _chip(context, Icons.cancel, context.colorScheme.error, 'partial exists'),
         _chip(context, Icons.help_outline, grey, 'hash not checked'),
         if (trackedInCleanup == true)
