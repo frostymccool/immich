@@ -144,11 +144,6 @@
         <div class="muted">e.g. a file in the folder “Day 3 hike” goes into the Immich album “Day 3 hike”, which is created if it doesn’t exist yet. Only the folder the file sits directly in is used. On by default.</div>
         <label class="f" for="album_name">Also add everything to this one Immich album (optional) <span class="changed" id="c_album_name"></span></label>
         <input id="album_name" type="text" placeholder="e.g. Summer trip 2026">
-        <div style="margin:12px 0 0">
-          <button id="backfill">Add already-imported files to their folder albums</button>
-          <span class="muted" id="backfillState"></span>
-        </div>
-        <div class="muted">One-off: files imported before folder albums were switched on (or while the Immich key lacked album permissions) are put in their albums now. Safe to run again.</div>
         <label class="f" for="include_extensions">Only these file types (optional) <span class="changed" id="c_include_extensions"></span></label>
         <input id="include_extensions" type="text" placeholder="blank = whatever Immich supports, e.g. jpg heic mp4">
         <label class="f" for="log_level">Log detail <span class="changed" id="c_log_level"></span></label>
@@ -160,6 +155,11 @@
           <button id="reset" class="danger">Reset to installer defaults</button>
           <span id="saved" class="ok hidden">Saved. Applied now, no restart needed.</span>
         </p>
+      </div>
+      <div class="card">
+        <h2>Add already-imported files to albums</h2>
+        <p class="muted">One-off: puts files imported before folder albums were switched on (or while the Immich key lacked album permissions) into the album named after their folder, creating albums that don't exist yet. Nothing is uploaded again and nothing is deleted. Safe to run again.</p>
+        <p><button id="backfill">Add already-imported files to their folder albums</button> <span class="muted" id="backfillState"></span></p>
       </div>
       <div class="card">
         <h2>Re-import everything</h2>

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Status tab layout options</title>
+<style>
+:root{--bg:#12151c;--card:#1a1e27;--line:#2c3340;--fg:#e6e9ef;--mut:#98a1b3;--ok:#6fcf8e;--warn:#e8b04a;--acc:#7c8cf8}
+@media(prefers-color-scheme:light){:root{--bg:#f4f5f8;--card:#fff;--line:#d9dde6;--fg:#1b1f2a;--mut:#5d667a;--ok:#1f8a4c;--warn:#a96a00;--acc:#4256d0}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,sans-serif;padding:16px;max-width:860px;margin-inline:auto}
+h1{font-size:20px}h2.opt{font-size:16px;margin:34px 0 4px;color:var(--acc)}p.why{color:var(--mut);margin:0 0 10px}
+.note{color:var(--mut);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:10px}
+.card h3{margin:0 0 10px;font-size:15px}
+.tiles{display:flex;gap:8px;flex-wrap:wrap}.tile{flex:1 1 90px;border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+.tile b{display:block;font-size:22px}.tile span{color:var(--mut);font-size:13px}
+.mut{color:var(--mut)}.chips{display:flex;flex-wrap:wrap;gap:6px}.chip{border:1px solid var(--line);border-radius:99px;padding:2px 10px;font-size:13px;color:var(--acc)}
+dl.kv{display:grid;grid-template-columns:max-content 1fr;gap:6px 18px;margin:0}dl.kv dt{color:var(--mut)}dl.kv dd{margin:0;word-break:break-word}
+.row{display:flex;gap:12px;flex-wrap:wrap}.row>.card{flex:1 1 300px}
+.strip{display:flex;gap:6px 20px;flex-wrap:wrap;align-items:baseline}.strip b{font-size:20px}
+details summary{cursor:pointer;color:var(--acc)}
+.bar{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin:6px 0}.bar i{display:block;height:100%;width:46%;background:var(--ok)}
+.pill{border:1px solid var(--ok);color:var(--ok);border-radius:99px;padding:0 10px;font-size:13px}
+</style></head><body>
+<h1>Status tab: 5 layout options</h1>
+<p class="note">All five show the same information, using made-up example data (account, folders and albums are fabricated). Today's version is one long sentence-style block. Tell me which number (or a mix, e.g. "3 but with the chips from 5").</p>
+
+<h2 class="opt">1 · Summary strip + "Details" fold-out</h2>
+<p class="why">Quietest. One line of numbers at the top; everything else is hidden until you open it. Best if you mostly glance at progress.</p>
+<div class="card">
+ <div class="strip"><span><b>322</b> <span class="mut">imported</span></span><span><b>248</b> <span class="mut">already in Immich</span></span><span><b>0</b> <span class="mut">failed</span></span><span><b>14</b> <span class="mut">queued · 3.2 GB · about 25 min</span></span></div>
+ <details style="margin-top:10px"><summary>Where files come from and go to</summary>
+  <dl class="kv" style="margin-top:8px"><dt>Watching</dt><dd>/w/Trips/Summer2026 (imported first)</dd><dt>Account</dt><dd>Sam Example (sam@example.com)</dd><dt>Albums</dt><dd>1057 files added · 14 albums <span class="mut">(links below)</span></dd></dl>
+  <div class="chips" style="margin-top:8px"><span class="chip">Day 1 beach</span><span class="chip">Day 2 old town</span><span class="chip">Night market</span><span class="chip">+11 more</span></div></details>
+</div>
+
+<h2 class="opt">2 · One "facts" table</h2>
+<p class="why">Replaces the sentences with labelled rows, like the read-only settings card. Very scannable; every fact has a fixed place.</p>
+<div class="card"><div class="tiles"><div class="tile"><b>322</b><span>Imported</span></div><div class="tile"><b>248</b><span>Already in Immich</span></div><div class="tile"><b>0</b><span>Failed</span></div><div class="tile"><b>14</b><span>Queued</span></div></div>
+<dl class="kv" style="margin-top:14px"><dt>Backlog</dt><dd>14 files · 3.2 GB left · about 25 min at 8 MB/s</dd><dt>Watching</dt><dd>/w/Trips/Summer2026 · imported first</dd><dt>Importing into</dt><dd>Sam Example (sam@example.com)</dd><dt>Folder albums</dt><dd>1057 files added since start · <span style="color:var(--acc)">14 albums ▾</span></dd></dl></div>
+
+<h2 class="opt">3 · Hero line + progress bar</h2>
+<p class="why">Leads with the one thing you care about while it's busy: how far along, and when it finishes. Counts become small print.</p>
+<div class="card"><div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px"><b style="font-size:18px">Importing · 14 files left</b><span class="mut">about 25 min (3.2 GB at 8 MB/s)</span></div>
+<div class="bar"><i></i></div>
+<div class="mut" style="font-size:13px">322 imported · 248 already in Immich · 0 failed · watching /w/Trips/Summer2026</div></div>
+<div class="card"><h3>Destination</h3><div class="mut">Sam Example (sam@example.com) · 1057 files added to 14 albums</div></div>
+
+<h2 class="opt">4 · Two side-by-side cards (Progress | Destination)</h2>
+<p class="why">Splits "what is happening" from "where it goes". On a phone the two cards stack.</p>
+<div class="row"><div class="card"><h3>Progress</h3><div class="tiles"><div class="tile"><b>322</b><span>Imported</span></div><div class="tile"><b>14</b><span>Queued</span></div></div><p class="mut" style="margin:10px 0 0">3.2 GB left · about 25 min · 248 already in Immich · 0 failed</p></div>
+<div class="card"><h3>Destination</h3><dl class="kv"><dt>Account</dt><dd>Sam Example<br><span class="mut">sam@example.com</span></dd><dt>Source</dt><dd>/w/Trips/Summer2026</dd><dt>Albums</dt><dd>14 · 1057 files added</dd></dl></div></div>
+
+<h2 class="opt">5 · Cards by topic, albums as chips</h2>
+<p class="why">Most structured: Progress, Account, Albums as separate cards. The long album link list becomes tappable chips (and collapses after 6). Most scrolling, least text.</p>
+<div class="card"><h3>Progress</h3><div class="tiles"><div class="tile"><b>322</b><span>Imported</span></div><div class="tile"><b>248</b><span>Already in Immich</span></div><div class="tile"><b>0</b><span>Failed</span></div><div class="tile"><b>14</b><span>Queued</span></div></div><p class="mut" style="margin:10px 0 0">Backlog: 3.2 GB left · about 25 min · watching /w/Trips/Summer2026</p></div>
+<div class="card"><h3>Immich account</h3><div>Sam Example <span class="mut">sam@example.com</span></div><div class="note">Everything imported, and every album created, belongs to this account — log in as this user to see it.</div></div>
+<div class="card"><h3>Folder albums <span class="mut" style="font-weight:400">· 1057 files added</span></h3><div class="chips"><span class="chip">Day 1 beach</span><span class="chip">Day 2 old town</span><span class="chip">Night market</span><span class="chip">Temple visit</span><span class="chip">Harbour walk</span><span class="chip">Sunset ferry</span><span class="chip" style="color:var(--mut)">+8 more ▾</span></div></div>
+</body></html>
