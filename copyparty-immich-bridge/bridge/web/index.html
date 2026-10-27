@@ -88,6 +88,7 @@
   <span class="muted" id="ver"></span>
   <span class="pill hidden" id="pausedPill" style="color:var(--warn);border-color:var(--warn)">Paused</span>
   <span class="grow"></span>
+  <span class="muted hidden" id="acct" style="font-size:13px"></span>
   <button id="pause" class="hidden">Pause imports</button>
   <button id="scan" class="primary hidden">Scan now</button>
 </header>
@@ -255,7 +256,7 @@
   function signOut(msg) {
     try { localStorage.removeItem('bridgeToken'); } catch (e) { /* ignore */ }
     token = ''; clearTimeout(pollT);
-    $('app').classList.add('hidden'); $('scan').classList.add('hidden'); $('pause').classList.add('hidden'); $('pausedPill').classList.add('hidden'); $('gate').classList.remove('hidden');
+    $('app').classList.add('hidden'); $('scan').classList.add('hidden'); $('pause').classList.add('hidden'); $('pausedPill').classList.add('hidden'); $('acct').classList.add('hidden'); $('gate').classList.remove('hidden');
     if (msg) { $('gateErr').textContent = msg; $('gateErr').classList.remove('hidden'); }
   }
   function start() {
@@ -375,6 +376,13 @@
   function renderIdentity(r) {
     lastIdentity = r;
     var box = $('alertsAcct'); box.textContent = '';
+    var ac = $('acct'), u = r && r.immich_user;
+    ac.classList.toggle('hidden', !u);
+    if (u) {
+      ac.textContent = 'Immich account: ' + (u.email || u.name || '?');
+      ac.style.color = r.account_change ? 'var(--warn)' : '';
+      ac.title = (u.name ? u.name + ' · ' : '') + 'every file and album the bridge creates belongs to this account';
+    }
     renderMore();
     if (!r) { return; }
     if (r.account_change) {
