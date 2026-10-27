@@ -37,6 +37,17 @@
   .tile { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
   .tile b { display: block; font-size: 24px; line-height: 1.1; }
   .tile.bad b { color: var(--bad); }
+  .strip { display: flex; flex-wrap: wrap; gap: 6px 22px; align-items: baseline; }
+  .strip b { font-size: 22px; }
+  .strip .bad b { color: var(--bad); }
+  .proghead { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 4px 16px; margin-top: 14px; }
+  .proghead b { font-size: 17px; }
+  .progbar { height: 8px; border-radius: 99px; background: var(--line); overflow: hidden; margin: 8px 0 4px; }
+  .progbar i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .6s; }
+  details#moreInfo { margin-top: 12px; }
+  details#moreInfo summary { cursor: pointer; color: var(--accent); }
+  dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 10px 0 0; }
+  dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; word-break: break-word; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
   td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
@@ -101,11 +112,17 @@
       <div class="card">
         <h2>Imports</h2>
         <div id="pauseNote"></div>
-        <div class="tiles" id="tiles"></div>
-        <div id="backlogNote"></div>
-        <p class="muted" id="watching"></p>
-        <div id="albumNote"></div>
-        <div id="identity"></div>
+        <div id="alertsAcct"></div>
+        <div id="alertsAlbum"></div>
+        <div class="strip" id="tiles"></div>
+        <div id="progressBox" class="hidden">
+          <div class="proghead"><b id="progTitle"></b><span class="muted" id="backlogNote"></span></div>
+          <div class="progbar"><i id="progFill"></i></div>
+        </div>
+        <details id="moreInfo">
+          <summary>Where files come from and go to</summary>
+          <dl class="kv" id="moreKv"></dl>
+        </details>
       </div>
       <div class="card">
         <h2>Recent files</h2>
@@ -264,20 +281,17 @@
   // ---- status ------------------------------------------------------------------
   function renderStatus(s) {
     var tiles = $('tiles'); tiles.textContent = '';
-    [['imported', 'Imported'], ['duplicate', 'Already in Immich'], ['failed', 'Failed'], ['skipped', 'Skipped']].forEach(function (p) {
-      var t = el('div', { 'class': 'tile' + (p[0] === 'failed' && (s.counts.failed || 0) > 0 ? ' bad' : '') });
-      t.appendChild(el('b', {}, String(s.counts[p[0]] || 0))); t.appendChild(el('span', { 'class': 'muted' }, p[1]));
+    [['imported', 'imported'], ['duplicate', 'already in Immich'], ['failed', 'failed'], ['skipped', 'skipped']].forEach(function (p) {
+      var n = s.counts[p[0]] || 0;
+      if ((p[0] === 'skipped') && !n) { return; }
+      var t = el('span', { 'class': p[0] === 'failed' && n > 0 ? 'bad' : '' });
+      t.appendChild(el('b', {}, String(n))); t.appendChild(el('span', { 'class': 'muted' }, ' ' + p[1]));
       tiles.appendChild(t);
     });
-    var q = el('div', { 'class': 'tile' }); q.appendChild(el('b', {}, String(s.queue))); q.appendChild(el('span', { 'class': 'muted' }, 'Queued')); tiles.appendChild(q);
-    var bl = s.backlog || {}; var bn = $('backlogNote'); bn.textContent = '';
-    if (bl.files) {
-      var txt = 'Backlog: ' + bl.files + ' file' + (bl.files === 1 ? '' : 's') + ' · ' + fmtBytes(bl.bytes_left) + ' left';
-      if (bl.eta_seconds) { txt += ' · about ' + fmtDur(bl.eta_seconds) + ' to finish at ' + fmtBytes(bl.rate) + '/s'; }
-      else if (!s.paused) { txt += ' · estimating speed...'; }
-      bn.appendChild(el('p', {}, txt));
-    }
-    $('watching').textContent = 'Watching: ' + s.watch_dirs.join(', ') + (s.priority_dirs.length ? '   ·   Imported first: ' + s.priority_dirs.join(', ') : '');
+    var q = el('span'); q.appendChild(el('b', {}, String(s.queue))); q.appendChild(el('span', { 'class': 'muted' }, ' queued')); tiles.appendChild(q);
+    renderProgress(s);
+    lastStatus = s;
+    renderMore();
     var tb = $('recent'); tb.textContent = '';
     var act = s.active || [];
     act.forEach(function (a) {
@@ -308,6 +322,45 @@
     renderAlbums(s.albums);
     renderPaused(s.paused, s.queue);
   }
+  var lastStatus = null, batchMax = 0;
+  function renderProgress(s) {
+    var bl = s.backlog || {}, act = s.active || [], box = $('progressBox');
+    var busy = !!(bl.files || act.length);
+    box.classList.toggle('hidden', !busy);
+    if (!busy) { batchMax = 0; return; }
+    batchMax = Math.max(batchMax, bl.bytes_left || 0);
+    var pct = batchMax ? Math.max(0, Math.min(100, Math.round(100 - (bl.bytes_left || 0) * 100 / batchMax))) : 0;
+    $('progFill').style.width = pct + '%';
+    $('progTitle').textContent = (s.paused ? 'Paused' : 'Importing') + ' · ' + bl.files + ' file' + (bl.files === 1 ? '' : 's') + ' left';
+    var txt = fmtBytes(bl.bytes_left || 0) + ' left · ' + pct + '% done';
+    if (bl.eta_seconds) { txt = 'about ' + fmtDur(bl.eta_seconds) + ' (' + fmtBytes(bl.bytes_left || 0) + ' at ' + fmtBytes(bl.rate) + '/s)'; }
+    else if (!s.paused) { txt += ' · estimating speed...'; }
+    $('backlogNote').textContent = txt;
+  }
+  var lastAlbums = null;
+  function renderMore() {
+    var kv = $('moreKv'); kv.textContent = '';
+    var row = function (k, node) { kv.appendChild(el('dt', {}, k)); var dd = el('dd'); dd.appendChild(typeof node === 'string' ? document.createTextNode(node) : node); kv.appendChild(dd); };
+    var s = lastStatus;
+    if (s) { row('Watching', s.watch_dirs.join(', ') + (s.priority_dirs.length ? '  (imported first: ' + s.priority_dirs.join(', ') + ')' : '')); }
+    var r = lastIdentity;
+    if (r && r.immich_user) {
+      row('Importing into', (r.immich_user.name || '?') + (r.immich_user.email ? ' (' + r.immich_user.email + ')' : '') + ' — log in to Immich as this user to see imports and albums');
+    }
+    var a = lastAlbums;
+    if (a && a.enabled) {
+      row('Folder albums', a.added > 0 ? a.added + ' file' + (a.added === 1 ? '' : 's') + ' added since the bridge started' : 'nothing added yet (only files imported from now on; use the button under Folders & settings for earlier ones)');
+    }
+    if (r && r.albums && r.albums.length) {
+      var d = el('span');
+      r.albums.forEach(function (al, i) {
+        var link = el('a', { href: al.url, target: '_blank', rel: 'noopener' }, al.name);
+        link.style.color = 'var(--accent)';
+        d.appendChild(link); if (i < r.albums.length - 1) { d.appendChild(document.createTextNode(' · ')); }
+      });
+      row('Albums used', d);
+    }
+  }
   function doReimport() {
     var who = lastIdentity && lastIdentity.immich_user ? lastIdentity.immich_user.name + ' (' + lastIdentity.immich_user.email + ')' : 'the current Immich account';
     var warn = (cfg && cfg.values.post_import_action !== 'keep') ? '\n\nNote: files this bridge already moved or deleted after importing cannot be imported again.' : '';
@@ -321,7 +374,8 @@
   var lastIdentity = null;
   function renderIdentity(r) {
     lastIdentity = r;
-    var box = $('identity'); box.textContent = '';
+    var box = $('alertsAcct'); box.textContent = '';
+    renderMore();
     if (!r) { return; }
     if (r.account_change) {
       var ch = el('div', { 'class': 'errs' }, 'The API key now belongs to a different Immich account (was ' + r.account_change.was + ', now ' + r.account_change.now +
@@ -333,25 +387,12 @@
       no.onclick = function () { api('POST', '/api/account/ack', {}).then(refresh); };
       row.appendChild(yes); row.appendChild(no); ch.appendChild(row); box.appendChild(ch);
     }
-    var line = function (text) { var d = el('div', { 'class': 'muted' }, text); d.style.margin = '8px 0 0'; box.appendChild(d); return d; };
-    if (r.immich_user) {
-      line('Importing into the Immich account ' + (r.immich_user.name || '?') + (r.immich_user.email ? ' (' + r.immich_user.email + ')' : '') +
-        '. Everything the bridge imports, and every album it creates, belongs to this account: log in to Immich as this user to see it.');
-    }
-    if (r.albums && r.albums.length) {
-      var d = line('Folder albums used since the bridge started (open in Immich): ');
-      r.albums.forEach(function (a, i) {
-        var link = el('a', { href: a.url, target: '_blank', rel: 'noopener' }, a.name);
-        link.style.color = 'var(--accent)';
-        d.appendChild(link); if (i < r.albums.length - 1) { d.appendChild(document.createTextNode(' · ')); }
-      });
-    }
   }
   var isPaused = false;
   function fmtDur(sec) {
     if (sec < 60) { return sec + ' s'; }
     var m = Math.floor(sec / 60), h = Math.floor(m / 60);
-    if (h < 1) { return m + ' min ' + (sec % 60) + ' s'; }
+    if (h < 1) { return m >= 10 ? m + ' min' : m + ' min ' + (sec % 60) + ' s'; }
     if (h < 48) { return h + ' h ' + (m % 60) + ' min'; }
     return Math.round(h / 24) + ' days';
   }
@@ -383,7 +424,8 @@
     });
   };
   function renderAlbums(a) {
-    var box = $('albumNote'); box.textContent = '';
+    var box = $('alertsAlbum'); box.textContent = '';
+    lastAlbums = a; renderMore();
     if (!a || !a.enabled) { return; }
     var note = function (cls, text) { var d = el('div', { 'class': cls }, text); d.style.margin = '8px 0 0'; box.appendChild(d); };
     if (a.permission && a.permission.ok === false) {
@@ -392,8 +434,6 @@
     } else if (a.failed > 0 && a.last_error) {
       note('errs', a.failed + ' album add' + (a.failed === 1 ? '' : 's') + ' failed. Latest: ' + a.last_error);
     }
-    if (a.added > 0) { note('muted', 'Folder albums: ' + a.added + ' file' + (a.added === 1 ? '' : 's') + ' added to albums since the bridge started.'); }
-    else if (!a.permission || a.permission.ok !== false) { note('muted', 'Folder albums: nothing added yet (only files imported from now on are added; use the button under Folders & settings for earlier ones).'); }
     var bf = a.backfill || {};
     var st = $('backfillState');
     if (st) { st.textContent = bf.running ? ' working… ' + bf.done + ' / ' + bf.total : (bf.total ? ' last run: ' + bf.done + ' done, ' + bf.failed + ' failed' : ''); }
