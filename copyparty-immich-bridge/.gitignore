@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# local state / secrets the bridge or installer may create next to the source
+*.env
+state.db*
+settings.json
+settings.json.tmp
+docker-compose.override.yml
+*.log

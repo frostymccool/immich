@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Immich Bridge</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --text: #1c2129; --muted: #627083; --line: #d5dae2;
+    --accent: #3b6df0; --accent-text: #ffffff; --ok: #1f9d55; --warn: #c27c0e; --bad: #d23b3b;
+    --code: #10151c; --code-text: #d8dee9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #11151a; --panel: #1a2028; --text: #e6eaf0; --muted: #94a0b2; --line: #333c49;
+      --accent: #6c93ff; --accent-text: #0c1020; --ok: #45c47a; --warn: #e5a73a; --bad: #ff7676; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.up { background: var(--ok); } .dot.down { background: var(--bad); }
+  .grow { flex: 1; }
+  main { max-width: 960px; margin: 0 auto; padding: 14px 16px 60px; }
+  nav { display: flex; gap: 6px; margin: 4px 0 14px; }
+  nav button { flex: 1; }
+  button { font: inherit; cursor: pointer; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button.danger { color: var(--bad); }
+  button[disabled] { opacity: .5; cursor: default; }
+  nav button.on { border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); font-weight: 600; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { font-size: 15px; margin: 0 0 10px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .tile { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .tile b { display: block; font-size: 24px; line-height: 1.1; }
+  .tile.bad b { color: var(--bad); }
+  .strip { display: flex; flex-wrap: wrap; gap: 6px 22px; align-items: baseline; }
+  .strip b { font-size: 22px; }
+  .strip .bad b { color: var(--bad); }
+  .proghead { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 4px 16px; margin-top: 14px; }
+  .proghead b { font-size: 17px; }
+  .progbar { height: 8px; border-radius: 99px; background: var(--line); overflow: hidden; margin: 8px 0 4px; }
+  .progbar i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .6s; }
+  details#moreInfo { margin-top: 12px; }
+  details#moreInfo summary { cursor: pointer; color: var(--accent); }
+  dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 10px 0 0; }
+  dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; word-break: break-word; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.path { word-break: break-all; }
+  .pill { font-size: 12px; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); }
+  .pill.imported { color: var(--ok); } .pill.duplicate { color: var(--muted); } .pill.failed { color: var(--bad); } .pill.skipped { color: var(--warn); }
+  .row { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .row .p { flex: 1; word-break: break-all; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; min-width: 200px; }
+  .star { font-size: 18px; line-height: 1; padding: 4px 8px; }
+  .star.on { color: var(--warn); border-color: var(--warn); }
+  label.f { display: block; margin: 12px 0 4px; font-weight: 600; font-size: 14px; }
+  input, select { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); width: 100%; max-width: 420px; }
+  .changed { color: var(--warn); font-size: 12px; margin-left: 6px; font-weight: 400; }
+  .errs { border: 1px solid var(--bad); color: var(--bad); border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
+  .ok { color: var(--ok); }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; }
+  dt { color: var(--muted); } dd { margin: 0; word-break: break-all; }
+  .logs { background: var(--code); color: var(--code-text); border-radius: 8px; padding: 8px 10px; height: 52vh; overflow: auto; font: 12.5px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
+  .logs .WARNING { color: #f0c05a; } .logs .ERROR, .logs .CRITICAL { color: #ff8a8a; } .logs .DEBUG { color: #8b97a8; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .bar select, .bar input { width: auto; max-width: 200px; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; padding: 14px; z-index: 10; }
+  .modal .box { background: var(--panel); border-radius: 12px; width: 100%; max-width: 560px; max-height: 88vh; display: flex; flex-direction: column; border: 1px solid var(--line); }
+  .modal .head, .modal .foot { padding: 12px 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .modal .head { border-bottom: 1px solid var(--line); } .modal .foot { border-top: 1px solid var(--line); }
+  .modal .list { overflow: auto; flex: 1; }
+  .dirrow { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .dirrow:hover { background: var(--bg); }
+  .crumb { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; word-break: break-all; flex: 1; }
+  .hidden { display: none !important; }
+  .gate { max-width: 420px; margin: 12vh auto; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot" title="bridge health"></span>
+  <h1>Immich Bridge</h1>
+  <span class="muted" id="ver"></span>
+  <span class="pill hidden" id="pausedPill" style="color:var(--warn);border-color:var(--warn)">Paused</span>
+  <span class="grow"></span>
+  <span class="muted hidden" id="acct" style="font-size:13px"></span>
+  <button id="pause" class="hidden">Pause imports</button>
+  <button id="scan" class="primary hidden">Scan now</button>
+</header>
+
+<main>
+  <div id="gate" class="card gate hidden">
+    <h2>Enter the bridge token</h2>
+    <p class="muted">The installer printed it (and a link that signs you in automatically). It is stored only in this browser.</p>
+    <input id="tokenIn" type="password" placeholder="token" autocomplete="off">
+    <p id="gateErr" class="errs hidden"></p>
+    <p><button id="tokenGo" class="primary">Sign in</button></p>
+  </div>
+
+  <div id="app" class="hidden">
+    <nav>
+      <button data-tab="status" class="on">Status</button>
+      <button data-tab="settings">Folders &amp; settings</button>
+      <button data-tab="logs">Logs</button>
+    </nav>
+
+    <section id="tab-status">
+      <div class="card">
+        <h2>Imports</h2>
+        <div id="pauseNote"></div>
+        <div id="alertsAcct"></div>
+        <div id="alertsAlbum"></div>
+        <div class="strip" id="tiles"></div>
+        <div id="progressBox" class="hidden">
+          <div class="proghead"><b id="progTitle"></b><span class="muted" id="backlogNote"></span></div>
+          <div class="progbar"><i id="progFill"></i></div>
+        </div>
+        <details id="moreInfo">
+          <summary>Where files come from and go to</summary>
+          <dl class="kv" id="moreKv"></dl>
+        </details>
+      </div>
+      <div class="card">
+        <h2>Recent files</h2>
+        <table><thead><tr><th>File</th><th>Status</th><th>When</th></tr></thead><tbody id="recent"></tbody></table>
+        <p class="muted" id="recentEmpty">Nothing imported yet.</p>
+      </div>
+    </section>
+
+    <section id="tab-settings" class="hidden">
+      <div class="card">
+        <h2>Watched folders</h2>
+        <p class="muted">The bridge looks in these folders and all their subfolders for new files. The star marks a folder that is imported first (for example the one the phone app uploads into).</p>
+        <div id="dirs"></div>
+        <p><button id="addDir">Add folder…</button></p>
+      </div>
+      <div class="card">
+        <h2>Behaviour</h2>
+        <label class="f" for="sweep_interval">Full scan every (seconds) <span class="changed" id="c_sweep_interval"></span></label>
+        <input id="sweep_interval" type="number" min="0" max="604800">
+        <div class="muted">0 = never on a timer (instant hook and "Scan now" only). Default 900 = 15 minutes.</div>
+        <label class="f" for="min_file_age">Ignore files younger than (seconds) <span class="changed" id="c_min_file_age"></span></label>
+        <input id="min_file_age" type="number" min="0" max="3600">
+        <label class="f" for="max_attempts">Give up on a file after this many failures <span class="changed" id="c_max_attempts"></span></label>
+        <input id="max_attempts" type="number" min="1" max="100">
+        <label class="f" for="post_import_action">After a successful import <span class="changed" id="c_post_import_action"></span></label>
+        <select id="post_import_action">
+          <option value="keep">Keep the file where it is (safest)</option>
+          <option value="move">Move it into a .imported folder</option>
+          <option value="delete">Delete it</option>
+        </select>
+        <div class="muted" id="postWarn"></div>
+        <label class="f" style="display:flex;gap:8px;align-items:center;cursor:pointer">
+          <input id="album_from_folder" type="checkbox" style="width:auto">
+          Add each file to an album named after its folder <span class="changed" id="c_album_from_folder"></span>
+        </label>
+        <div class="muted">e.g. a file in the folder “Day 3 hike” goes into the Immich album “Day 3 hike”, which is created if it doesn’t exist yet. Only the folder the file sits directly in is used. On by default.</div>
+        <label class="f" for="album_name">Also add everything to this one Immich album (optional) <span class="changed" id="c_album_name"></span></label>
+        <input id="album_name" type="text" placeholder="e.g. Summer trip 2026">
+        <label class="f" for="include_extensions">Only these file types (optional) <span class="changed" id="c_include_extensions"></span></label>
+        <input id="include_extensions" type="text" placeholder="blank = whatever Immich supports, e.g. jpg heic mp4">
+        <label class="f" for="log_level">Log detail <span class="changed" id="c_log_level"></span></label>
+        <select id="log_level"><option>DEBUG</option><option>INFO</option><option>WARNING</option><option>ERROR</option></select>
+        <div id="saveErrs" class="errs hidden"></div>
+        <p>
+          <button id="save" class="primary">Save</button>
+          <button id="discard">Discard changes</button>
+          <button id="reset" class="danger">Reset to installer defaults</button>
+          <span id="saved" class="ok hidden">Saved. Applied now, no restart needed.</span>
+        </p>
+      </div>
+      <div class="card">
+        <h2>Add already-imported files to albums</h2>
+        <p class="muted">One-off: puts files imported before folder albums were switched on (or while the Immich key lacked album permissions) into the album named after their folder, creating albums that don't exist yet. Nothing is uploaded again and nothing is deleted. Safe to run again.</p>
+        <p><button id="backfill">Add already-imported files to their folder albums</button> <span class="muted" id="backfillState"></span></p>
+      </div>
+      <div class="card">
+        <h2>Re-import everything</h2>
+        <p class="muted">Makes the bridge forget what it has imported and import every file in the watched folders again, into the Immich account the API key belongs to now (see the Status tab). Use it after switching the API key to a different Immich account. Nothing on the NAS or already in Immich is changed or deleted; files Immich already has in that account are simply recognised as duplicates. It uploads everything again over your network, so it can take a long time.</p>
+        <p><button id="reimport" class="danger">Re-import everything…</button> <span class="muted" id="reimportState"></span></p>
+      </div>
+      <div class="card">
+        <h2>Set by the installer (read-only here)</h2>
+        <dl id="readonly"></dl>
+        <p class="muted">The port, Immich address and API key live in <code>docker-compose.override.yml</code> / <code>immich-bridge.env</code> on the VM. To change the port, re-run the installer with <code>BRIDGE_PORT=9000</code> in front. A container cannot safely rewrite its own port mapping or mounts.</p>
+      </div>
+    </section>
+
+    <section id="tab-logs" class="hidden">
+      <div class="card">
+        <div class="bar">
+          <select id="logLevel"><option>DEBUG</option><option selected>INFO</option><option>WARNING</option><option>ERROR</option></select>
+          <input id="logFilter" type="search" placeholder="filter text">
+          <label><input type="checkbox" id="logAuto" checked style="width:auto"> live</label>
+          <span class="grow"></span>
+          <button id="logDl">Download log</button>
+        </div>
+        <div class="logs" id="logBox"></div>
+        <p class="muted">Kept in memory (last 2000 lines since the container started). For older history use <code>docker logs immich-bridge</code>.</p>
+      </div>
+    </section>
+  </div>
+</main>
+
+<div class="modal hidden" id="picker">
+  <div class="box">
+    <div class="head"><button id="pkUp">⬆ Up</button><span class="crumb" id="pkPath"></span></div>
+    <div class="list" id="pkList"></div>
+    <div class="foot">
+      <span class="muted" id="pkInfo"></span><span class="grow"></span>
+      <button id="pkCancel">Cancel</button>
+      <button id="pkAdd" class="primary">Watch this folder</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var token = '', cfg = null, draft = null, pollT = null, lastLogId = 0, logLines = [], tab = 'status';
+  var FIELDS = ['sweep_interval', 'min_file_age', 'max_attempts', 'post_import_action', 'album_from_folder', 'album_name', 'include_extensions', 'log_level'];
+
+  function el(tag, attrs, text) {
+    var e = document.createElement(tag);
+    for (var k in (attrs || {})) { e.setAttribute(k, attrs[k]); }
+    if (text !== undefined) { e.textContent = text; }
+    return e;
+  }
+  function ago(ts) {
+    var s = Math.max(0, Math.round(Date.now() / 1000 - ts));
+    if (s < 60) { return s + ' s ago'; }
+    if (s < 3600) { return Math.round(s / 60) + ' min ago'; }
+    if (s < 86400) { return Math.round(s / 3600) + ' h ago'; }
+    return Math.round(s / 86400) + ' d ago';
+  }
+  function api(method, path, body) {
+    var opt = { method: method, headers: { 'X-Bridge-Token': token } };
+    if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+    return fetch(path, opt).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (r.status === 401) { signOut('That token was not accepted.'); throw new Error('auth'); }
+        if (!r.ok) { var e = new Error(j.error || ('HTTP ' + r.status)); e.problems = j.problems; e.status = r.status; throw e; }
+        return j;
+      });
+    });
+  }
+
+  // ---- sign-in -----------------------------------------------------------------
+  function storeToken(t) { try { localStorage.setItem('bridgeToken', t); } catch (e) { /* private mode */ } }
+  function loadToken() { try { return localStorage.getItem('bridgeToken') || ''; } catch (e) { return ''; } }
+  function signOut(msg) {
+    try { localStorage.removeItem('bridgeToken'); } catch (e) { /* ignore */ }
+    token = ''; clearTimeout(pollT);
+    $('app').classList.add('hidden'); $('scan').classList.add('hidden'); $('pause').classList.add('hidden'); $('pausedPill').classList.add('hidden'); $('acct').classList.add('hidden'); $('gate').classList.remove('hidden');
+    if (msg) { $('gateErr').textContent = msg; $('gateErr').classList.remove('hidden'); }
+  }
+  function start() {
+    $('gate').classList.add('hidden'); $('app').classList.remove('hidden'); $('scan').classList.remove('hidden'); $('pause').classList.remove('hidden');
+    loadConfig().then(function () { refresh(); });
+  }
+  var m = /[#&]token=([^&]+)/.exec(location.hash);
+  if (m) { token = decodeURIComponent(m[1]); storeToken(token); history.replaceState(null, '', location.pathname); }
+  else { token = loadToken(); }
+  $('tokenGo').onclick = function () { token = $('tokenIn').value.trim(); storeToken(token); $('gateErr').classList.add('hidden'); start(); };
+  $('tokenIn').onkeydown = function (e) { if (e.key === 'Enter') { $('tokenGo').click(); } };
+
+  // ---- tabs --------------------------------------------------------------------
+  Array.prototype.forEach.call(document.querySelectorAll('nav button'), function (b) {
+    b.onclick = function () {
+      tab = b.getAttribute('data-tab');
+      Array.prototype.forEach.call(document.querySelectorAll('nav button'), function (x) { x.classList.toggle('on', x === b); });
+      ['status', 'settings', 'logs'].forEach(function (t) { $('tab-' + t).classList.toggle('hidden', t !== tab); });
+      refresh();
+    };
+  });
+
+  // ---- status ------------------------------------------------------------------
+  function renderStatus(s) {
+    var tiles = $('tiles'); tiles.textContent = '';
+    [['imported', 'imported'], ['duplicate', 'already in Immich'], ['failed', 'failed'], ['skipped', 'skipped']].forEach(function (p) {
+      var n = s.counts[p[0]] || 0;
+      if ((p[0] === 'skipped') && !n) { return; }
+      var t = el('span', { 'class': p[0] === 'failed' && n > 0 ? 'bad' : '' });
+      t.appendChild(el('b', {}, String(n))); t.appendChild(el('span', { 'class': 'muted' }, ' ' + p[1]));
+      tiles.appendChild(t);
+    });
+    var q = el('span'); q.appendChild(el('b', {}, String(s.queue))); q.appendChild(el('span', { 'class': 'muted' }, ' queued')); tiles.appendChild(q);
+    renderProgress(s);
+    lastStatus = s;
+    renderMore();
+    var tb = $('recent'); tb.textContent = '';
+    var act = s.active || [];
+    act.forEach(function (a) {
+      var tr = el('tr'); var c1 = el('td', { 'class': 'path' }); c1.appendChild(el('div', {}, a.name));
+      if (a.phase === 'uploading' && a.total) {
+        c1.appendChild(el('div', { 'class': 'muted' }, fmtBytes(a.sent) + ' of ' + fmtBytes(a.total) + (a.rate ? ' · ' + fmtBytes(a.rate) + '/s' : '')));
+      }
+      var label = a.phase === 'uploading' ? 'uploading .. (' + (a.percent || 0) + '%)' : a.phase + ' ..';
+      var c2 = el('td'); c2.appendChild(el('span', { 'class': 'pill imported' }, label));
+      var when = 'running ' + fmtDur(a.seconds);
+      if (a.eta_seconds !== null && a.eta_seconds !== undefined) { when += ' · ' + fmtDur(a.eta_seconds) + ' left'; }
+      tr.appendChild(c1); tr.appendChild(c2); tr.appendChild(el('td', {}, when));
+      tb.appendChild(tr);
+    });
+    if (!act.length && s.queue && !s.paused) {
+      var wr = el('tr'); var wc = el('td', { 'class': 'errs', colspan: '3' }, s.queue + ' file' + (s.queue === 1 ? ' is' : 's are') + ' waiting but nothing is importing. Open the Logs tab.');
+      wr.appendChild(wc); tb.appendChild(wr);
+    }
+    s.recent.forEach(function (r) {
+      var tr = el('tr'); var name = r.path.split('/').pop();
+      var c1 = el('td', { 'class': 'path' }); c1.appendChild(el('div', {}, name)); c1.appendChild(el('div', { 'class': 'muted' }, r.path.slice(0, r.path.length - name.length)));
+      if (r.error) { c1.appendChild(el('div', { 'class': 'muted' }, r.error + (r.attempts ? '  (attempt ' + r.attempts + ')' : ''))); }
+      var c2 = el('td'); c2.appendChild(el('span', { 'class': 'pill ' + r.status }, r.status));
+      tr.appendChild(c1); tr.appendChild(c2); tr.appendChild(el('td', {}, ago(r.updated_at)));
+      tb.appendChild(tr);
+    });
+    $('recentEmpty').classList.toggle('hidden', s.recent.length > 0 || act.length > 0);
+    renderAlbums(s.albums);
+    renderPaused(s.paused, s.queue);
+  }
+  var lastStatus = null, batchMax = 0;
+  function renderProgress(s) {
+    var bl = s.backlog || {}, act = s.active || [], box = $('progressBox');
+    var busy = !!(bl.files || act.length);
+    box.classList.toggle('hidden', !busy);
+    if (!busy) { batchMax = 0; return; }
+    batchMax = Math.max(batchMax, bl.bytes_left || 0);
+    var pct = batchMax ? Math.max(0, Math.min(100, Math.round(100 - (bl.bytes_left || 0) * 100 / batchMax))) : 0;
+    $('progFill').style.width = pct + '%';
+    $('progTitle').textContent = (s.paused ? 'Paused' : 'Importing') + ' · ' + bl.files + ' file' + (bl.files === 1 ? '' : 's') + ' left';
+    var txt = fmtBytes(bl.bytes_left || 0) + ' left · ' + pct + '% done';
+    if (bl.eta_seconds) { txt = 'about ' + fmtDur(bl.eta_seconds) + ' (' + fmtBytes(bl.bytes_left || 0) + ' at ' + fmtBytes(bl.rate) + '/s)'; }
+    else if (!s.paused) { txt += ' · estimating speed...'; }
+    $('backlogNote').textContent = txt;
+  }
+  var lastAlbums = null;
+  function renderMore() {
+    var kv = $('moreKv'); kv.textContent = '';
+    var row = function (k, node) { kv.appendChild(el('dt', {}, k)); var dd = el('dd'); dd.appendChild(typeof node === 'string' ? document.createTextNode(node) : node); kv.appendChild(dd); };
+    var s = lastStatus;
+    if (s) { row('Watching', s.watch_dirs.join(', ') + (s.priority_dirs.length ? '  (imported first: ' + s.priority_dirs.join(', ') + ')' : '')); }
+    var r = lastIdentity;
+    if (r && r.immich_user) {
+      row('Importing into', (r.immich_user.name || '?') + (r.immich_user.email ? ' (' + r.immich_user.email + ')' : '') + ' — log in to Immich as this user to see imports and albums');
+    }
+    var a = lastAlbums;
+    if (a && a.enabled) {
+      row('Folder albums', a.added > 0 ? a.added + ' file' + (a.added === 1 ? '' : 's') + ' added since the bridge started' : 'nothing added yet (only files imported from now on; use the button under Folders & settings for earlier ones)');
+    }
+    if (r && r.albums && r.albums.length) {
+      var d = el('span');
+      r.albums.forEach(function (al, i) {
+        var link = el('a', { href: al.url, target: '_blank', rel: 'noopener' }, al.name);
+        link.style.color = 'var(--accent)';
+        d.appendChild(link); if (i < r.albums.length - 1) { d.appendChild(document.createTextNode(' · ')); }
+      });
+      row('Albums used', d);
+    }
+  }
+  function doReimport() {
+    var who = lastIdentity && lastIdentity.immich_user ? lastIdentity.immich_user.name + ' (' + lastIdentity.immich_user.email + ')' : 'the current Immich account';
+    var warn = (cfg && cfg.values.post_import_action !== 'keep') ? '\n\nNote: files this bridge already moved or deleted after importing cannot be imported again.' : '';
+    if (!confirm('Forget everything that was imported and import it all again into ' + who + '?\n\nNothing on the NAS or in Immich is deleted or changed. This uploads every file again over the network and can take a long time.' + warn)) { return; }
+    api('POST', '/api/reimport', { confirm: true }).then(function (r) {
+      $('reimportState').textContent = ' Forgot ' + r.forgotten + ' file record' + (r.forgotten === 1 ? '' : 's') + ' - importing everything again now. Watch the Status tab.';
+      refresh();
+    });
+  }
+  $('reimport').onclick = doReimport;
+  var lastIdentity = null;
+  function renderIdentity(r) {
+    lastIdentity = r;
+    var box = $('alertsAcct'); box.textContent = '';
+    var ac = $('acct'), u = r && r.immich_user;
+    ac.classList.toggle('hidden', !u);
+    if (u) {
+      ac.textContent = 'Immich account: ' + (u.email || u.name || '?');
+      ac.style.color = r.account_change ? 'var(--warn)' : '';
+      ac.title = (u.name ? u.name + ' · ' : '') + 'every file and album the bridge creates belongs to this account';
+    }
+    renderMore();
+    if (!r) { return; }
+    if (r.account_change) {
+      var ch = el('div', { 'class': 'errs' }, 'The API key now belongs to a different Immich account (was ' + r.account_change.was + ', now ' + r.account_change.now +
+        '). Files imported earlier went into the old account, so you will not see them in the new one.');
+      ch.style.color = 'var(--warn)'; ch.style.borderColor = 'var(--warn)'; ch.style.margin = '10px 0 0';
+      var row = el('div'); row.style.marginTop = '8px';
+      var yes = el('button', { 'class': 'primary' }, 'Re-import everything into the new account'); yes.onclick = doReimport;
+      var no = el('button', {}, 'The new account is right — stop warning'); no.style.marginLeft = '8px';
+      no.onclick = function () { api('POST', '/api/account/ack', {}).then(refresh); };
+      row.appendChild(yes); row.appendChild(no); ch.appendChild(row); box.appendChild(ch);
+    }
+  }
+  var isPaused = false;
+  function fmtDur(sec) {
+    if (sec < 60) { return sec + ' s'; }
+    var m = Math.floor(sec / 60), h = Math.floor(m / 60);
+    if (h < 1) { return m >= 10 ? m + ' min' : m + ' min ' + (sec % 60) + ' s'; }
+    if (h < 48) { return h + ' h ' + (m % 60) + ' min'; }
+    return Math.round(h / 24) + ' days';
+  }
+  function fmtBytes(n) {
+    var u = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + ' ' + u[i];
+  }
+  function renderPaused(paused, queue) {
+    isPaused = !!paused;
+    $('pause').textContent = isPaused ? 'Resume imports' : 'Pause imports';
+    $('pause').className = isPaused ? 'primary' : '';
+    $('pausedPill').classList.toggle('hidden', !isPaused);
+    var box = $('pauseNote'); box.textContent = '';
+    if (isPaused) {
+      var d = el('div', { 'class': 'errs' }, 'Imports are paused' + (queue ? ' — ' + queue + ' file' + (queue === 1 ? ' is' : 's are') + ' waiting' : '') +
+        '. A file already being imported finishes first; nothing new starts until you press Resume imports. New uploads keep being noticed and queued. The pause survives a restart.');
+      d.style.color = 'var(--warn)'; d.style.borderColor = 'var(--warn)'; d.style.margin = '0 0 10px';
+      box.appendChild(d);
+    }
+  }
+  $('pause').onclick = function () {
+    var want = !isPaused;
+    api('POST', '/api/pause', { paused: want }).then(function (r) {
+      renderPaused(r.paused, r.queue);
+      if (cfg) { cfg.values.paused = r.paused; }
+      if (draft) { draft.paused = r.paused; }
+      refresh();
+    });
+  };
+  function renderAlbums(a) {
+    var box = $('alertsAlbum'); box.textContent = '';
+    lastAlbums = a; renderMore();
+    if (!a || !a.enabled) { return; }
+    var note = function (cls, text) { var d = el('div', { 'class': cls }, text); d.style.margin = '8px 0 0'; box.appendChild(d); };
+    if (a.permission && a.permission.ok === false) {
+      note('errs', 'Folder albums can’t work: the Immich API key is missing album permissions (' + a.permission.missing.join(', ') +
+        '). Imports are unaffected. Fix: create an API key with all permissions in Immich, then re-run the installer with IMMICH_API_KEY=… in front.');
+    } else if (a.failed > 0 && a.last_error) {
+      note('errs', a.failed + ' album add' + (a.failed === 1 ? '' : 's') + ' failed. Latest: ' + a.last_error);
+    }
+    var bf = a.backfill || {};
+    var st = $('backfillState');
+    if (st) { st.textContent = bf.running ? ' working… ' + bf.done + ' / ' + bf.total : (bf.total ? ' last run: ' + bf.done + ' done, ' + bf.failed + ' failed' : ''); }
+  }
+  function pollHealth() {
+    return fetch('/healthz').then(function (r) { return r.json(); }).then(function (h) {
+      $('dot').className = 'dot up'; $('ver').textContent = 'v' + h.version;
+    }).catch(function () { $('dot').className = 'dot down'; });
+  }
+  $('scan').onclick = function () {
+    api('POST', '/api/scan', {}).then(function () { $('scan').textContent = 'Scanning…'; setTimeout(function () { $('scan').textContent = 'Scan now'; refresh(); }, 1500); });
+  };
+
+  $('backfill').onclick = function () {
+    api('POST', '/api/albums/backfill', {}).then(function (r) { renderAlbums(r.albums); $('backfillState').textContent = r.started ? ' started…' : ' already running…'; setTimeout(refresh, 1500); });
+  };
+
+  // ---- settings ----------------------------------------------------------------
+  function loadConfig() {
+    return api('GET', '/api/config').then(function (c) {
+      cfg = c; draft = JSON.parse(JSON.stringify(c.values)); renderSettings(); renderPaused(c.values.paused, null);
+    }).catch(function (e) { if (e.message !== 'auth') { $('gateErr').textContent = e.message; } });
+  }
+  function dirty() { return JSON.stringify(draft) !== JSON.stringify(cfg.values); }
+  function renderSettings() {
+    var box = $('dirs'); box.textContent = '';
+    draft.watch_dirs.forEach(function (d, i) {
+      var row = el('div', { 'class': 'row' });
+      var star = el('button', { 'class': 'star' + (draft.priority_dirs.indexOf(d) >= 0 ? ' on' : ''), title: 'Import this folder first' }, '★');
+      star.onclick = function () {
+        var j = draft.priority_dirs.indexOf(d);
+        if (j >= 0) { draft.priority_dirs.splice(j, 1); } else { draft.priority_dirs.push(d); }
+        renderSettings();
+      };
+      var rm = el('button', { 'class': 'danger', title: 'Stop watching' }, 'Remove');
+      rm.onclick = function () {
+        draft.watch_dirs.splice(i, 1);
+        draft.priority_dirs = draft.priority_dirs.filter(function (p) { return draft.watch_dirs.some(function (w) { return p === w || p.indexOf(w + '/') === 0; }); });
+        renderSettings();
+      };
+      row.appendChild(star); row.appendChild(el('span', { 'class': 'p' }, d)); row.appendChild(rm); box.appendChild(row);
+    });
+    if (!draft.watch_dirs.length) { box.appendChild(el('p', { 'class': 'muted' }, 'No folders. Add at least one.')); }
+    FIELDS.forEach(function (f) {
+      var inp = $(f); var v = draft[f];
+      if (inp.type === 'checkbox') { inp.checked = !!v; } else { inp.value = Array.isArray(v) ? v.join(' ') : (v === null || v === undefined ? '' : v); }
+      $('c_' + f).textContent = JSON.stringify(cfg.values[f]) !== JSON.stringify(cfg.defaults[f]) ? 'changed from installer default' : '';
+      inp.oninput = inp.onchange = function () { readField(f); };
+    });
+    $('postWarn').textContent = draft.post_import_action === 'keep' ? '' :
+      'This changes your files on the NAS. The bridge only does it after Immich has the file, and it needs the folder mounted read-write (the installer mounts it read-only).';
+    var ro = $('readonly'); ro.textContent = '';
+    var r = cfg.readonly;
+    [['Immich address', r.immich_url], ['Immich API key', r.api_key_set ? 'set (hidden)' : 'NOT SET'], ['Web/hook port (inside container)', r.bind_port],
+     ['Import workers', r.workers], ['Device name in Immich', r.device_id], ['State database', r.state_db], ['Saved settings file', r.settings_file],
+     ['Folders this page may browse', cfg.browse_roots.join(', ') || 'none'], ['Running for', Math.round(r.uptime_seconds / 60) + ' min']].forEach(function (p) {
+      ro.appendChild(el('dt', {}, p[0])); ro.appendChild(el('dd', {}, String(p[1])));
+    });
+    $('save').disabled = !dirty(); $('discard').disabled = !dirty(); $('reset').disabled = cfg.overridden.length === 0;
+  }
+  function readField(f) {
+    var v = $(f).value;
+    if ($(f).type === 'checkbox') { draft[f] = $(f).checked; }
+    else if (f === 'include_extensions') { draft[f] = v.split(/[\s,]+/).filter(Boolean); }
+    else if (['sweep_interval', 'min_file_age', 'max_attempts'].indexOf(f) >= 0) { draft[f] = v === '' ? '' : Number(v); }
+    else { draft[f] = v; }
+    renderSettingsLite();
+  }
+  function renderSettingsLite() {
+    $('save').disabled = !dirty(); $('discard').disabled = !dirty();
+    $('postWarn').textContent = draft.post_import_action === 'keep' ? '' : 'This changes your files on the NAS. The bridge only does it after Immich has the file, and it needs the folder mounted read-write (the installer mounts it read-only).';
+  }
+  function showErrs(problems) {
+    var b = $('saveErrs'); b.textContent = '';
+    (problems || []).forEach(function (p) { b.appendChild(el('div', {}, p)); });
+    b.classList.toggle('hidden', !problems || !problems.length);
+  }
+  $('save').onclick = function () {
+    showErrs([]); $('saved').classList.add('hidden');
+    var changes = {};
+    Object.keys(draft).forEach(function (k) { if (JSON.stringify(draft[k]) !== JSON.stringify(cfg.values[k])) { changes[k] = draft[k]; } });
+    api('PUT', '/api/config', changes).then(function (c) {
+      cfg = c; draft = JSON.parse(JSON.stringify(c.values)); renderSettings();
+      $('saved').classList.remove('hidden'); setTimeout(function () { $('saved').classList.add('hidden'); }, 4000);
+    }).catch(function (e) { if (e.message !== 'auth') { showErrs(e.problems || [e.message]); } });
+  };
+  $('discard').onclick = function () { draft = JSON.parse(JSON.stringify(cfg.values)); showErrs([]); renderSettings(); };
+  $('reset').onclick = function () {
+    if (!confirm('Throw away everything saved on this page and go back to what the installer set?')) { return; }
+    api('POST', '/api/config/reset', {}).then(function (c) { cfg = c; draft = JSON.parse(JSON.stringify(c.values)); showErrs([]); renderSettings(); });
+  };
+
+  // ---- folder picker -----------------------------------------------------------
+  var pkCur = null, pkParent = null;
+  function pkLoad(path) {
+    api('GET', '/api/fs' + (path ? '?path=' + encodeURIComponent(path) : '')).then(function (d) {
+      pkCur = d.path; pkParent = d.parent;
+      $('pkPath').textContent = d.path; $('pkUp').disabled = !d.parent;
+      var list = $('pkList'); list.textContent = '';
+      d.dirs.forEach(function (x) {
+        var row = el('div', { 'class': 'dirrow' }); row.appendChild(el('span', {}, '📁')); row.appendChild(el('span', { 'class': 'crumb' }, x.name));
+        if (draft.watch_dirs.indexOf(x.path) >= 0) { row.appendChild(el('span', { 'class': 'pill' }, 'watched')); }
+        row.onclick = function () { pkLoad(x.path); }; list.appendChild(row);
+      });
+      if (!d.dirs.length) { list.appendChild(el('p', { 'class': 'muted', style: 'padding:12px 14px' }, 'No subfolders here.')); }
+      $('pkInfo').textContent = d.files + ' media file' + (d.files === 1 ? '' : 's') + ' directly in this folder' + (d.truncated ? ' (list truncated)' : '');
+      $('pkAdd').disabled = draft.watch_dirs.indexOf(d.path) >= 0;
+    }).catch(function (e) { if (e.message !== 'auth') { $('pkInfo').textContent = e.message; } });
+  }
+  $('addDir').onclick = function () { $('picker').classList.remove('hidden'); pkLoad(null); };
+  $('pkUp').onclick = function () { if (pkParent) { pkLoad(pkParent); } };
+  $('pkCancel').onclick = function () { $('picker').classList.add('hidden'); };
+  $('pkAdd').onclick = function () {
+    if (pkCur && draft.watch_dirs.indexOf(pkCur) < 0) { draft.watch_dirs.push(pkCur); }
+    $('picker').classList.add('hidden'); renderSettings();
+  };
+
+  // ---- logs --------------------------------------------------------------------
+  function renderLogs(reset) {
+    var box = $('logBox'); var f = $('logFilter').value.toLowerCase();
+    var atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+    if (reset) { box.textContent = ''; }
+    logLines.forEach(function (e) {
+      if (e._shown && !reset) { return; }
+      e._shown = true;
+      if (f && (e.message + e.logger).toLowerCase().indexOf(f) < 0) { return; }
+      var d = new Date(e.ts * 1000); var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+      var line = el('div', { 'class': e.level }, pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) + ' ' + e.level.slice(0, 4) + ' ' + e.message);
+      box.appendChild(line);
+    });
+    if (atEnd || reset) { box.scrollTop = box.scrollHeight; }
+  }
+  function fetchLogs(full) {
+    if (full) { lastLogId = 0; logLines = []; }
+    return api('GET', '/api/logs?level=' + $('logLevel').value + '&limit=500&after=' + lastLogId).then(function (r) {
+      r.entries.forEach(function (e) { logLines.push(e); lastLogId = Math.max(lastLogId, e.id); });
+      if (logLines.length > 1500) { logLines = logLines.slice(-1500); }
+      renderLogs(full);
+    });
+  }
+  $('logLevel').onchange = function () { fetchLogs(true); };
+  $('logFilter').oninput = function () {
+    logLines.forEach(function (e) { e._shown = false; }); renderLogs(true);
+  };
+  $('logDl').onclick = function () {
+    fetch('/api/logs/download', { headers: { 'X-Bridge-Token': token } }).then(function (r) { return r.blob(); }).then(function (b) {
+      var a = document.createElement('a'); a.href = URL.createObjectURL(b);
+      a.download = 'immich-bridge-' + new Date().toISOString().replace(/[:.]/g, '-') + '.log'; a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+    });
+  };
+
+  // ---- polling -----------------------------------------------------------------
+  var bfRunning = false;
+  function refresh() {
+    clearTimeout(pollT);
+    if (!token) { return; }
+    pollHealth();
+    var job;
+    if (tab === 'status') {
+      job = fetch('/status').then(function (r) { return r.json(); }).then(renderStatus).then(function () {
+        return api('GET', '/api/config').then(function (c) { renderIdentity(c.readonly); });  // account + album links need the token
+      });
+    }
+    else if (tab === 'logs') { job = fetchLogs(lastLogId === 0 && !logLines.length); }
+    else { job = fetch('/status').then(function (r) { return r.json(); }).then(function (st) { bfRunning = !!(st.albums && st.albums.backfill && st.albums.backfill.running); renderAlbums(st.albums); }); }
+    job.catch(function () { /* transient */ }).then(function () {
+      var wait = tab === 'logs' ? ($('logAuto').checked ? 2000 : 0) : (tab === 'status' ? 5000 : (bfRunning ? 2000 : 0));
+      if (wait) { pollT = setTimeout(refresh, wait); }
+    });
+  }
+
+  if (token) { start(); } else { $('gate').classList.remove('hidden'); pollHealth(); }
+})();
+</script>
+</body>
+</html>

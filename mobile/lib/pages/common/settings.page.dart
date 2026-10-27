@@ -9,6 +9,7 @@ import 'package:immich_mobile/widgets/settings/asset_list_settings/asset_list_se
 import 'package:immich_mobile/widgets/settings/asset_viewer_settings/asset_viewer_settings.dart';
 import 'package:immich_mobile/widgets/settings/backup_settings/backup_settings.dart';
 import 'package:immich_mobile/widgets/settings/beta_sync_settings/sync_status_and_actions.dart';
+import 'package:immich_mobile/widgets/settings/copyparty_settings/copyparty_settings.dart';
 import 'package:immich_mobile/widgets/settings/free_up_space_settings.dart';
 import 'package:immich_mobile/widgets/settings/language_settings.dart';
 import 'package:immich_mobile/widgets/settings/networking_settings/networking_settings.dart';
@@ -20,6 +21,7 @@ enum SettingSection {
   advanced(Icons.build_outlined),
   assetViewer(Icons.image_outlined),
   backup(Icons.cloud_upload_outlined),
+  copyparty(Icons.sd_card_rounded),
   freeUpSpace(Icons.cleaning_services_outlined),
   languages(Icons.language),
   networking(Icons.wifi),
@@ -34,6 +36,7 @@ enum SettingSection {
     SettingSection.advanced => t.advanced,
     SettingSection.assetViewer => t.asset_viewer_settings_title,
     SettingSection.backup => t.backup,
+    SettingSection.copyparty => 'Copyparty Import',
     SettingSection.freeUpSpace => t.free_up_space,
     SettingSection.languages => t.language,
     SettingSection.networking => t.networking_settings,
@@ -47,6 +50,7 @@ enum SettingSection {
     SettingSection.advanced => t.advanced_settings_tile_subtitle,
     SettingSection.assetViewer => t.asset_viewer_settings_subtitle,
     SettingSection.backup => t.backup_settings_subtitle,
+    SettingSection.copyparty => 'Upload to copyparty via up2k protocol',
     SettingSection.freeUpSpace => t.free_up_space_settings_subtitle,
     SettingSection.languages => t.setting_languages_subtitle,
     SettingSection.networking => t.networking_subtitle,
@@ -60,6 +64,7 @@ enum SettingSection {
     SettingSection.advanced => const AdvancedSettings(),
     SettingSection.assetViewer => const AssetViewerSettings(),
     SettingSection.backup => const BackupSettings(),
+    SettingSection.copyparty => const CopypartySettings(),
     SettingSection.freeUpSpace => const FreeUpSpaceSettings(),
     SettingSection.languages => const LanguageSettings(),
     SettingSection.networking => const NetworkingSettings(),
