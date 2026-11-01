@@ -77,6 +77,8 @@
   .dirrow { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
   .dirrow:hover { background: var(--bg); }
   .crumb { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; word-break: break-all; flex: 1; }
+  .dirtybar { position: sticky; bottom: 0; display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--warn); border-radius: 10px; padding: 10px 14px; margin: 10px 0; box-shadow: 0 -4px 14px rgba(0,0,0,.25); }
   .hidden { display: none !important; }
   .gate { max-width: 420px; margin: 12vh auto; }
 </style>
@@ -191,6 +193,11 @@
       </div>
     </section>
 
+    <div id="dirtyBar" class="dirtybar hidden">
+      <span><b>Unsaved changes.</b> Nothing has been applied yet.</span>
+      <span><button id="saveBar" class="primary">Save</button> <button id="discardBar">Discard</button></span>
+    </div>
+
     <section id="tab-logs" class="hidden">
       <div class="card">
         <div class="bar">
@@ -275,6 +282,7 @@
       tab = b.getAttribute('data-tab');
       Array.prototype.forEach.call(document.querySelectorAll('nav button'), function (x) { x.classList.toggle('on', x === b); });
       ['status', 'settings', 'logs'].forEach(function (t) { $('tab-' + t).classList.toggle('hidden', t !== tab); });
+      markDirty();
       refresh();
     };
   });
@@ -501,6 +509,7 @@
       ro.appendChild(el('dt', {}, p[0])); ro.appendChild(el('dd', {}, String(p[1])));
     });
     $('save').disabled = !dirty(); $('discard').disabled = !dirty(); $('reset').disabled = cfg.overridden.length === 0;
+    markDirty();
   }
   function readField(f) {
     var v = $(f).value;
@@ -510,8 +519,17 @@
     else { draft[f] = v; }
     renderSettingsLite();
   }
+  function markDirty() {
+    var d = !!(cfg && draft && dirty());
+    $('dirtyBar').classList.toggle('hidden', !(d && tab === 'settings'));
+    var tb = document.querySelector('nav button[data-tab=settings]');
+    if (tb) { tb.textContent = d ? 'Folders & settings •' : 'Folders & settings'; }
+  }
+  $('saveBar').onclick = function () { $('save').click(); };
+  $('discardBar').onclick = function () { $('discard').click(); };
+  window.addEventListener('beforeunload', function (e) { if (cfg && draft && dirty()) { e.preventDefault(); e.returnValue = ''; } });
   function renderSettingsLite() {
-    $('save').disabled = !dirty(); $('discard').disabled = !dirty();
+    $('save').disabled = !dirty(); $('discard').disabled = !dirty(); markDirty();
     $('postWarn').textContent = draft.post_import_action === 'keep' ? '' : 'This changes your files on the NAS. The bridge only does it after Immich has the file, and it needs the folder mounted read-write (the installer mounts it read-only).';
   }
   function showErrs(problems) {
