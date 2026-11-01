@@ -3,7 +3,7 @@ name: Build Custom APK
 on:
   push:
     branches:
-      - feature/custom-upload-settings
+      - 'feature/**'
   workflow_dispatch:
 
 jobs:
@@ -18,18 +18,29 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Fail fast: no build and no artifact unless the sensitive-data audit passes.
+      - name: Fork audit (no secrets or personal data)
+        run: bash scripts/fork-audit.sh
+
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Flutter 3.44.1
+      - name: Set up Flutter 3.47.2
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.44.1'
+          flutter-version: '3.47.2'
           channel: stable
           cache: true
+
+      - name: Install openapi-generator-cli
+        run: npm install -g @openapitools/openapi-generator-cli@2.41.0
+
+      - name: Generate OpenAPI Dart client
+        working-directory: open-api
+        run: bash ./bin/generate-dart-sdk.sh
 
       - name: Get Flutter dependencies
         working-directory: mobile
@@ -41,9 +52,26 @@ jobs:
           dart run easy_localization:generate -S ../i18n
           dart run bin/generate_keys.dart
 
+      - name: Generate Drift migrations
+        working-directory: mobile
+        run: dart run drift_dev make-migrations
+
       - name: Run build_runner (routes, riverpod, drift)
         working-directory: mobile
         run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Generate Pigeon platform code
+        working-directory: mobile
+        run: |
+          ls pigeon/*.dart | xargs -n1 -P4 -I{} dart run pigeon --input {}
+          dart format lib/platform/
+
+      # Intermittent "Java heap space" in Gradle's JetifyTransform with the project default (-Xmx4096M).
+      # ~/.gradle/gradle.properties takes precedence over the project's file, so upstream's stays untouched.
+      - name: Give Gradle more memory
+        run: |
+          mkdir -p ~/.gradle
+          printf 'org.gradle.jvmargs=-Xmx6144M -XX:MaxMetaspaceSize=1024M -XX:+HeapDumpOnOutOfMemoryError\n' >> ~/.gradle/gradle.properties
 
       - name: Decode keystore
         run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > mobile/android/key.jks
@@ -55,6 +83,9 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           ANDROID_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: flutter build apk --release
+
+      - name: Audit the built APK (no keystores, keys or env files packaged)
+        run: bash scripts/fork-audit.sh --apk mobile/build/app/outputs/flutter-apk/app-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
