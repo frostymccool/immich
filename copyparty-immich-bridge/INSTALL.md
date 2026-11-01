@@ -114,7 +114,7 @@ until that finishes.
 
 | Want | Do |
 |------|----|
-| Update to the latest | run the same command again (it reuses the saved key) |
+| Update to the latest | run `~/copyparty/update-bridge.sh` (saved there by the installer; it first makes sure it is itself the latest, then runs the latest installer, which reuses your key, token and folders). `--check` only says whether a newer version exists. Running the install command again does the same |
 | Uninstall | same command ending `\| bash -s -- --uninstall` |
 | Choose the app folder without being asked | prefix `APP_FOLDER=Trips/Other` (`APP_FOLDER=.` = everything); `BASE_FOLDER=Trips` overrides what `WIDE=1` watches |
 | Skip the instant hook | prefix `HOOK=0` |

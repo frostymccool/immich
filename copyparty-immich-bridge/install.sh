@@ -51,7 +51,7 @@ fi
 if [ "${1:-}" = "--uninstall" ]; then
   say "Removing the bridge"
   if [ -f "$OVERRIDE" ] && grep -qF "$MARKER" "$OVERRIDE"; then
-    rm -f "$OVERRIDE" "$ENVFILE" "$HOOKENV"
+    rm -f "$OVERRIDE" "$ENVFILE" "$HOOKENV" "$COPYPARTY_DIR/update-bridge.sh"
     dc up -d --remove-orphans
     echo "Done. Bridge removed; copyparty restarted without the hook."
     echo "(Its small state volume is kept; 'docker volume rm copyparty_bridge-state' deletes it.)"
@@ -164,7 +164,12 @@ BRIDGE_DIR="$SRC_DIR/copyparty-immich-bridge"
 # which commit this is, shown in the bridge page header (so "what am I running?" has an answer)
 BUILD_ID="$(git -C "$SRC_DIR" log -1 --format='%h %cd' --date=short 2>/dev/null | tr -d '"' || true)"
 [ -n "$BUILD_ID" ] || BUILD_ID="unknown"
+UPDATER="$COPYPARTY_DIR/update-bridge.sh"
 [ -f "$BRIDGE_DIR/Dockerfile" ] || die "bridge sources missing in $BRIDGE_DIR"
+# a one-command updater, kept next to copyparty's compose file
+if [ -f "$BRIDGE_DIR/update-bridge.sh" ]; then
+  cp "$BRIDGE_DIR/update-bridge.sh" "$UPDATER" && chmod +x "$UPDATER" && echo "Saved the updater: $UPDATER"
+fi
 
 # --- Immich API key --------------------------------------------------------------
 KEY="${IMMICH_API_KEY:-}"
@@ -292,6 +297,8 @@ echo
 echo "Settings page:   http://$HOST_IP:$BRIDGE_PORT/#token=$TOKEN"
 echo "                 (open that link once; the browser remembers it. Choose folders, see logs, scan now.)"
 echo "                 Folders you save there are kept and win over the ones above; 'Reset to installer defaults' undoes that."
+echo
+echo "To update later, run:  $UPDATER   (it checks it is the latest first; add --check to only look)"
 echo
 echo "LAST STEP, on your phone: Settings > copyparty > Import Bridge > URL:  http://$HOST_IP:$BRIDGE_PORT"
 }

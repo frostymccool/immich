@@ -29,7 +29,7 @@ exit 0
 """
 FAKE_GIT = """#!/usr/bin/env bash
 echo "git $*" >> "$FAKE_LOG"
-if [ "$1" = clone ]; then dir="${@: -1}"; mkdir -p "$dir/.git" "$dir/copyparty-immich-bridge/hook"; touch "$dir/copyparty-immich-bridge/Dockerfile"; fi
+if [ "$1" = clone ]; then dir="${@: -1}"; mkdir -p "$dir/.git" "$dir/copyparty-immich-bridge/hook"; touch "$dir/copyparty-immich-bridge/Dockerfile"; printf "#!/usr/bin/env bash\\n# update-bridge.sh\\n" > "$dir/copyparty-immich-bridge/update-bridge.sh"; fi
 case " $* " in *" log "*) [ -z "${FAKE_NO_GIT_LOG:-}" ] && echo "e4d5866 2026-11-01";; esac
 exit 0
 """
@@ -201,3 +201,14 @@ def test_unknown_commit_is_recorded_as_unknown_not_empty(box):
     r = box.run(env={"APP_FOLDER": "Trips/Summer2026", "FAKE_NO_GIT_LOG": "1"})
     assert r.returncode == 0, r.stdout + r.stderr
     assert 'BRIDGE_BUILD: "unknown"' in box.override.read_text()
+
+
+def test_installer_saves_the_updater_in_the_copyparty_folder_and_uninstall_removes_it(box):
+    r = box.run(env={"APP_FOLDER": "Trips/Summer2026"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    updater = box.home / "copyparty" / "update-bridge.sh"
+    assert updater.exists() and os.access(updater, os.X_OK)
+    assert "update-bridge.sh" in r.stdout.split("Settings page:")[-1]
+    r = box.run("--uninstall")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not updater.exists()
