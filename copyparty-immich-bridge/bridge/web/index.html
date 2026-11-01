@@ -77,8 +77,8 @@
   .dirrow { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
   .dirrow:hover { background: var(--bg); }
   .crumb { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; word-break: break-all; flex: 1; }
-  .dirtybar { position: sticky; bottom: 0; display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap;
-    background: var(--panel); border: 1px solid var(--warn); border-radius: 10px; padding: 10px 14px; margin: 10px 0; box-shadow: 0 -4px 14px rgba(0,0,0,.25); }
+  .dirtybar { position: sticky; top: 0; z-index: 5; display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--warn); border-radius: 10px; padding: 10px 14px; margin: 10px 0; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
   .hidden { display: none !important; }
   .gate { max-width: 420px; margin: 12vh auto; }
 </style>
@@ -111,6 +111,11 @@
       <button data-tab="logs">Logs</button>
     </nav>
 
+    <div id="dirtyBar" class="dirtybar hidden">
+      <span><b>Unsaved changes.</b> Nothing has been applied yet.</span>
+      <span><button id="saveBar" class="primary">Save</button> <button id="discardBar">Discard</button></span>
+    </div>
+
     <section id="tab-status">
       <div class="card">
         <h2>Imports</h2>
@@ -139,7 +144,7 @@
         <h2>Watched folders</h2>
         <p class="muted">The bridge looks in these folders and all their subfolders for new files. The star marks a folder that is imported first (for example the one the phone app uploads into).</p>
         <div id="dirs"></div>
-        <p><button id="addDir">Add folder…</button></p>
+        <p><button id="addDir">Add folder…</button> <span id="dirNote" class="ok hidden"></span></p>
       </div>
       <div class="card">
         <h2>Behaviour</h2>
@@ -192,11 +197,6 @@
         <p class="muted">The port, Immich address and API key live in <code>docker-compose.override.yml</code> / <code>immich-bridge.env</code> on the VM. To change the port, re-run the installer with <code>BRIDGE_PORT=9000</code> in front. A container cannot safely rewrite its own port mapping or mounts.</p>
       </div>
     </section>
-
-    <div id="dirtyBar" class="dirtybar hidden">
-      <span><b>Unsaved changes.</b> Nothing has been applied yet.</span>
-      <span><button id="saveBar" class="primary">Save</button> <button id="discardBar">Discard</button></span>
-    </div>
 
     <section id="tab-logs" class="hidden">
       <div class="card">
@@ -572,9 +572,21 @@
   $('addDir').onclick = function () { $('picker').classList.remove('hidden'); pkLoad(null); };
   $('pkUp').onclick = function () { if (pkParent) { pkLoad(pkParent); } };
   $('pkCancel').onclick = function () { $('picker').classList.add('hidden'); };
+  // Adding a folder applies at once (nothing else about it needs reviewing); removing one stays a draft until Save.
   $('pkAdd').onclick = function () {
-    if (pkCur && draft.watch_dirs.indexOf(pkCur) < 0) { draft.watch_dirs.push(pkCur); }
-    $('picker').classList.add('hidden'); renderSettings();
+    var path = pkCur;
+    if (!path) { return; }
+    $('picker').classList.add('hidden');
+    if (draft.watch_dirs.indexOf(path) >= 0) { return; }
+    var applied = cfg.values.watch_dirs.indexOf(path) >= 0 ? cfg.values.watch_dirs : cfg.values.watch_dirs.concat([path]);
+    showErrs([]);
+    api('PUT', '/api/config', { watch_dirs: applied }).then(function (c) {
+      cfg = c;
+      if (draft.watch_dirs.indexOf(path) < 0) { draft.watch_dirs.push(path); }   // keep any other unsaved edits
+      renderSettings();
+      var ok = $('dirNote'); ok.textContent = 'Added and applied now: ' + path; ok.classList.remove('hidden');
+      setTimeout(function () { ok.classList.add('hidden'); }, 5000);
+    }).catch(function (e) { if (e.message !== 'auth') { showErrs(e.problems || [e.message]); } });
   };
 
   // ---- logs --------------------------------------------------------------------
