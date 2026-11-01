@@ -79,6 +79,26 @@ permissions) and re-run the installer with `IMMICH_API_KEY=… ` in front.
 **Files imported earlier** (before albums were on, or while the key lacked permission) are added by the button
 **Add already-imported files to their folder albums** on the Folders & settings tab. Safe to press again.
 
+## Moving the data folder
+
+If you reorganise the share (for example moving the upload folders into a new parent folder), do the folder move
+yourself first, then let `move-root.sh` repoint everything that refers to it: copyparty's compose file and config, the
+bridge, the bridge's saved folder settings and its memory of what it already imported (so nothing is re-hashed just
+because a path changed). It never moves, copies or deletes your photos and videos, and it backs up every file it edits.
+
+Run it on the Docker VM. Without `--apply` it only prints the plan:
+
+```
+curl -fsSL https://raw.githubusercontent.com/frostymccool/immich/feature/copyparty-up2k-import/copyparty-immich-bridge/move-root.sh \
+  | bash -s -- --data /mnt/uploads/Photos --app-folder Trips/Summer2026
+```
+
+When the plan looks right, add `--apply` to the end. It then prints the upload path to set in the phone app, and how to
+undo it (`--rollback <backup folder> --apply`). If the share is a network mount (cifs/nfs), it also moves copyparty's
+index database onto the VM's own disk, because sqlite cannot lock files on those shares (copyparty then shows
+`database is locked` and switches its upload index off). After a move copyparty re-indexes the folder, and uploads pause
+until that finishes.
+
 ## Update, remove, options
 
 | Want | Do |
