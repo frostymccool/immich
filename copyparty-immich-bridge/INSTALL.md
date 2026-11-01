@@ -82,27 +82,27 @@ permissions) and re-run the installer with `IMMICH_API_KEY=… ` in front.
 ## Moving the data folder
 
 If you reorganise the share (for example moving the upload folders into a new parent folder), do the folder move
-yourself first, then let `move-root.sh` repoint everything that refers to it: copyparty's compose file and config, the
+yourself first, then let `move-copyparty-root.sh` repoint everything that refers to it: copyparty's compose file and config, the
 bridge, the bridge's saved folder settings and its memory of what it already imported (so nothing is re-hashed just
 because a path changed). It never moves, copies or deletes your photos and videos, and it backs up every file it edits.
 
 Run it on the Docker VM. Without `--apply` it only prints the plan:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/frostymccool/immich/feature/copyparty-up2k-import/copyparty-immich-bridge/move-root.sh \
+curl -fsSL https://raw.githubusercontent.com/frostymccool/immich/feature/copyparty-up2k-import/copyparty-immich-bridge/move-copyparty-root.sh \
   | bash -s -- --data /mnt/uploads/Photos --app-folder Trips/Summer2026
 ```
 
-To keep a copy on the VM instead of running it from the web each time:
+To keep a copy on the VM instead of running it from the web each time (keep it in your copyparty folder, next to `docker-compose.yml`; it finds that folder by itself):
 
 ```
-curl -fsSL -o ~/move-root.sh https://raw.githubusercontent.com/frostymccool/immich/feature/copyparty-up2k-import/copyparty-immich-bridge/move-root.sh
-chmod +x ~/move-root.sh
-~/move-root.sh --data /mnt/uploads/Photos --app-folder Trips/Summer2026
+curl -fsSL -o ~/copyparty/move-copyparty-root.sh https://raw.githubusercontent.com/frostymccool/immich/feature/copyparty-up2k-import/copyparty-immich-bridge/move-copyparty-root.sh
+chmod +x ~/copyparty/move-copyparty-root.sh
+~/copyparty/move-copyparty-root.sh --data /mnt/uploads/Photos --app-folder Trips/Summer2026
 ```
 
 A saved copy checks for the latest version every time it starts, replaces itself if there is a newer one and carries on
-with that (offline, or a bad download, it just uses the copy it has; `MOVE_ROOT_NO_UPDATE=1` turns the check off).
+with that (offline, or a bad download, it just uses the copy it has; `MOVE_COPYPARTY_ROOT_NO_UPDATE=1` turns the check off).
 
 When the plan looks right, add `--apply` to the end. It then prints the upload path to set in the phone app, and how to
 undo it (`--rollback <backup folder> --apply`). If the share is a network mount (cifs/nfs), it also moves copyparty's

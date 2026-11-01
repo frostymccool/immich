@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Moves copyparty's data folder (and the bridge with it) safely.
+# move-copyparty-root.sh: moves copyparty's data folder (and the bridge with it) safely.
+# Keep a saved copy in your copyparty folder (next to docker-compose.yml): ~/copyparty/move-copyparty-root.sh
 #
-#   curl -fsSL https://raw.githubusercontent.com/frostymccool/immich/feature/copyparty-up2k-import/copyparty-immich-bridge/move-root.sh \
+#   curl -fsSL https://raw.githubusercontent.com/frostymccool/immich/feature/copyparty-up2k-import/copyparty-immich-bridge/move-copyparty-root.sh \
 #     | bash -s -- --data /mnt/uploads/Photos --app-folder Trips/Summer2026          # shows the plan, changes nothing
 #   ... | bash -s -- --data /mnt/uploads/Photos --app-folder Trips/Summer2026 --apply  # does it
-#   ... | bash -s -- --rollback ~/copyparty/backups/move-root-YYYYMMDD-HHMMSS --apply  # undoes it
+#   ... | bash -s -- --rollback ~/copyparty/backups/move-copyparty-root-YYYYMMDD-HHMMSS --apply  # undoes it
 #
 # It never moves, copies or deletes your photos/videos. YOU move the folders on the share first; this script then
 # repoints everything that refers to them: copyparty's compose file + config, the bridge, and the bridge's memory of
@@ -17,40 +18,48 @@
 # --apply             actually do it (without it you only get the plan)
 #
 # A saved copy of this file replaces itself with the latest published version before it does anything else
-# (set MOVE_ROOT_NO_UPDATE=1 to skip that). Run straight from curl, it is already the latest.
+# (set MOVE_COPYPARTY_ROOT_NO_UPDATE=1 to skip that). Run straight from curl, it is already the latest.
 set -euo pipefail
 
-SELF_URL="${MOVE_ROOT_URL:-https://raw.githubusercontent.com/frostymccool/immich/feature/copyparty-up2k-import/copyparty-immich-bridge/move-root.sh}"
+SELF_URL="${MOVE_COPYPARTY_ROOT_URL:-https://raw.githubusercontent.com/frostymccool/immich/feature/copyparty-up2k-import/copyparty-immich-bridge/move-copyparty-root.sh}"
 
-# Fetches the latest move-root.sh; if it differs from this saved copy, replaces the copy and re-runs it with the
+# Fetches the latest move-copyparty-root.sh; if it differs from this saved copy, replaces the copy and re-runs it with the
 # same arguments. Any problem (offline, an error page, a broken download) just carries on with this copy.
 self_update() {
-  [ "${MOVE_ROOT_NO_UPDATE:-0}" = 1 ] && return 0
-  [ "${MOVE_ROOT_UPDATED:-0}" = 1 ] && return 0
+  [ "${MOVE_COPYPARTY_ROOT_NO_UPDATE:-0}" = 1 ] && return 0
+  [ "${MOVE_COPYPARTY_ROOT_UPDATED:-0}" = 1 ] && return 0
   local self="${BASH_SOURCE[0]:-}"
   [ -n "$self" ] && [ -f "$self" ] || return 0   # piped from curl: this IS the latest
-  command -v curl >/dev/null 2>&1 || { echo "(curl is missing: cannot check for a newer move-root.sh)"; return 0; }
+  command -v curl >/dev/null 2>&1 || { echo "(curl is missing: cannot check for a newer move-copyparty-root.sh)"; return 0; }
   local tmp; tmp="$(mktemp)"
   if ! curl -fsSL -m 15 -o "$tmp" "$SELF_URL" 2>/dev/null || [ ! -s "$tmp" ]; then
-    echo "(could not check for a newer move-root.sh; using this copy)"; rm -f "$tmp"; return 0
+    echo "(could not check for a newer move-copyparty-root.sh; using this copy)"; rm -f "$tmp"; return 0
   fi
-  if ! head -n1 "$tmp" | grep -q '^#!/usr/bin/env bash' || ! grep -q 'move-root.sh' "$tmp" || ! bash -n "$tmp" 2>/dev/null; then
-    echo "(the downloaded move-root.sh looks wrong; using this copy)"; rm -f "$tmp"; return 0
+  if ! head -n1 "$tmp" | grep -q '^#!/usr/bin/env bash' || ! grep -q 'move-copyparty-root.sh' "$tmp" || ! bash -n "$tmp" 2>/dev/null; then
+    echo "(the downloaded move-copyparty-root.sh looks wrong; using this copy)"; rm -f "$tmp"; return 0
   fi
   if cmp -s "$tmp" "$self"; then rm -f "$tmp"; return 0; fi
-  echo "Updating move-root.sh to the latest version..."
+  echo "Updating move-copyparty-root.sh to the latest version..."
   # write a new file and move it over the old one, so this running copy is never edited while bash reads it
   if cp "$tmp" "$self.new" 2>/dev/null && chmod --reference="$self" "$self.new" 2>/dev/null && mv "$self.new" "$self" 2>/dev/null; then
     rm -f "$tmp"
-    MOVE_ROOT_UPDATED=1 exec bash "$self" "$@"
+    MOVE_COPYPARTY_ROOT_UPDATED=1 exec bash "$self" "$@"
   fi
   rm -f "$self.new"
   echo "(could not save the update next to this file; running the latest from a temporary copy)"
-  MOVE_ROOT_UPDATED=1 exec bash "$tmp" "$@"
+  MOVE_COPYPARTY_ROOT_UPDATED=1 exec bash "$tmp" "$@"
 }
 
 main() {
 self_update "$@"
+# A copy saved inside the copyparty folder (next to its compose file) uses that folder; otherwise ~/copyparty.
+HERE=""
+[ -n "${BASH_SOURCE[0]:-}" ] && HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+if [ -z "${COPYPARTY_DIR:-}" ] && [ -n "$HERE" ]; then
+  for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
+    [ -f "$HERE/$f" ] && { COPYPARTY_DIR="$HERE"; break; }
+  done
+fi
 COPYPARTY_DIR="${COPYPARTY_DIR:-$HOME/copyparty}"
 SRC_DIR="${SRC_DIR:-$HOME/immich-bridge-src}"
 CONTAINER="${CONTAINER:-copyparty}"
@@ -71,8 +80,8 @@ while [ $# -gt 0 ]; do
     --apply) APPLY=1; shift ;;
     -h|--help)
       cat <<'USAGE'
-move-root.sh --data HOST_PATH --app-folder REL [--root-sub REL] [--no-keep-history] [--apply]
-move-root.sh --rollback BACKUP_FOLDER --apply
+move-copyparty-root.sh --data HOST_PATH --app-folder REL [--root-sub REL] [--no-keep-history] [--apply]
+move-copyparty-root.sh --rollback BACKUP_FOLDER --apply
 Without --apply it only shows the plan. Your photos/videos are never moved or deleted; every edited file is backed up.
 USAGE
       exit 0 ;;
@@ -224,7 +233,7 @@ fi
 
 # --- apply ---------------------------------------------------------------------------------------
 TS="$(date +%Y%m%d-%H%M%S)"
-BACKUP="$COPYPARTY_DIR/backups/move-root-$TS"
+BACKUP="$COPYPARTY_DIR/backups/move-copyparty-root-$TS"
 mkdir -p "$BACKUP"
 cp -p "$COMPOSE" "$BACKUP/compose.bak"
 [ -n "$CONF" ] && cp -p "$CONF" "$BACKUP/conf.bak"
@@ -342,7 +351,7 @@ if curl -fsS -m 5 "http://127.0.0.1:$BRIDGE_PORT/healthz" >/dev/null 2>&1; then 
 say "Done"
 echo "Phone app: set the copyparty upload path to  $UPLOAD_PATH"
 echo "Copyparty re-indexes the new folder first; uploads pause until that finishes ('uploads temporarily blocked due to indexing' in its log)."
-echo "Undo everything:  bash move-root.sh --rollback $BACKUP --apply"
+echo "Undo everything:  bash move-copyparty-root.sh --rollback $BACKUP --apply"
 [ "$problems" = 0 ] || { echo; echo "Something above says PROBLEM: send me that output."; return 1; }
 }
 

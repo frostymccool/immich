@@ -1,4 +1,4 @@
-"""Runs move-root.sh end to end against fake docker/curl commands (no Docker needed).
+"""Runs move-copyparty-root.sh end to end against fake docker/curl commands (no Docker needed).
 
 The scenario mirrors the real move that was painful by hand: copyparty's web root was /w/<Parent> and the bridge
 watched /w/<Parent>/<App>; the folders were then moved so both sit side by side under a new data folder.
@@ -12,7 +12,7 @@ import subprocess
 
 import pytest
 
-SCRIPT = os.environ.get("MOVE_ROOT_SH") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "move-root.sh")
+SCRIPT = os.environ.get("MOVE_COPYPARTY_ROOT_SH") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "move-copyparty-root.sh")
 
 FAKE_DOCKER = r"""#!/usr/bin/env bash
 echo "docker $*" >> "$FAKE_LOG"
@@ -39,7 +39,7 @@ exit 0
 FAKE_CURL = r"""#!/usr/bin/env bash
 echo "curl $*" >> "$FAKE_LOG"
 case "$*" in
-  *move-root.sh*)
+  *move-copyparty-root.sh*)
     [ -n "${FAKE_OFFLINE:-}" ] && exit 22
     out=""; prev=""; for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
     [ -n "$out" ] && [ -n "${FAKE_REMOTE:-}" ] && cp "$FAKE_REMOTE" "$out"
@@ -136,7 +136,7 @@ def test_apply_repoints_everything_and_backs_up(box):
     conf = box.conf.read_text()
     assert "\n  /w   # share this folder as the web root\n" in conf and "/w/Australia" not in conf
     assert "pics: secret-password" in conf and "rw: *" in conf  # the rest of the config is untouched
-    backups = list((box.home / "copyparty" / "backups").glob("move-root-*"))
+    backups = list((box.home / "copyparty" / "backups").glob("move-copyparty-root-*"))
     assert len(backups) == 1
     assert str(box.old) in (backups[0] / "compose.bak").read_text() and "/w/Australia" in (backups[0] / "conf.bak").read_text()
     calls = box.calls()
@@ -194,7 +194,7 @@ def test_rollback_restores_the_files(box):
     original = (box.compose.read_text(), box.conf.read_text())
     assert box.run(*args(box), "--apply").returncode == 0
     assert box.compose.read_text() != original[0]
-    backup = next((box.home / "copyparty" / "backups").glob("move-root-*"))
+    backup = next((box.home / "copyparty" / "backups").glob("move-copyparty-root-*"))
     r = box.run("--rollback", str(backup), "--apply")
     assert r.returncode == 0, r.stdout + r.stderr
     assert (box.compose.read_text(), box.conf.read_text()) == original
@@ -219,7 +219,7 @@ def test_app_folder_outside_the_web_root_is_refused(box):
 
 @pytest.fixture
 def saved_copy(box, tmp_path):
-    local = tmp_path / "saved" / "move-root.sh"
+    local = tmp_path / "saved" / "move-copyparty-root.sh"
     local.parent.mkdir()
     local.write_text(open(SCRIPT).read() + "\n# OLD-LOCAL-COPY-MARKER\n")
     local.chmod(0o755)
@@ -229,14 +229,14 @@ def saved_copy(box, tmp_path):
 def test_saved_copy_replaces_itself_with_the_latest_then_runs_it(box, saved_copy):
     r = box.run(*args(box), script=str(saved_copy), env={"FAKE_REMOTE": SCRIPT})
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "Updating move-root.sh to the latest version" in r.stdout
+    assert "Updating move-copyparty-root.sh to the latest version" in r.stdout
     assert "OLD-LOCAL-COPY-MARKER" not in saved_copy.read_text()
     assert os.access(saved_copy, os.X_OK)
     assert "dry run" in r.stdout and "Nothing was changed" in r.stdout  # and the new copy did the actual job
 
 
 def test_up_to_date_copy_does_not_restart(box, tmp_path):
-    local = tmp_path / "saved" / "move-root.sh"
+    local = tmp_path / "saved" / "move-copyparty-root.sh"
     local.parent.mkdir()
     shutil.copy(SCRIPT, local)
     r = box.run(*args(box), script=str(local), env={"FAKE_REMOTE": SCRIPT})
@@ -246,7 +246,7 @@ def test_up_to_date_copy_does_not_restart(box, tmp_path):
 def test_offline_carries_on_with_the_saved_copy(box, saved_copy):
     r = box.run(*args(box), script=str(saved_copy), env={"FAKE_OFFLINE": "1"})
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "could not check for a newer move-root.sh" in r.stdout and "Nothing was changed" in r.stdout
+    assert "could not check for a newer move-copyparty-root.sh" in r.stdout and "Nothing was changed" in r.stdout
     assert "OLD-LOCAL-COPY-MARKER" in saved_copy.read_text()
 
 
@@ -257,13 +257,13 @@ def test_a_broken_download_is_never_installed(box, saved_copy, tmp_path):
     assert r.returncode == 0 and "looks wrong" in r.stdout
     assert "OLD-LOCAL-COPY-MARKER" in saved_copy.read_text()
     broken = tmp_path / "broken.sh"
-    broken.write_text("#!/usr/bin/env bash\n# move-root.sh\nif then fi (\n")
+    broken.write_text("#!/usr/bin/env bash\n# move-copyparty-root.sh\nif then fi (\n")
     r = box.run(*args(box), script=str(saved_copy), env={"FAKE_REMOTE": str(broken)})
     assert r.returncode == 0 and "looks wrong" in r.stdout
 
 
 def test_update_can_be_switched_off(box, saved_copy):
-    r = box.run(*args(box), script=str(saved_copy), env={"FAKE_REMOTE": SCRIPT, "MOVE_ROOT_NO_UPDATE": "1"})
+    r = box.run(*args(box), script=str(saved_copy), env={"FAKE_REMOTE": SCRIPT, "MOVE_COPYPARTY_ROOT_NO_UPDATE": "1"})
     assert r.returncode == 0 and "Updating" not in r.stdout
     assert "OLD-LOCAL-COPY-MARKER" in saved_copy.read_text()
 
@@ -275,3 +275,13 @@ def test_piped_from_curl_does_not_update(box):
         r = subprocess.run(["bash", "-s", "--", *args(box)], env=full, stdin=fh, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "Updating" not in r.stdout and "could not check" not in r.stdout
+
+
+def test_a_copy_saved_in_the_copyparty_folder_uses_that_folder(box, tmp_path):
+    other_home = tmp_path / "elsewhere"
+    other_home.mkdir()
+    saved = box.home / "copyparty" / "move-copyparty-root.sh"
+    shutil.copy(SCRIPT, saved)
+    r = box.run(*args(box), script=str(saved), env={"HOME": str(other_home)})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "dry run" in r.stdout and "/w/Australia  ->  /w" in r.stdout
