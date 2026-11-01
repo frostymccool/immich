@@ -161,6 +161,9 @@ else
   git -C "$SRC_DIR" sparse-checkout set copyparty-immich-bridge
 fi
 BRIDGE_DIR="$SRC_DIR/copyparty-immich-bridge"
+# which commit this is, shown in the bridge page header (so "what am I running?" has an answer)
+BUILD_ID="$(git -C "$SRC_DIR" log -1 --format='%h %cd' --date=short 2>/dev/null | tr -d '"' || true)"
+[ -n "$BUILD_ID" ] || BUILD_ID="unknown"
 [ -f "$BRIDGE_DIR/Dockerfile" ] || die "bridge sources missing in $BRIDGE_DIR"
 
 # --- Immich API key --------------------------------------------------------------
@@ -242,6 +245,7 @@ EOF
       WATCH_DIRS: $WATCH
 $PRIORITY_LINE
       BROWSE_ROOTS: $MOUNT_DEST
+      BRIDGE_BUILD: "$BUILD_ID"
     volumes:
       - $MOUNT_SRC:$MOUNT_DEST:$MOUNT_MODE
       - bridge-state:/data

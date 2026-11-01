@@ -79,6 +79,7 @@ class Config:
     workers: int = 1
     upload_timeout: int = 1800
     log_level: str = "INFO"
+    build: str = ""  # commit + date of the installed source, set by the installer (BRIDGE_BUILD)
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "Config":
@@ -167,6 +168,7 @@ class Config:
             workers=_int("WORKERS", 1, minimum=1),
             upload_timeout=_int("UPLOAD_TIMEOUT", 1800, minimum=60),
             log_level=e.get("LOG_LEVEL", "INFO").strip().upper() or "INFO",
+            build=e.get("BRIDGE_BUILD", "").strip()[:60],
         )
 
     def map_hook_path(self, ap: str) -> str:

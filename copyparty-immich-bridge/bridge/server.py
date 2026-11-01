@@ -128,6 +128,7 @@ def make_handler(
                 "overridden": settings.overridden(),
                 "readonly": {
                     "version": __version__,
+                    "build": cfg.build,
                     "immich_url": cfg.immich_url,
                     "api_key_set": bool(cfg.api_key),
                     "bind_port": cfg.bind_port,
@@ -153,7 +154,7 @@ def make_handler(
             if route in ("/", "/ui", "/index.html"):
                 self._send_bytes(200, _load_ui(), "text/html; charset=utf-8")
             elif route == "/healthz":
-                self._send_json(200, {"ok": True, "version": __version__})
+                self._send_json(200, {"ok": True, "version": __version__, "build": cfg.build})
             elif route == "/status":
                 recent = [
                     {

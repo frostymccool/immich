@@ -30,6 +30,7 @@ exit 0
 FAKE_GIT = """#!/usr/bin/env bash
 echo "git $*" >> "$FAKE_LOG"
 if [ "$1" = clone ]; then dir="${@: -1}"; mkdir -p "$dir/.git" "$dir/copyparty-immich-bridge/hook"; touch "$dir/copyparty-immich-bridge/Dockerfile"; fi
+case " $* " in *" log "*) [ -z "${FAKE_NO_GIT_LOG:-}" ] && echo "e4d5866 2026-11-01";; esac
 exit 0
 """
 FAKE_CURL = '#!/usr/bin/env bash\necho "curl $*" >> "$FAKE_LOG"\ncase "$*" in *api-keys/me*) printf \'%s\' "${FAKE_KEY_JSON:-}";; esac\nexit 0\n'
@@ -188,3 +189,15 @@ def test_a_key_with_all_or_the_album_permissions_gets_no_note(box):
         r = box.run(env={"APP_FOLDER": "Work", "FAKE_KEY_JSON": perms})
         assert r.returncode == 0, r.stdout + r.stderr
         assert "lacks album permissions" not in r.stdout, perms
+
+
+def test_override_records_which_commit_was_installed(box):
+    r = box.run(env={"APP_FOLDER": "Trips/Summer2026"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert 'BRIDGE_BUILD: "e4d5866 2026-11-01"' in box.override.read_text()
+
+
+def test_unknown_commit_is_recorded_as_unknown_not_empty(box):
+    r = box.run(env={"APP_FOLDER": "Trips/Summer2026", "FAKE_NO_GIT_LOG": "1"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert 'BRIDGE_BUILD: "unknown"' in box.override.read_text()

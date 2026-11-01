@@ -456,7 +456,7 @@
   }
   function pollHealth() {
     return fetch('/healthz').then(function (r) { return r.json(); }).then(function (h) {
-      $('dot').className = 'dot up'; $('ver').textContent = 'v' + h.version;
+      $('dot').className = 'dot up'; $('ver').textContent = 'v' + h.version + (h.build ? ' · ' + h.build : '');
     }).catch(function () { $('dot').className = 'dot down'; });
   }
   $('scan').onclick = function () {

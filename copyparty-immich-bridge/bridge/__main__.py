@@ -54,7 +54,7 @@ def main() -> int:
     # handler takes everything; the root logger's level still decides what exists.
     logs = RingLogHandler()
     logging.getLogger().addHandler(logs)
-    log.info("copyparty-immich-bridge %s starting", __version__)
+    log.info("copyparty-immich-bridge %s (build %s) starting", __version__, cfg.build or "unknown")
     log.info("watching %s -> %s", cfg.watch_dirs, cfg.immich_url)
 
     state = StateStore(cfg.state_db)

@@ -332,3 +332,19 @@ def test_reimport_endpoint_needs_the_token_and_an_explicit_confirm(app):
     assert call(base, "POST", "/api/account/ack", {}, token=None)[0] == 401
     assert call(base, "POST", "/api/account/ack", {})[0] == 200
     assert call(base, "GET", "/api/config")[1]["readonly"]["account_change"] is None
+
+
+def test_healthz_and_config_report_the_installed_build(app):
+    make, _ = app
+    base, httpd, cfg, *_ = make()
+    cfg.build = "e4d5866 2026-11-01"
+    assert call(base, "GET", "/healthz", token=None)[1]["build"] == "e4d5866 2026-11-01"
+    assert call(base, "GET", "/api/config")[1]["readonly"]["build"] == "e4d5866 2026-11-01"
+
+
+def test_build_comes_from_the_environment(monkeypatch):
+    monkeypatch.setenv("IMMICH_URL", "http://immich:2283")
+    monkeypatch.setenv("IMMICH_API_KEY", "k")
+    monkeypatch.setenv("WATCH_DIRS", "/w")
+    monkeypatch.setenv("BRIDGE_BUILD", "abc1234 2026-11-01")
+    assert Config.from_env().build == "abc1234 2026-11-01"
