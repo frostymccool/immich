@@ -93,6 +93,17 @@ curl -fsSL https://raw.githubusercontent.com/frostymccool/immich/feature/copypar
   | bash -s -- --data /mnt/uploads/Photos --app-folder Trips/Summer2026
 ```
 
+To keep a copy on the VM instead of running it from the web each time:
+
+```
+curl -fsSL -o ~/move-root.sh https://raw.githubusercontent.com/frostymccool/immich/feature/copyparty-up2k-import/copyparty-immich-bridge/move-root.sh
+chmod +x ~/move-root.sh
+~/move-root.sh --data /mnt/uploads/Photos --app-folder Trips/Summer2026
+```
+
+A saved copy checks for the latest version every time it starts, replaces itself if there is a newer one and carries on
+with that (offline, or a bad download, it just uses the copy it has; `MOVE_ROOT_NO_UPDATE=1` turns the check off).
+
 When the plan looks right, add `--apply` to the end. It then prints the upload path to set in the phone app, and how to
 undo it (`--rollback <backup folder> --apply`). If the share is a network mount (cifs/nfs), it also moves copyparty's
 index database onto the VM's own disk, because sqlite cannot lock files on those shares (copyparty then shows

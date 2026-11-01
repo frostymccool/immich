@@ -36,7 +36,17 @@ case "$*" in
 esac
 exit 0
 """
-FAKE_CURL = '#!/usr/bin/env bash\necho "curl $*" >> "$FAKE_LOG"\nexit 0\n'
+FAKE_CURL = r"""#!/usr/bin/env bash
+echo "curl $*" >> "$FAKE_LOG"
+case "$*" in
+  *move-root.sh*)
+    [ -n "${FAKE_OFFLINE:-}" ] && exit 22
+    out=""; prev=""; for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    [ -n "$out" ] && [ -n "${FAKE_REMOTE:-}" ] && cp "$FAKE_REMOTE" "$out"
+    exit 0;;
+esac
+exit 0
+"""
 
 COMPOSE = """services:
   copyparty:
@@ -90,11 +100,11 @@ def box(tmp_path):
         (bin_dir / name).write_text(body)
         (bin_dir / name).chmod((bin_dir / name).stat().st_mode | stat.S_IEXEC)
 
-    def run(*args, env=None):
+    def run(*args, env=None, script=None):
         full = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", HOME=str(home), FAKE_HOME=str(home),
                     FAKE_LOG=str(tmp_path / "calls.log"), FAKE_OLD_DATA=str(old), FAKE_STATE_DIR=str(state))
         full.update(env or {})
-        return subprocess.run(["bash", SCRIPT, *args], env=full, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+        return subprocess.run(["bash", script or SCRIPT, *args], env=full, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
 
     b = type("Box", (), {})()
     b.run, b.home, b.old, b.new, b.state, b.tmp = run, home, old, new, state, tmp_path
@@ -202,3 +212,66 @@ def test_web_root_subfolder_changes_the_phone_upload_path(box):
 def test_app_folder_outside_the_web_root_is_refused(box):
     r = box.run("--data", str(box.new), "--app-folder", "Asia2026", "--root-sub", "Australia")
     assert r.returncode != 0 and "outside copyparty's web root" in r.stderr
+
+
+# --- the saved copy updates itself before it does anything --------------------------------------------------
+
+
+@pytest.fixture
+def saved_copy(box, tmp_path):
+    local = tmp_path / "saved" / "move-root.sh"
+    local.parent.mkdir()
+    local.write_text(open(SCRIPT).read() + "\n# OLD-LOCAL-COPY-MARKER\n")
+    local.chmod(0o755)
+    return local
+
+
+def test_saved_copy_replaces_itself_with_the_latest_then_runs_it(box, saved_copy):
+    r = box.run(*args(box), script=str(saved_copy), env={"FAKE_REMOTE": SCRIPT})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Updating move-root.sh to the latest version" in r.stdout
+    assert "OLD-LOCAL-COPY-MARKER" not in saved_copy.read_text()
+    assert os.access(saved_copy, os.X_OK)
+    assert "dry run" in r.stdout and "Nothing was changed" in r.stdout  # and the new copy did the actual job
+
+
+def test_up_to_date_copy_does_not_restart(box, tmp_path):
+    local = tmp_path / "saved" / "move-root.sh"
+    local.parent.mkdir()
+    shutil.copy(SCRIPT, local)
+    r = box.run(*args(box), script=str(local), env={"FAKE_REMOTE": SCRIPT})
+    assert r.returncode == 0 and "Updating" not in r.stdout
+
+
+def test_offline_carries_on_with_the_saved_copy(box, saved_copy):
+    r = box.run(*args(box), script=str(saved_copy), env={"FAKE_OFFLINE": "1"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "could not check for a newer move-root.sh" in r.stdout and "Nothing was changed" in r.stdout
+    assert "OLD-LOCAL-COPY-MARKER" in saved_copy.read_text()
+
+
+def test_a_broken_download_is_never_installed(box, saved_copy, tmp_path):
+    bad = tmp_path / "bad.html"
+    bad.write_text("<html>404: Not Found</html>")
+    r = box.run(*args(box), script=str(saved_copy), env={"FAKE_REMOTE": str(bad)})
+    assert r.returncode == 0 and "looks wrong" in r.stdout
+    assert "OLD-LOCAL-COPY-MARKER" in saved_copy.read_text()
+    broken = tmp_path / "broken.sh"
+    broken.write_text("#!/usr/bin/env bash\n# move-root.sh\nif then fi (\n")
+    r = box.run(*args(box), script=str(saved_copy), env={"FAKE_REMOTE": str(broken)})
+    assert r.returncode == 0 and "looks wrong" in r.stdout
+
+
+def test_update_can_be_switched_off(box, saved_copy):
+    r = box.run(*args(box), script=str(saved_copy), env={"FAKE_REMOTE": SCRIPT, "MOVE_ROOT_NO_UPDATE": "1"})
+    assert r.returncode == 0 and "Updating" not in r.stdout
+    assert "OLD-LOCAL-COPY-MARKER" in saved_copy.read_text()
+
+
+def test_piped_from_curl_does_not_update(box):
+    with open(SCRIPT) as fh:
+        full = dict(os.environ, PATH=f"{box.tmp / 'bin'}:{os.environ['PATH']}", HOME=str(box.home), FAKE_HOME=str(box.home),
+                    FAKE_LOG=str(box.tmp / "calls.log"), FAKE_OLD_DATA=str(box.old), FAKE_STATE_DIR=str(box.state), FAKE_REMOTE=SCRIPT)
+        r = subprocess.run(["bash", "-s", "--", *args(box)], env=full, stdin=fh, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Updating" not in r.stdout and "could not check" not in r.stdout
