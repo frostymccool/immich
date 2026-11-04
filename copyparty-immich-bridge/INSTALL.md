@@ -110,10 +110,86 @@ index database onto the VM's own disk, because sqlite cannot lock files on those
 `database is locked` and switches its upload index off). After a move copyparty re-indexes the folder, and uploads pause
 until that finishes.
 
+## More than one person (several Immich accounts)
+
+One bridge can import for several people, each into **their own Immich account**. Nothing changes for a
+single-person install: with nobody added, the bridge behaves exactly as before.
+
+**1. Give each person their own Immich account and API key.** In Immich: create the user, log in as them,
+Account Settings → API Keys → new key ("all permissions" is simplest; without album permissions imports still work
+but folder albums do not). Two people can never share one Immich account (the bridge refuses it).
+
+**2. Decide where their files live.** Either one copyparty with a folder per person (`/w/alex`, `/w/sam`), or a
+second copyparty container with its own data folder:
+
+```
+curl -fsSL https://raw.githubusercontent.com/frostymccool/immich/feature/copyparty-up2k-import/copyparty-immich-bridge/install.sh | EXTRA_COPYPARTY=copyparty-sam bash
+```
+
+That mounts the second copyparty's data folder into the bridge at `/cp/copyparty-sam` (read-only unless
+`WRITABLE=1`; several: `EXTRA_COPYPARTY=a,b`; a container with several data mounts: `a=/host/folder`;
+`EXTRA_COPYPARTY=none` forgets them). Re-runs and `update-bridge.sh` remember the list. It refuses two copyparty
+containers whose data folders are the same or nested (one file would have two owners). For *instant* import from
+the second copyparty its own compose file needs the hook too; the installer prints the exact lines
+(`IMMICH_BRIDGE_SOURCE` names that container so its paths are translated correctly; the printed block holds the
+token, so keep that compose file private). It never edits another compose
+project. Without the hook the periodic scan still imports everything, up to 15 minutes later.
+
+**3. Add the person on the settings page → People tab.** Name, their API key (press *Test key* to see which Immich
+account it is), their folder(s) (*Choose folder…*), optionally their copyparty login. They start **paused**.
+
+**4. Press *Review & start*.** It shows how many files in their folder were already imported into somebody else's
+account (typically the main one, from before this person existed) and says what will happen: those import records
+are handed over, the files are imported again into *their* account, and the copies already in the other account
+stay where they are (the bridge never deletes in Immich). Confirm and they start.
+
+**Who gets a file?** The person whose folder it is in (the most specific folder wins). A file in the *shared* area
+(the main account's folders) goes to the person whose copyparty login uploaded it, if you entered that login;
+otherwise it stays with the main account. A login never pulls a file out of somebody else's folder, and a file
+that is in nobody's folder is *not imported* and is listed on the People tab so it is not silent.
+
+**Moving the files you already have.** Old files carry no record of who uploaded them, so the bridge cannot sort
+them by login. Move them into each person's folder yourself (copyparty or the file manager), then press *Review &
+start* (or *Re-check files*) on that person.
+
+**Header switcher.** With two or more people a selector appears at the top: *Everyone* (totals) or one person
+(their status, recent files, albums, pause, re-import). The *Folders & settings* tab still holds the shared
+settings and the main account's folders.
+
+**Removing a person** (People → Remove…, type their id): the bridge stops importing for them and forgets its own
+records for them; their folders go on a "Folders nobody imports" list so their files do **not** quietly flow into
+the main account. Nothing is deleted in Immich or on disk. *Give back to the main account* undoes the ignore.
+
+**Folders changed?** Changing a person's folders pauses them again until you press *Review & start*, and a folder
+taken away from them goes on the "Folders nobody imports" list (so it does not drop into the main account).
+*Resume* refuses while files in their folders were already imported by somebody else: use *Review & start*.
+
+**Pause.** With *Everyone* selected the header button pauses/resumes everybody; with a person selected, only them.
+
+**Held people.** A person is shown as *held* when two people resolve to the same Immich account, or while the
+bridge cannot yet reach Immich to confirm whose key it is. Fix the key (Edit) or wait; nothing is imported into a
+wrong account meanwhile.
+
+**Good to know**
+- One admin token manages everybody (there are no per-person logins to the page). Anyone with the token can see
+  every person's file names and replace their API key; keys can never be read back out.
+- Keys are stored in `/data/users.json` on the state volume (plaintext, mode 600, like `immich-bridge.env`). Back
+  that file up with the state volume. Uninstalling keeps that volume; `docker volume rm copyparty_bridge-state`
+  removes the keys too. If it ever cannot be read the bridge **refuses to start** rather than guess.
+- With several people `/hook` needs the token (the installer always sets one); the open `/status` the phone reads
+  shows totals and no file names.
+- Each person has their own import workers (`WORKERS`, default 1, per person), so uploads run side by side.
+- With several people, symbolic links are not followed out of a person's folder (so nobody can link to somebody
+  else's photos).
+- Not covered: per-person tokens, per-person post-import action / sweep interval, moving files on disk for you.
+- Tested with fake Docker and a fake Immich only; the cross-container hook path (second copyparty → bridge) needs
+  a manual check: upload a file as the second copyparty's user and watch the bridge log for `queued (hook)`.
+
 ## Update, remove, options
 
 | Want | Do |
 |------|----|
+| (how options work) | every option below is an environment variable placed between the `|` and `bash`, e.g. `… install.sh \| WIDE=1 bash`. In front of `curl` it would be silently ignored |
 | Update to the latest | run `~/copyparty/update-bridge.sh` (saved there by the installer; it first makes sure it is itself the latest, then runs the latest installer, which reuses your key, token and folders). `--check` only says whether a newer version exists. Running the install command again does the same |
 | Uninstall | same command ending `\| bash -s -- --uninstall` |
 | Choose the app folder without being asked | prefix `APP_FOLDER=Trips/Other` (`APP_FOLDER=.` = everything); `BASE_FOLDER=Trips` overrides what `WIDE=1` watches |
@@ -122,6 +198,7 @@ until that finishes.
 | Change the port | prefix `BRIDGE_PORT=9000` |
 | Non-default paths | `COPYPARTY_DIR=/path` `CONTAINER=name` `IMMICH_URL=http://host:2283` |
 | Key without a prompt | prefix `IMMICH_API_KEY=xxxx` |
+| More copyparty containers | prefix `EXTRA_COPYPARTY=name` (see "More than one person"). If a remembered one is later removed, updates just drop it with a note |
 
 If something fails it stops with a plain message (and the bridge log) before changing your
 setup further. Logs afterwards: `docker logs immich-bridge`.

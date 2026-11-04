@@ -17,6 +17,10 @@ The bridge URL comes from the IMMICH_BRIDGE_URL environment variable set on
 the copyparty container (e.g. http://immich-bridge:8099). If the bridge has a
 BRIDGE_TOKEN, set the same value as IMMICH_BRIDGE_TOKEN on the copyparty container. Delivery is
 best-effort: the bridge's periodic sweep catches anything missed here.
+
+Several copyparty containers: set IMMICH_BRIDGE_SOURCE to a short name (e.g. cp2) on each EXTRA container. The
+bridge then translates that container's paths with the matching SOURCE_MAPS entry. copyparty's own JSON already
+carries the uploader's login in "user"; the bridge uses it to pick the person.
 """
 
 import json
@@ -41,6 +45,12 @@ def main() -> int:
     except json.JSONDecodeError as ex:
         print(f"immich_bridge_hook: bad payload: {ex}", file=sys.stderr)
         return 0
+
+    source = os.environ.get("IMMICH_BRIDGE_SOURCE", "").strip()
+    if source:
+        for item in payload if isinstance(payload, list) else [payload]:
+            if isinstance(item, dict):
+                item["bridge_source"] = source
 
     body = json.dumps(payload).encode()
     headers = {"Content-Type": "application/json"}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import sys
 import threading
@@ -12,10 +13,12 @@ from bridge import __version__
 from bridge.config import Config, ConfigError
 from bridge.immich import DEFAULT_EXTENSIONS, ImmichClient, ImmichError
 from bridge.logbuffer import RingLogHandler
+from bridge.manager import UserManager
+from bridge.router import Router
 from bridge.server import serve
 from bridge.settings import SettingsStore
 from bridge.state import StateStore
-from bridge.worker import ImportWorker
+from bridge.users import UsersError, UsersStore
 
 log = logging.getLogger("bridge")
 
@@ -57,6 +60,18 @@ def main() -> int:
     log.info("copyparty-immich-bridge %s (build %s) starting", __version__, cfg.build or "unknown")
     log.info("watching %s -> %s", cfg.watch_dirs, cfg.immich_url)
 
+    # The other people (empty/absent file = the single-user install this has always been). An unreadable file
+    # stops the start on purpose: guessing "no users" would pour everybody's files into the main account.
+    data_dir = os.path.dirname(cfg.state_db) or "."
+    users = UsersStore(cfg.users_file or os.path.join(data_dir, "users.json"), cfg.browse_roots)
+    try:
+        users.load()
+    except UsersError as ex:
+        print(f"users file error: {ex}", file=sys.stderr)
+        return 2
+    if users.users() and not cfg.token:
+        log.error("several users are configured but BRIDGE_TOKEN is not set: /hook is refused until it is")
+
     state = StateStore(cfg.state_db)
     client = ImmichClient(cfg.immich_url, cfg.api_key, cfg.device_id, verify_tls=cfg.verify_tls, upload_timeout=cfg.upload_timeout)
     allowed = resolve_extensions(cfg, client)
@@ -72,14 +87,18 @@ def main() -> int:
     else:
         log.warning("BRIDGE_TOKEN is not set: the settings web page is switched off; /hook is unauthenticated")
 
-    worker = ImportWorker(cfg, state, client, allowed)
-    worker.start()
-    threading.Thread(target=lambda: (worker.refresh_identity(), worker.check_album_permission()), name="immich-checks", daemon=True).start()
+    router = Router(lambda: cfg.watch_dirs, users, claims_db=os.path.join(data_dir, "router.db"))
+    manager = UserManager(cfg, users, router, allowed)
+    worker = manager.start_main(state, client).worker
+    manager.start_all()
+    threading.Thread(target=manager.check_identities, name="immich-checks", daemon=True).start()
+    for u in users.users():
+        log.info("user %s: %s (%s)", u.id, ", ".join(u.folders), "paused" if u.paused else "running")
 
     def sweep_loop() -> None:
         while not stop_event.is_set():
             try:
-                worker.sweep()
+                manager.sweep_all()
             except Exception:
                 log.exception("sweep failed")
             # interval 0 = no periodic sweep: only wake on "scan now" / a settings change
@@ -90,19 +109,21 @@ def main() -> int:
 
     if cfg.paused:
         log.warning("imports are PAUSED (saved setting) - press Resume on the web page to continue")
-    httpd = serve(cfg, state, worker, settings, logs, scan_now=wake_sweep.set)
+    httpd = serve(cfg, state, worker, settings, logs, scan_now=wake_sweep.set, manager=manager)
 
     def shutdown(signum, frame) -> None:
         log.info("signal %d — shutting down", signum)
         stop_event.set()
         wake_sweep.set()
-        worker.stop()
+        manager.stop_all()
         threading.Thread(target=httpd.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
 
     httpd.serve_forever()
+    manager.close_all()
+    router.close()
     state.close()
     client.close()
     log.info("bye")

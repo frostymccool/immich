@@ -43,6 +43,13 @@ class Config:
     # where the same volume is mounted in THIS container. Empty = identical.
     path_map: list[tuple[str, str]] = field(default_factory=list)
 
+    # Per extra copyparty container: hook "source" name -> (path prefix inside THAT container, where this
+    # container mounts it). Needed because two copyparty containers can both call their volume /w.
+    source_maps: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
+
+    # Where the other people are stored (their API keys live here: keep it on the state volume).
+    users_file: str = ""
+
     sweep_interval: int = 900
     min_file_age: int = 30
     max_attempts: int = 5
@@ -124,6 +131,18 @@ class Config:
                     raise ConfigError(f"PATH_MAP entry {pair!r} has an empty side")
                 path_map.append((src, dst))
 
+        source_maps: dict[str, list[tuple[str, str]]] = {}
+        raw_sm = e.get("SOURCE_MAPS", "").strip()
+        for entry in [x.strip() for x in raw_sm.split(",") if x.strip()]:
+            # name|/inside-copyparty=/inside-bridge
+            if "|" not in entry or "=" not in entry.split("|", 1)[1]:
+                raise ConfigError(f"SOURCE_MAPS entry {entry!r} must look like name|/copyparty/prefix=/bridge/prefix")
+            name, pair = entry.split("|", 1)
+            src, dst = (x.strip().rstrip("/") for x in pair.split("=", 1))
+            if not name.strip() or not src or not dst:
+                raise ConfigError(f"SOURCE_MAPS entry {entry!r} has an empty part")
+            source_maps.setdefault(name.strip(), []).append((src, dst))
+
         action = e.get("POST_IMPORT_ACTION", "keep").strip().lower()
         if action not in VALID_POST_IMPORT_ACTIONS:
             raise ConfigError(f"POST_IMPORT_ACTION must be one of {VALID_POST_IMPORT_ACTIONS}, got {action!r}")
@@ -149,6 +168,8 @@ class Config:
             watch_dirs=watch_dirs,
             priority_dirs=priority_dirs,
             path_map=path_map,
+            source_maps=source_maps,
+            users_file=e.get("USERS_FILE", "").strip(),
             sweep_interval=_int("SWEEP_INTERVAL_SECONDS", 900),
             min_file_age=_int("MIN_FILE_AGE_SECONDS", 30),
             max_attempts=_int("MAX_ATTEMPTS", 5, minimum=1),
@@ -170,6 +191,16 @@ class Config:
             log_level=e.get("LOG_LEVEL", "INFO").strip().upper() or "INFO",
             build=e.get("BRIDGE_BUILD", "").strip()[:60],
         )
+
+    def map_source_path(self, source: str, ap: str) -> str | None:
+        """Path translation for a hook from a named extra copyparty; None when that source is unknown."""
+        maps = self.source_maps.get(source)
+        if maps is None:
+            return None
+        for src, dst in maps:
+            if ap == src or ap.startswith(src + "/"):
+                return dst + ap[len(src):]
+        return ap
 
     def map_hook_path(self, ap: str) -> str:
         """Translates a copyparty-container absolute path to a local path."""

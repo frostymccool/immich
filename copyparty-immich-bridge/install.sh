@@ -7,6 +7,8 @@
 # It never edits your docker-compose.yml: everything goes in a separate
 # docker-compose.override.yml next to it (delete that file to undo it all).
 # Remove the bridge:  ... | bash -s -- --uninstall
+# Options are environment variables and go in front of `bash` (NOT in front of curl), for example:
+#   curl -fsSL <url> | EXTRA_COPYPARTY=copyparty-2 APP_FOLDER=Trips/Summer2026 bash
 set -euo pipefail
 
 # Everything lives in main() so that, when piped from curl, bash has read the whole
@@ -27,8 +29,13 @@ WIDE="${WIDE:-0}"
 WRITABLE="${WRITABLE:-0}"   # 1 = mount the data read-write so the page can enable move/delete after import
 HOOK="${HOOK:-1}"
 BRIDGE_PORT="${BRIDGE_PORT:-8099}"
+# More copyparty containers whose data folders the bridge should also see (read-only unless WRITABLE=1), as a
+# comma list of container names, e.g. EXTRA_COPYPARTY=copyparty-alex,copyparty-kids . If a container has several
+# data mounts, pick one with name=/host/folder. Remembered by re-runs; EXTRA_COPYPARTY=none forgets them.
+EXTRA_COPYPARTY="${EXTRA_COPYPARTY:-}"
 
 MARKER="# managed by the immich-bridge installer"
+SWEEP_NOTE="15 minutes"
 OVERRIDE="$COPYPARTY_DIR/docker-compose.override.yml"
 ENVFILE="$COPYPARTY_DIR/immich-bridge.env"
 HOOKENV="$COPYPARTY_DIR/immich-bridge-hook.env"   # only the web-page token, for copyparty's hook
@@ -54,7 +61,8 @@ if [ "${1:-}" = "--uninstall" ]; then
     rm -f "$OVERRIDE" "$ENVFILE" "$HOOKENV" "$COPYPARTY_DIR/update-bridge.sh"
     dc up -d --remove-orphans
     echo "Done. Bridge removed; copyparty restarted without the hook."
-    echo "(Its small state volume is kept; 'docker volume rm copyparty_bridge-state' deletes it.)"
+    echo "(Its state volume is kept; it holds the import records and every person's Immich API key (users.json, plaintext)."
+    echo " 'docker volume rm copyparty_bridge-state' deletes it - do that if you want the keys gone.)"
   else
     echo "Nothing to remove: no installer-managed override at $OVERRIDE"
   fi
@@ -76,7 +84,7 @@ MOUNT_SRC="" MOUNT_DEST=""
 mapfile -t MOUNTS < <(docker inspect -f '{{range .Mounts}}{{.Type}}|{{.Source}}|{{.Destination}}{{"\n"}}{{end}}' "$CONTAINER")
 PREV_ROOT=""
 if [ -f "$OVERRIDE" ] && grep -qF "$MARKER" "$OVERRIDE"; then
-  PREV_ROOT="$(sed -n 's/^[[:space:]]*BROWSE_ROOTS:[[:space:]]*//p' "$OVERRIDE" | head -n1)"
+  PREV_ROOT="$(sed -n 's/^[[:space:]]*BROWSE_ROOTS:[[:space:]]*//p' "$OVERRIDE" | head -n1 | cut -d, -f1)"
 fi
 for pass in prev auto; do
   for m in "${MOUNTS[@]}"; do
@@ -151,6 +159,70 @@ if [ "$APP_FOLDER" != "." ]; then
 fi
 if [ "$WRITABLE" = "1" ]; then MOUNT_MODE=rw; else MOUNT_MODE=ro; fi
 
+# --- more copyparty containers (optional) ---------------------------------------------
+# Each one's data folder is mounted at /cp/<name>. Two copyparty containers can both call their volume /w, so the
+# bridge is told how to translate each one's hook paths (SOURCE_MAPS, matched by the IMMICH_BRIDGE_SOURCE name).
+EXTRA_FROM_OVERRIDE=0
+if [ -z "$EXTRA_COPYPARTY" ] && [ -f "$OVERRIDE" ] && grep -qF "$MARKER" "$OVERRIDE"; then
+  EXTRA_COPYPARTY="$(sed -n 's/^# EXTRA_COPYPARTY:[[:space:]]*//p' "$OVERRIDE" | head -n1)"
+  EXTRA_FROM_OVERRIDE=1
+fi
+[ "$EXTRA_COPYPARTY" != "none" ] || EXTRA_COPYPARTY=""
+EXTRA_REMEMBERED="$EXTRA_FROM_OVERRIDE"   # 1 = the list came from the previous install, not from this command
+case "$EXTRA_COPYPARTY" in *[[:cntrl:]]*) die "EXTRA_COPYPARTY contains control characters" ;; esac
+EXTRA_VOLUMES="" EXTRA_MAPS="" EXTRA_ROOTS="$MOUNT_DEST" EXTRA_NAMES=() EXTRA_DESTS=()
+SEEN_SRCS=("$(readlink -f "$MOUNT_SRC" 2>/dev/null || echo "$MOUNT_SRC")")
+EXTRA_LIST=()
+[ -z "$EXTRA_COPYPARTY" ] || IFS=',' read -r -a EXTRA_LIST <<<"$EXTRA_COPYPARTY"
+EXTRA_KEPT=() EXTRA_DONE=","
+# (the loop is skipped when there are no extras: an empty array under set -u breaks bash 4.3 and older)
+if [ "${#EXTRA_LIST[@]}" -gt 0 ]; then
+for entry in "${EXTRA_LIST[@]}"; do
+  entry="${entry// /}"
+  [ -n "$entry" ] || continue
+  xname="${entry%%=*}"; xhost=""
+  case "$entry" in *=*) xhost="${entry#*=}" ;; esac
+  [[ "$xname" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "EXTRA_COPYPARTY: '$xname' is not a usable container name"
+  case "$EXTRA_DONE" in *",$xname,"*) continue ;; esac   # listed twice
+  EXTRA_DONE="$EXTRA_DONE$xname,"
+  if ! docker inspect "$xname" >/dev/null 2>&1; then
+    if [ "$EXTRA_REMEMBERED" = 1 ]; then
+      echo "NOTE: the extra copyparty '$xname' from an earlier install no longer exists - dropping it (its folders will show as missing on the People tab)."
+      continue
+    fi
+    die "EXTRA_COPYPARTY: container '$xname' was not found (docker ps shows the names; EXTRA_COPYPARTY=none forgets all extras)"
+  fi
+  [ "$xname" != "$CONTAINER" ] || die "EXTRA_COPYPARTY: '$xname' is the main copyparty container already"
+  xsrc="" xdest=""
+  mapfile -t XM < <(docker inspect -f '{{range .Mounts}}{{.Type}}|{{.Source}}|{{.Destination}}{{"\n"}}{{end}}' "$xname")
+  for m in "${XM[@]}"; do
+    IFS='|' read -r mtype msrc mdest <<<"$m"
+    [ -n "$mdest" ] || continue
+    case "$mdest" in /cfg|/cfg/*|/hooks|/hooks/*) continue ;; esac
+    case "$mtype" in bind|volume) ;; *) continue ;; esac
+    [ -f "$msrc" ] && continue
+    if [ -n "$xhost" ] && [ "$msrc" != "$xhost" ]; then continue; fi
+    xsrc="$msrc"; xdest="$mdest"; break
+  done
+  [ -n "$xsrc" ] || die "EXTRA_COPYPARTY: could not find a data mount in '$xname'${xhost:+ matching $xhost} (name=/host/folder picks one)"
+  [[ "$xsrc" =~ ^[A-Za-z0-9_./@+-]+$ && "$xdest" =~ ^[A-Za-z0-9_./@+-]+$ ]] || die "EXTRA_COPYPARTY: '$xname' has a data path with unusual characters ($xsrc -> $xdest); use letters, digits and _ . / - only"
+  real="$(readlink -f "$xsrc" 2>/dev/null || echo "$xsrc")"
+  for seen in "${SEEN_SRCS[@]}"; do
+    case "$real/" in "$seen"/*) die "EXTRA_COPYPARTY: $xname's data folder ($xsrc) is the same as, or inside, another copyparty's ($seen): one file would have two owners. Pick separate folders." ;; esac
+    case "$seen/" in "$real"/*) die "EXTRA_COPYPARTY: $xname's data folder ($xsrc) contains another copyparty's ($seen): one file would have two owners. Pick separate folders." ;; esac
+  done
+  SEEN_SRCS+=("$real")
+  EXTRA_NAMES+=("$xname"); EXTRA_DESTS+=("$xdest"); EXTRA_KEPT+=("$entry")
+  EXTRA_VOLUMES="$EXTRA_VOLUMES      - $xsrc:/cp/$xname:$MOUNT_MODE
+"
+  EXTRA_ROOTS="$EXTRA_ROOTS,/cp/$xname"
+  EXTRA_MAPS="${EXTRA_MAPS:+$EXTRA_MAPS,}$xname|$xdest=/cp/$xname"
+  echo "extra copyparty '$xname': $xsrc -> /cp/$xname (its own path $xdest is translated)"
+done
+fi
+if [ "${#EXTRA_KEPT[@]}" -gt 0 ]; then EXTRA_COPYPARTY="$(IFS=,; echo "${EXTRA_KEPT[*]}")"; else EXTRA_COPYPARTY=""; fi
+if [ -n "$EXTRA_MAPS" ]; then EXTRA_MAPS_LINE="      SOURCE_MAPS: \"$EXTRA_MAPS\""; else EXTRA_MAPS_LINE="      # SOURCE_MAPS: not set (no extra copyparty)"; fi
+
 # --- bridge source -------------------------------------------------------------
 say "Fetching the bridge (branch $BRANCH)"
 if [ -d "$SRC_DIR/.git" ]; then
@@ -223,6 +295,7 @@ umask 022
 write_override() {
   {
     echo "$MARKER (delete this file to undo; re-run the installer to update)"
+    [ -z "$EXTRA_COPYPARTY" ] || echo "# EXTRA_COPYPARTY: $EXTRA_COPYPARTY"
     echo "services:"
     if [ "$1" = "1" ]; then
       cat <<EOF
@@ -249,11 +322,12 @@ EOF
       IMMICH_URL: $IMMICH_URL
       WATCH_DIRS: $WATCH
 $PRIORITY_LINE
-      BROWSE_ROOTS: $MOUNT_DEST
+      BROWSE_ROOTS: $EXTRA_ROOTS
+$EXTRA_MAPS_LINE
       BRIDGE_BUILD: "$BUILD_ID"
     volumes:
       - $MOUNT_SRC:$MOUNT_DEST:$MOUNT_MODE
-      - bridge-state:/data
+${EXTRA_VOLUMES}      - bridge-state:/data
 volumes:
   bridge-state:
 EOF
@@ -292,6 +366,28 @@ echo "Imported first:  ${PRIORITY:-nothing in particular}"
 if [ "$HOOK" = "1" ]; then echo "Instant import:  on (copyparty hook)"; else echo "Instant import:  off (the sweep checks every 15 minutes)"; fi
 if [ "$WIDE" != "1" ] && [ "$APP_FOLDER" != "." ]; then
   echo "Only the app's folder is watched. To also import the rest of '$BASE_FOLDER', re-run with WIDE=1 in front."
+fi
+if [ "${#EXTRA_NAMES[@]}" -gt 0 ]; then
+  echo
+  echo "More than one copyparty - the bridge can now see:"
+  for i in "${!EXTRA_NAMES[@]}"; do echo "  /cp/${EXTRA_NAMES[$i]}   (that container's ${EXTRA_DESTS[$i]})"; done
+  echo "Open the People tab on the settings page to give each person their Immich API key and folder"
+  echo "(choose the folder under /cp/<name> for people whose files live on that copyparty)."
+  echo
+  echo "Instant import from the extra copyparty containers needs the hook there too. Add this under the copyparty"
+  echo "service in EACH one's own compose file (this installer does not edit other compose projects). Without it the"
+  echo "periodic scan still imports everything, just up to $SWEEP_NOTE later:"
+  for n in "${EXTRA_NAMES[@]}"; do
+    echo
+    echo "  # $n  (the token below is the same secret as in $HOOKENV - keep this compose file private)"
+    echo "    volumes:"
+    echo "      - $BRIDGE_DIR/hook/immich_bridge_hook.py:/hooks/immich_bridge_hook.py:ro"
+    echo "    environment:"
+    echo "      IMMICH_BRIDGE_URL: http://$HOST_IP:$BRIDGE_PORT"
+    echo "      IMMICH_BRIDGE_SOURCE: $n"
+    echo "      IMMICH_BRIDGE_TOKEN: $TOKEN"
+    echo "    command: [\"--xau\", \"f,j,t30,/hooks/immich_bridge_hook.py\"]"
+  done
 fi
 echo
 echo "Settings page:   http://$HOST_IP:$BRIDGE_PORT/#token=$TOKEN"

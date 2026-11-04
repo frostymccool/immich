@@ -19,6 +19,11 @@ FAKE_DOCKER = """#!/usr/bin/env bash
 case "$*" in
   "compose version") echo "Docker Compose v2"; exit 0;;
   "inspect copyparty") exit 0;;
+  "inspect ghost") exit 1;;
+  "inspect copyparty2"|"inspect copyparty3"|"inspect copyparty4") exit 0;;
+  inspect\\ -f*Mounts*copyparty2) printf 'bind|%s/cp2cfg|/cfg\\nbind|%s/data2|/w\\n' "$FAKE_HOME" "$FAKE_HOME"; exit 0;;
+  inspect\\ -f*Mounts*copyparty3) printf 'bind|%s/data|/w\\n' "$FAKE_HOME"; exit 0;;
+  inspect\\ -f*Mounts*copyparty4) printf 'bind|%s/data/Work|/w\\n' "$FAKE_HOME"; exit 0;;
   inspect\\ -f*Mounts*)
     printf 'bind|%s/copyparty/cfg|/cfg\\nbind|%s/hook/immich_bridge_hook.py|/hooks/immich_bridge_hook.py\\nbind|%s/data|/w\\n' "$FAKE_HOME" "$FAKE_HOME" "$FAKE_HOME"
     exit 0;;
@@ -47,6 +52,7 @@ def box(tmp_path):
     (home / "hook" / "immich_bridge_hook.py").write_text("# hook\n")
     for rel in ("Trips/Summer2026/Day3", "Trips/Old", "Work", ".hist"):
         (home / "data" / rel).mkdir(parents=True)
+    (home / "data2" / "Alex").mkdir(parents=True)
     bin_dir.mkdir()
     for name, body in (("docker", FAKE_DOCKER), ("git", FAKE_GIT), ("curl", FAKE_CURL), ("ip", FAKE_IP)):
         path = bin_dir / name
@@ -212,3 +218,101 @@ def test_installer_saves_the_updater_in_the_copyparty_folder_and_uninstall_remov
     r = box.run("--uninstall")
     assert r.returncode == 0, r.stdout + r.stderr
     assert not updater.exists()
+
+
+# ---- several copyparty containers --------------------------------------------------------------
+
+
+def test_extra_copyparty_is_mounted_mapped_and_remembered(box):
+    r = box.run(env={"APP_FOLDER": "Trips/Summer2026", "EXTRA_COPYPARTY": "copyparty2"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = box.override.read_text()
+    assert f"{box.home}/data2:/cp/copyparty2:ro" in text
+    assert "BROWSE_ROOTS: /w,/cp/copyparty2\n" in text
+    assert 'SOURCE_MAPS: "copyparty2|/w=/cp/copyparty2"' in text
+    assert "# EXTRA_COPYPARTY: copyparty2" in text
+    assert "WATCH_DIRS: /w/Trips/Summer2026" in text  # main's own setup is untouched
+    # the hook for the other copyparty is printed, never written into another compose project
+    token = [ln for ln in (box.home / "copyparty" / "immich-bridge.env").read_text().splitlines() if ln.startswith("BRIDGE_TOKEN=")][0].split("=", 1)[1]
+    assert "IMMICH_BRIDGE_SOURCE: copyparty2" in r.stdout and f"IMMICH_BRIDGE_TOKEN: {token}" in r.stdout
+    assert "http://192.168.1.50:8099" in r.stdout
+    first = text
+    r2 = box.run()  # a re-run with no variables keeps everything, byte for byte
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+    assert box.override.read_text() == first
+
+
+def test_extra_copyparty_none_forgets_them(box):
+    box.run(env={"APP_FOLDER": "Work", "EXTRA_COPYPARTY": "copyparty2"})
+    r = box.run(env={"EXTRA_COPYPARTY": "none"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = box.override.read_text()
+    assert "/cp/" not in text and "SOURCE_MAPS: not set" in text and "BROWSE_ROOTS: /w\n" in text
+
+
+def test_without_extras_the_override_has_no_new_lines_that_matter(box):
+    r = box.run(env={"APP_FOLDER": "Work"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = box.override.read_text()
+    assert "BROWSE_ROOTS: /w\n" in text and "/cp/" not in text and "# EXTRA_COPYPARTY" not in text
+
+
+@pytest.mark.parametrize("name,why", [("ghost", "was not found"), ("copyparty", "main copyparty"), ("bad name!", "usable container name")])
+def test_extra_copyparty_refuses_unknown_or_silly_names(box, name, why):
+    r = box.run(env={"APP_FOLDER": "Work", "EXTRA_COPYPARTY": name})
+    assert r.returncode != 0 and why in r.stderr
+    assert not box.override.exists()
+
+
+@pytest.mark.parametrize("name", ["copyparty3", "copyparty4"])
+def test_extra_copyparty_refuses_a_data_folder_shared_with_another(box, name):
+    r = box.run(env={"APP_FOLDER": "Work", "EXTRA_COPYPARTY": name})
+    assert r.returncode != 0 and "two owners" in r.stderr
+    assert not box.override.exists()
+
+
+def test_extra_copyparty_can_be_mounted_writable(box):
+    r = box.run(env={"APP_FOLDER": "Work", "EXTRA_COPYPARTY": "copyparty2", "WRITABLE": "1"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f"{box.home}/data2:/cp/copyparty2:rw" in box.override.read_text()
+
+
+def test_a_vanished_remembered_extra_does_not_block_updates(box):
+    box.run(env={"APP_FOLDER": "Work", "EXTRA_COPYPARTY": "copyparty2"})
+    box.override.write_text(box.override.read_text().replace("copyparty2", "ghost"))  # the container was removed
+    r = box.run()  # what update-bridge.sh does: no variables
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "no longer exists" in r.stdout
+    assert "/cp/" not in box.override.read_text() and "# EXTRA_COPYPARTY" not in box.override.read_text()
+
+
+def test_extra_named_on_the_command_line_that_does_not_exist_is_still_an_error(box):
+    r = box.run(env={"APP_FOLDER": "Work", "EXTRA_COPYPARTY": "ghost"})
+    assert r.returncode != 0 and "EXTRA_COPYPARTY=none" in r.stderr
+
+
+def test_extra_listed_twice_is_mounted_once(box):
+    r = box.run(env={"APP_FOLDER": "Work", "EXTRA_COPYPARTY": "copyparty2,copyparty2"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = box.override.read_text()
+    assert text.count("/cp/copyparty2:ro") == 1 and "# EXTRA_COPYPARTY: copyparty2\n" in text
+
+
+def test_extra_value_with_a_newline_cannot_inject_yaml(box):
+    r = box.run(env={"APP_FOLDER": "Work", "EXTRA_COPYPARTY": "copyparty2\n    privileged: true"})
+    assert r.returncode != 0 and "control characters" in r.stderr
+    assert not box.override.exists()
+
+
+def test_extra_with_a_host_folder_picks_that_mount(box):
+    r = box.run(env={"APP_FOLDER": "Work", "EXTRA_COPYPARTY": f"copyparty2={box.home}/data2"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f"{box.home}/data2:/cp/copyparty2:ro" in box.override.read_text()
+    r = box.run(env={"APP_FOLDER": "Work", "EXTRA_COPYPARTY": f"copyparty2={box.home}/nope"})
+    assert r.returncode != 0 and "could not find a data mount" in r.stderr
+
+
+def test_uninstall_says_where_the_keys_live(box):
+    box.run(env={"APP_FOLDER": "Work"})
+    r = box.run("--uninstall")
+    assert r.returncode == 0 and "API key" in r.stdout and "docker volume rm" in r.stdout

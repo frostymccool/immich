@@ -14,7 +14,14 @@ import requests
 
 from bridge.config import Config
 from bridge.immich import ImmichClient, ImmichError, UploadOutcome, sha1_hex
-from bridge.scanner import extension_of, folder_album_name, is_candidate_name, is_within_dirs, iter_candidates
+from bridge.scanner import (
+    check_candidate,
+    extension_of,
+    folder_album_name,
+    is_candidate_name,
+    is_within_dirs,
+    iter_candidates,
+)
 from bridge.state import StateStore
 
 log = logging.getLogger("bridge.worker")
@@ -28,8 +35,20 @@ class ImportWorker:
     from the queue and run the full pipeline per file.
     """
 
-    def __init__(self, cfg: Config, state: StateStore, client: ImmichClient, allowed_extensions: set[str]):
+    def __init__(
+        self,
+        cfg: Config,
+        state: StateStore,
+        client: ImmichClient,
+        allowed_extensions: set[str],
+        router=None,
+        user_id: str = "main",
+    ):
         self._cfg = cfg
+        # With a router (always, in the real program) "is this file mine" is the router's answer; without one
+        # (older tests) it is just "inside the watched folders".
+        self._router = router
+        self.user_id = user_id
         self._state = state
         self._client = client
         self._allowed = allowed_extensions
@@ -65,6 +84,18 @@ class ImportWorker:
         self._stop.set()
         for _ in self._threads:
             self._queue.put((-1, next(self._seq), ""))  # wake blocked workers
+
+    def join(self, timeout: float = 30.0) -> bool:
+        """Waits for the worker threads to finish (a file mid-upload completes). True when all have stopped."""
+        deadline = time.time() + timeout
+        for t in self._threads:
+            t.join(max(0.0, deadline - time.time()))
+        return not any(t.is_alive() for t in self._threads)
+
+    def _owned(self, path: str) -> bool:
+        if self._router is None:
+            return is_within_dirs(path, self._cfg.watch_dirs)
+        return self._router.owner(path) == self.user_id
 
     @property
     def allowed_extensions(self) -> set[str]:
@@ -165,7 +196,19 @@ class ImportWorker:
         """Scans the watch dirs and queues everything not yet handled."""
         queued = 0
         excluded = {self._cfg.move_subdir}
-        for path in iter_candidates(self._cfg.watch_dirs, self._allowed, self._cfg.min_file_age, excluded):
+        skip = self._router.other_roots(self.user_id) if self._router is not None else []
+        paths = iter_candidates(
+            self._cfg.watch_dirs, self._allowed, self._cfg.min_file_age, excluded, skip_dirs=skip
+        )
+        if self._router is not None:
+            # files this person owns by their copyparty login but that sit outside their own folders
+            claimed = [
+                p for p in self._router.claimed_for(self.user_id) if check_candidate(p, self._allowed, self._cfg.min_file_age)
+            ]
+            paths = itertools.chain(paths, claimed)
+        for path in paths:
+            if self._router is not None and not self._owned(path):
+                continue
             try:
                 stat = os.stat(path)
             except OSError:
@@ -220,9 +263,9 @@ class ImportWorker:
         name = os.path.basename(path)
         if not is_candidate_name(name):
             return
-        if not is_within_dirs(path, self._cfg.watch_dirs):
-            # queued before a watched folder was removed in the settings page
-            log.info("skipped, no longer in a watched folder: %s", path)
+        if not self._owned(path):
+            # queued before a watched folder was removed or handed to somebody else
+            log.info("skipped, no longer mine / not in a watched folder: %s", path)
             return
         try:
             stat = os.stat(path)
@@ -252,6 +295,9 @@ class ImportWorker:
                 outcome = UploadOutcome(status="duplicate", asset_id=None if existing == "present" else existing)
                 log.info("already in Immich (checksum): %s -> %s", name, existing)
             else:
+                if not self._owned(path):  # ownership changed while hashing (settings/users edited)
+                    log.info("skipped before upload, ownership changed: %s", path)
+                    return
                 self._phase(path, "uploading", 0, 0)
                 outcome = self._client.upload(
                     path, sha1, progress=lambda sent, total: self._phase(path, "uploading", sent, total)
@@ -264,7 +310,8 @@ class ImportWorker:
                         log.info("album %r <- %s", album, name)
 
             self._state.record_success(path, size, mtime, sha1, outcome.status, outcome.asset_id)
-            self._post_import(path)
+            if self._owned(path):  # never move/delete a file that has since been handed to somebody else
+                self._post_import(path)
         except (ImmichError, requests.RequestException, OSError) as ex:
             log.warning("import failed for %s: %s", path, ex)
             self._state.record_failure(path, size, mtime, sha1, str(ex))

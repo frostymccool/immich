@@ -37,6 +37,7 @@ class StateStore:
         if directory:
             os.makedirs(directory, exist_ok=True)
         self._lock = threading.Lock()
+        self._closed = False
         self._db = sqlite3.connect(db_path, check_same_thread=False)
         self._db.execute(
             """
@@ -59,6 +60,7 @@ class StateStore:
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             self._db.close()
 
     def get(self, path: str) -> FileRecord | None:
@@ -139,6 +141,8 @@ class StateStore:
 
     def counts(self) -> dict[str, int]:
         with self._lock:
+            if self._closed:
+                return {}
             rows = self._db.execute("SELECT status, COUNT(*) FROM files GROUP BY status").fetchall()
         return {status: n for status, n in rows}
 
@@ -163,6 +167,45 @@ class StateStore:
             self._db.commit()
         return n
 
+    @staticmethod
+    def _under(prefixes: list[str]) -> tuple[str, list[str]]:
+        """SQL condition + parameters matching paths equal to, or inside, any of the folders. Uses substr (exact,
+        case-sensitive, no wildcard characters) rather than LIKE, which is case-insensitive for ASCII."""
+        parts: list[str] = []
+        params: list = []
+        for pre in prefixes:
+            pre = pre.rstrip("/") or "/"
+            inside = pre if pre.endswith("/") else pre + "/"
+            parts.append("(path = ? OR substr(path, 1, ?) = ?)")
+            params += [pre, len(inside), inside]
+        return (" OR ".join(parts) or "0"), params
+
+    def count_done_under(self, prefixes: list[str]) -> int:
+        """How many imported / already-in-Immich records sit inside the given folders."""
+        cond, params = self._under(prefixes)
+        with self._lock:
+            return self._db.execute(
+                f"SELECT COUNT(*) FROM files WHERE status IN ('imported', 'duplicate') AND ({cond})", params
+            ).fetchone()[0]
+
+    def forget_under(self, prefixes: list[str]) -> int:
+        """Forgets the records inside the given folders only (files and Immich untouched)."""
+        cond, params = self._under(prefixes)
+        with self._lock:
+            n = self._db.execute(f"DELETE FROM files WHERE {cond}", params).rowcount
+            self._db.commit()
+        return n
+
+    def last_failure(self) -> str | None:
+        """The error text of the most recent failed file, if any."""
+        with self._lock:
+            if self._closed:
+                return None
+            row = self._db.execute(
+                "SELECT error FROM files WHERE status = 'failed' ORDER BY updated_at DESC LIMIT 1"
+            ).fetchone()
+        return row[0] if row else None
+
     def done_assets(self) -> list[tuple[str, str]]:
         """(path, immich asset id) of every file that was imported / found already in Immich."""
         with self._lock:
@@ -174,6 +217,8 @@ class StateStore:
 
     def recent(self, limit: int = 20) -> list[FileRecord]:
         with self._lock:
+            if self._closed:
+                return []
             rows = self._db.execute(
                 "SELECT path, size, mtime, sha1, status, asset_id, error, attempts, updated_at "
                 "FROM files ORDER BY updated_at DESC LIMIT ?",

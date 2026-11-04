@@ -53,30 +53,50 @@ def extension_of(name: str) -> str:
     return name[dot + 1 :].lower()
 
 
+def check_candidate(path: str, allowed_extensions: set[str], min_file_age: int, now: float | None = None) -> bool:
+    """Same filters the sweep applies, for a single path (used for hook-claimed files outside the walk)."""
+    now = time.time() if now is None else now
+    name = os.path.basename(path)
+    if not is_candidate_name(name) or extension_of(name) not in allowed_extensions:
+        return False
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return False
+    return stat.st_size > 0 and now - stat.st_mtime >= min_file_age
+
+
 def iter_candidates(
     watch_dirs: list[str],
     allowed_extensions: set[str],
     min_file_age: int,
     excluded_dir_names: set[str] | None = None,
     now: float | None = None,
+    skip_dirs: list[str] | None = None,
 ) -> Iterator[str]:
     """Yields absolute paths of complete, compatible, settled files.
 
     - skips hidden dirs (covers copyparty's .hist) and `excluded_dir_names`
       (the post-import move target)
     - skips dotfiles, .PARTIAL files, empty files, unsupported extensions
+    - skips whole subtrees listed in `skip_dirs` (folders that belong to another user)
     - skips files modified less than `min_file_age` seconds ago, so a file
       still being written by a non-up2k client isn't grabbed mid-write
     """
     now = time.time() if now is None else now
     excluded = excluded_dir_names or set()
+    skip = [os.path.normpath(d) for d in (skip_dirs or [])]
 
     for root_dir in watch_dirs:
         if not os.path.isdir(root_dir):
             log.warning("watch dir missing or not mounted: %s", root_dir)
             continue
         for parent, dirs, files in os.walk(root_dir):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in excluded]
+            dirs[:] = [
+                d
+                for d in dirs
+                if not d.startswith(".") and d not in excluded and os.path.join(parent, d) not in skip
+            ]
             for name in files:
                 if not is_candidate_name(name):
                     continue

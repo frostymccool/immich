@@ -1,0 +1,462 @@
+"""Runs one import pipeline per person (own Immich key, own records, own queue) and routes files to them.
+
+The main account's pipeline is created by `__main__` exactly as before (state.db, env key); everyone else is
+created from users.json and can be added, changed and removed while the bridge runs.
+"""
+
+from __future__ import annotations
+
+import collections
+import logging
+import os
+import shutil
+import threading
+import time
+from dataclasses import dataclass
+from typing import Callable
+
+from bridge.config import Config
+from bridge.immich import ImmichClient
+from bridge.router import Router
+from bridge.scanner import is_within_dirs, iter_candidates
+from bridge.state import StateStore
+from bridge.userview import UserView
+from bridge.users import MAIN_ID, User, UsersError, UsersStore
+from bridge.worker import ImportWorker
+
+log = logging.getLogger("bridge.manager")
+
+
+CHECKING = "checking which Immich account this key belongs to"
+
+
+@dataclass
+class Runtime:
+    uid: str
+    worker: ImportWorker
+    state: StateStore
+    client: ImmichClient
+    view: UserView
+    seq: int = 0
+
+
+class UserManager:
+    def __init__(
+        self,
+        cfg: Config,
+        users: UsersStore,
+        router: Router,
+        allowed: set[str],
+        client_factory: Callable[[str], ImmichClient] | None = None,
+    ):
+        self.cfg = cfg
+        self.users = users
+        self.router = router
+        self._allowed = allowed
+        self._client_factory = client_factory or (
+            lambda key: ImmichClient(
+                cfg.immich_url, key, cfg.device_id, verify_tls=cfg.verify_tls, upload_timeout=cfg.upload_timeout
+            )
+        )
+        self._rt: dict[str, Runtime] = {}
+        self._seq = 0
+        # Guards the runtime table and routing decisions ONLY. Never held across a network call or a thread join.
+        self._lock = threading.RLock()
+        # files the hook reported that sit in nobody's folder (shown on the Users tab so they are not silent)
+        self.unassigned_count = 0
+        self.unassigned_recent: collections.deque[dict] = collections.deque(maxlen=20)
+        self._unassigned_seen: set[str] = set()
+
+    # -- lifecycle -----------------------------------------------------------------------
+
+    def _users_dir(self) -> str:
+        return os.path.join(os.path.dirname(self.cfg.state_db) or ".", "users")
+
+    def _state_path(self, uid: str) -> str:
+        return os.path.join(self._users_dir(), uid, "state.db")
+
+    def start_main(self, state: StateStore, client: ImmichClient) -> Runtime:
+        view = UserView(self.cfg, MAIN_ID, self.users)
+        worker = ImportWorker(view, state, client, self._allowed, router=self.router, user_id=MAIN_ID)
+        rt = Runtime(MAIN_ID, worker, state, client, view)
+        with self._lock:
+            self._seq += 1
+            rt.seq = self._seq
+            self._rt[MAIN_ID] = rt
+        worker.start()
+        return rt
+
+    def start_user(self, user: User) -> Runtime | None:
+        if not user.enabled:
+            return None
+        directory = os.path.join(self._users_dir(), user.id)
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        try:
+            os.chmod(self._users_dir(), 0o700)
+            os.chmod(directory, 0o700)
+        except OSError:
+            pass
+        state = StateStore(self._state_path(user.id))
+        client = self._client_factory(user.api_key)
+        view = UserView(self.cfg, user.id, self.users)
+        # held until Immich has said which account this key is (so two people can never share one by accident)
+        view.blocked = CHECKING
+        worker = ImportWorker(view, state, client, self._allowed, router=self.router, user_id=user.id)
+        rt = Runtime(user.id, worker, state, client, view)
+        with self._lock:
+            self._seq += 1
+            rt.seq = self._seq
+            self._rt[user.id] = rt
+        worker.start()
+        return rt
+
+    def start_all(self) -> None:
+        for user in self.users.users():
+            try:
+                self.start_user(user)
+            except Exception:
+                # e.g. an unwritable /data/users/<id> or a damaged state.db: that person stays off (shown as not
+                # running on the People tab); everybody else keeps importing
+                log.exception("could not start user %s - they will not import until this is fixed", user.id)
+
+    def stop_all(self) -> None:
+        for rt in self.runtimes():
+            rt.worker.stop()
+
+    def close_all(self) -> None:
+        """Orderly shutdown: stop every worker, wait for uploads in flight, then close the people's stores."""
+        runtimes = self.runtimes()
+        for rt in runtimes:
+            rt.worker.stop()
+        for rt in runtimes:
+            if not rt.worker.join(20):
+                log.warning("user %s: an upload was still running at shutdown", rt.uid)
+            if rt.uid != MAIN_ID:  # main's store/client are closed by __main__
+                rt.state.close()
+                rt.client.close()
+
+    def runtime(self, uid: str) -> Runtime | None:
+        with self._lock:
+            return self._rt.get(uid)
+
+    def runtimes(self) -> list[Runtime]:
+        with self._lock:
+            return list(self._rt.values())
+
+    def check_identities(self) -> None:
+        """Asks Immich who each key belongs to (and what it may do), then blocks anyone who shares an account."""
+        for rt in self.runtimes():
+            self._identify(rt)
+        self._flag_duplicates()
+
+    def _identify(self, rt: Runtime) -> None:
+        try:
+            rt.worker.refresh_identity()
+            rt.worker.check_album_permission()
+        except Exception:
+            log.exception("identity check failed for %s", rt.uid)
+
+    def _flag_duplicates(self) -> None:
+        """Two people on ONE Immich account would both import every file into it. The main account always wins;
+        the later person is held (not deleted) with a visible reason."""
+        seen: dict[str, str] = {}
+        runtimes = sorted(self.runtimes(), key=lambda r: (r.uid != MAIN_ID, r.seq))  # the established importer wins
+        main_rt = next((r for r in runtimes if r.uid == MAIN_ID), None)
+        main_known = bool(main_rt and (main_rt.worker.immich_user or {}).get("id"))
+        for rt in runtimes:
+            who = (rt.worker.immich_user or {}).get("id")
+            if not who or (rt.uid != MAIN_ID and not main_known):
+                # fail closed: until main's account is known nobody can be shown to differ from it
+                if rt.uid != MAIN_ID:
+                    rt.view.blocked = rt.view.blocked or CHECKING
+                continue
+            if who in seen:
+                rt.view.blocked = f"uses the same Immich account as '{seen[who]}'"
+                log.error("user %s %s - held, give them their own Immich account/API key", rt.uid, rt.view.blocked)
+            else:
+                seen[who] = rt.uid
+                rt.view.blocked = None
+
+    # -- routing ---------------------------------------------------------------------------
+
+    def route(self, path: str, login: str | None = None) -> str | None:
+        """The person this file goes to (recording a login claim when that decides it), or None."""
+        with self._lock:
+            owner = self.router.owner(path)
+            if owner == MAIN_ID and login:
+                target = self.users.all_logins().get(login)
+                main_rt = self._rt.get(MAIN_ID)
+                already = main_rt.state.get(path) if main_rt else None
+                if already is not None and already.status in ("imported", "duplicate"):
+                    return owner  # main already imported it: a login does not re-import old files elsewhere
+                if target and target != MAIN_ID and self.router.claim(path, target):
+                    owner = self.router.owner(path)
+            return owner
+
+    def enqueue(self, path: str, source: str, login: str | None = None) -> bool:
+        uid = self.route(path, login)
+        rt = self.runtime(uid) if uid else None
+        if rt is None:
+            return False
+        return rt.worker.enqueue(path, source)
+
+    def note_unassigned(self, path: str, login: str | None, source: str | None) -> None:
+        self.unassigned_count += 1
+        if path in self._unassigned_seen:
+            return
+        if len(self._unassigned_seen) > 1000:
+            self._unassigned_seen.clear()
+        self._unassigned_seen.add(path)
+        self.unassigned_recent.append({"path": path, "login": login or "", "source": source or "", "at": time.time()})
+        log.warning("file %s (uploaded by %s) is in nobody's watched folder - not imported", path, login or "an unknown login")
+
+    def sweep_all(self) -> int:
+        queued = 0
+        if any(rt.worker.immich_user is None for rt in self.runtimes()):
+            self.check_identities()  # Immich was unreachable earlier: ask again
+        for rt in self.runtimes():
+            if rt.view.blocked == CHECKING and rt.worker.immich_user is not None:
+                self._flag_duplicates()
+                break
+        for rt in self.runtimes():
+            try:
+                queued += rt.worker.sweep()
+            except Exception:
+                log.exception("sweep failed for %s", rt.uid)
+        try:
+            self.router.gc()
+        except Exception:
+            log.exception("claims cleanup failed")
+        return queued
+
+    # -- web page data -----------------------------------------------------------------------
+
+    def describe(self, uid: str) -> dict | None:
+        rt = self.runtime(uid)
+        main = uid == MAIN_ID
+        user = None if main else self.users.get(uid)
+        if not main and user is None:
+            return None
+        folders = self.cfg.watch_dirs if main else user.folders
+        who = rt.worker.immich_user if rt else None
+        return {
+            "id": uid,
+            "name": self.users.main["name"] if main else user.name,
+            "is_main": main,
+            "enabled": True if main else user.enabled,
+            "paused": bool(self.users.main["paused"]) if main else user.paused,
+            "blocked": rt.view.blocked if rt else None,
+            "running": rt is not None,
+            "folders": list(folders),
+            "missing_folders": [f for f in folders if not os.path.isdir(f)],
+            "priority_dirs": list(self.cfg.priority_dirs if main else user.priority_dirs),
+            "cp_logins": list(self.users.main["cp_logins"] if main else user.cp_logins),
+            "album_name": self.cfg.album_name if main else user.album_name,
+            "album_from_folder": self.cfg.album_from_folder if main else user.album_from_folder,
+            "api_key_set": bool(self.cfg.api_key) if main else bool(user.api_key),
+            "immich_user": who,
+            "identity_ok": who is not None if rt else None,
+            "queue": rt.worker.queue_size if rt else 0,
+            "counts": rt.state.counts() if rt else {},
+            "last_error": rt.state.last_failure() if rt else None,
+            "album_permission": rt.worker.album_permission if rt else None,
+            "account_change": rt.worker.account_change if rt else None,
+        }
+
+    def describe_all(self) -> dict:
+        people = [self.describe(MAIN_ID)] + [self.describe(u.id) for u in self.users.users()]
+        return {
+            "users": people,
+            "ignored_dirs": list(self.users.ignored_dirs),
+            "unassigned": {"count": self.unassigned_count, "recent": list(self.unassigned_recent)},
+        }
+
+    # -- changes ------------------------------------------------------------------------------
+
+    def _probe(self, api_key: str) -> dict:
+        """Asks Immich who this key is. Raises UsersError with a plain message when it is not usable."""
+        client = self._client_factory(api_key)
+        try:
+            who = client.whoami()
+            if who is None or not who.get("id"):
+                raise UsersError("Immich rejected that API key (or could not be reached)")
+            return {"who": who, "albums": client.album_permission_status()}
+        finally:
+            client.close()
+
+    def check_key(self, api_key: str, ignore_uid: str | None = None) -> dict:
+        """Probes Immich (network, so callers must NOT hold the lock) and refuses an account someone already uses."""
+        info = self._probe(api_key)
+        self._refuse_shared_account(info, ignore_uid)
+        return info
+
+    def _refuse_shared_account(self, info: dict, ignore_uid: str | None) -> None:
+        for rt in self.runtimes():
+            other = (rt.worker.immich_user or {}).get("id")
+            if other and other == info["who"]["id"] and rt.uid != ignore_uid:
+                name = self.describe(rt.uid)["name"]
+                raise UsersError(f"That API key belongs to the same Immich account as {name}; each person needs their own account")
+
+    def add_user(self, data: dict) -> dict:
+        key = data.get("api_key")
+        if not isinstance(key, str) or not key.strip():
+            raise UsersError("api_key is required")
+        info = self.check_key(key.strip())  # network: outside the lock
+        with self._lock:
+            self._refuse_shared_account(info, None)  # re-check: somebody may have been added meanwhile
+            user = self.users.add(data)  # starts paused: review, then press Review & start
+            try:
+                rt = self.start_user(user)
+                if rt is not None:
+                    rt.worker.immich_user = info["who"]
+                    rt.worker._track_account(info["who"])
+                    rt.worker.album_permission = info["albums"]
+                    self._flag_duplicates()
+            except Exception:
+                self.users.remove(user.id, ignore_folders=False)
+                self._rt.pop(user.id, None)
+                raise
+        log.info("added user %s (Immich account %s <%s>), paused until reviewed", user.id, info["who"]["name"], info["who"]["email"])
+        return self.describe(user.id)
+
+    def update_user(self, uid: str, data: dict) -> dict:
+        if not isinstance(uid, str):
+            raise UsersError("no such user", 404)
+        if uid == MAIN_ID:
+            allowed = {k: v for k, v in data.items() if k in ("name", "cp_logins", "paused")}
+            if set(data) - set(allowed):
+                raise UsersError("the main account's folders and settings are on the Folders & settings tab")
+            self.users.update_main(allowed)
+            return self.describe(MAIN_ID)
+        key = data.get("api_key")
+        info = None
+        if isinstance(key, str) and key.strip():
+            info = self.check_key(key.strip(), ignore_uid=uid)  # network: outside the lock
+        else:
+            data = {k: v for k, v in data.items() if k != "api_key"}
+        stale = None
+        with self._lock:
+            old = self.users.get(uid)
+            if old is None:
+                raise UsersError("no such user", 404)
+            if info is not None:
+                self._refuse_shared_account(info, uid)
+            was_enabled, was_paused = old.enabled, old.paused
+            if data.get("paused") is False and was_paused:
+                # Resume must not skip the review: files already imported by someone else would be duplicated
+                pending = self.adopt_preview(uid)["expected_count"]
+                if pending:
+                    raise UsersError(
+                        f"{pending} file(s) in this person's folders were already imported by somebody else: "
+                        "use Review & start so they are handled on purpose", 409)
+            folders_changed = "folders" in data and sorted(data["folders"] if isinstance(data["folders"], list) else []) != sorted(old.folders)
+            user = self.users.update(uid, data)
+            if folders_changed and "paused" not in data:
+                self.users.update(uid, {"paused": True})  # a changed folder list needs a fresh look before importing
+                log.warning("user %s: folders changed - paused until you press Review & start", uid)
+            rt = self.runtime(uid)
+            if info is not None and rt is not None:
+                # a new key may be another Immich account: install the new client first, then retire the old one
+                new_client = self._client_factory(user.api_key)
+                old_client, rt.client = rt.client, new_client
+                rt.worker._client = new_client
+                rt.worker.immich_user = info["who"]
+                rt.worker._track_account(info["who"])
+                rt.worker.album_permission = info["albums"]
+                stale = old_client
+            if info is not None:
+                self._flag_duplicates()
+            if user.enabled and not was_enabled:
+                self.start_user(user)
+            to_stop = uid if (not user.enabled and rt is not None) else None
+        if stale is not None:
+            threading.Timer(60.0, stale.close).start()  # in-flight calls on the old client drain first
+        if to_stop:
+            self._stop_runtime(to_stop)
+        if user.enabled and not was_enabled:
+            self.check_identities()
+        return self.describe(uid)
+
+    def _stop_runtime(self, uid: str) -> None:
+        """Stops a person's worker and closes their store - never while a file is still uploading (the close is
+        deferred until the worker has actually finished). Call WITHOUT holding the lock."""
+        with self._lock:
+            rt = self._rt.pop(uid, None)
+        if rt is None:
+            return
+        rt.worker.stop()
+        if rt.worker.join(30):
+            rt.state.close()
+            rt.client.close()
+            return
+        log.warning("user %s: a file was still uploading when they were stopped; it may already be in Immich", uid)
+
+        def finish() -> None:
+            rt.worker.join(3600)
+            rt.state.close()
+            rt.client.close()
+
+        threading.Thread(target=finish, name=f"close-{uid}", daemon=True).start()
+
+    def remove_user(self, uid: str, confirm_id: str) -> dict:
+        if uid == MAIN_ID:
+            raise UsersError("the main account cannot be removed")
+        if confirm_id != uid:
+            raise UsersError(f"type the user id ('{uid}') to confirm")
+        with self._lock:
+            if self.users.get(uid) is None:
+                raise UsersError("no such user", 404)
+            self.users.remove(uid)  # their folders go on the ignore list
+            # Their login claims are KEPT on purpose: a claimed file in the shared area stays held (owner() returns
+            # nobody for a claim whose person is gone) instead of falling into the main account.
+        self._stop_runtime(uid)  # joins: outside the lock
+        directory = os.path.join(self._users_dir(), uid)
+        if is_within_dirs(os.path.realpath(directory), [os.path.realpath(self._users_dir())]) and os.path.isdir(directory):
+            shutil.rmtree(directory, ignore_errors=True)
+        log.warning("removed user %s; their folders are now ignored (nothing was deleted in Immich or on disk)", uid)
+        return {"removed": uid, "ignored_dirs": list(self.users.ignored_dirs)}
+
+    def ignored_preview(self, folder: str) -> dict:
+        if folder not in self.users.ignored_dirs:
+            raise UsersError("that folder is not on the ignore list", 404)
+        files = sum(1 for _ in iter_candidates([folder], self._allowed, 0, {self.cfg.move_subdir}))
+        return {"folder": folder, "files": files, "expected_count": files}
+
+    def unignore(self, folder: str, expected_count: int) -> None:
+        """Gives a removed person's folder back to the main account (it will import every file in it)."""
+        if self.ignored_preview(folder)["expected_count"] != expected_count:
+            raise UsersError("the number of files changed; look at the preview again", 409)
+        self.users.unignore(folder)
+
+    # -- adopt: give a person the files in their folders ----------------------------------------------
+
+    def adopt_preview(self, uid: str) -> dict:
+        user = self.users.get(uid)
+        if user is None:
+            raise UsersError("no such user", 404)
+        others = [rt for rt in self.runtimes() if rt.uid != uid]
+        records = sum(rt.state.count_done_under(user.folders) for rt in others)
+        claims = self.router.count_claims_under(user.folders)
+        files = sum(1 for _ in iter_candidates(user.folders, self._allowed, 0, {self.cfg.move_subdir}))
+        return {"files_in_folders": files, "records_to_move": records, "claims_to_drop": claims,
+                "expected_count": records + claims}
+
+    def adopt(self, uid: str, expected_count: int) -> dict:
+        """Hands the files in this person's folders to them: the previous owner's 'already imported' records for
+        those paths are forgotten (their Immich copies stay), claims are dropped, and the person is un-paused so
+        the next scan imports the files into THEIR account."""
+        with self._lock:
+            preview = self.adopt_preview(uid)
+            if expected_count != preview["expected_count"]:
+                raise UsersError(
+                    f"the numbers changed (now {preview['expected_count']}); look at the preview again", 409
+                )
+            user = self.users.get(uid)
+            moved = 0
+            for rt in self.runtimes():
+                if rt.uid != uid:
+                    moved += rt.state.forget_under(user.folders)
+            dropped = self.router.drop_under(user.folders)
+            self.users.update(uid, {"paused": False})
+            log.warning("adopted %s's folders: %d record(s) moved, %d claim(s) dropped", uid, moved, dropped)
+            return {"moved": moved, "claims_dropped": dropped, **self.describe(uid)}
