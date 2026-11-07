@@ -185,6 +185,21 @@ wrong account meanwhile.
 - Tested with fake Docker and a fake Immich only; the cross-container hook path (second copyparty → bridge) needs
   a manual check: upload a file as the second copyparty's user and watch the bridge log for `queued (hook)`.
 
+## Using an HTTPS name (reverse proxy)
+
+The bridge itself only speaks plain HTTP on its port. If you put a LAN reverse proxy in front of it
+(for example `https://bridge.example.com` → `http://192.168.1.50:8099`):
+
+- **Open the page** at `https://bridge.example.com/#token=<token>` (the token is in `immich-bridge.env`).
+- **Phone app:** Settings → copyparty → Import Bridge → URL `https://bridge.example.com`. The app only reads
+  `/healthz` and `/status`.
+- **Leave copyparty's hook alone.** It talks to the bridge directly over Docker
+  (`IMMICH_BRIDGE_URL=http://immich-bridge:8099`), so it does not go through the proxy. Do not expose `/hook`
+  or the bridge to the internet; keep the name LAN-only (or behind a VPN/login). The token is the only protection
+  on `/api/*`, and it can manage every person's Immich key.
+- The proxy needs no special settings (no websockets); pass the `X-Bridge-Token` header through unchanged.
+- Your real domain and addresses belong in your proxy config only, never in this repository.
+
 ## Update, remove, options
 
 | Want | Do |
