@@ -687,7 +687,7 @@
       else if (u.paused) { h.appendChild(badge('warn', 'paused')); }
       else { h.appendChild(badge('ok', 'importing')); }
       if (u.running && u.identity_ok === false) { h.appendChild(badge('bad', 'Immich unreachable or key rejected')); }
-      if (u.album_permission && u.album_permission.ok === false) { h.appendChild(badge('warn', 'imports work, albums off')); }
+      if (u.album_permission && u.album_permission.ok === false) { var b = badge('warn', 'albums off'); b.title = 'Key is missing: ' + (u.album_permission.missing || []).join(', '); h.appendChild(b); }
       if (u.account_change) { h.appendChild(badge('bad', 'key moved to another Immich account')); }
       if (u.missing_folders.length) { h.appendChild(badge('bad', 'folder missing')); }
       box.appendChild(h);
@@ -786,11 +786,12 @@
     $('picker').classList.remove('hidden'); pkLoad(null);
   };
   $('pCheck').onclick = function () {
+    $('pErrs').classList.add('hidden');   // an old error from a previous attempt must not linger
     var out = $('pCheckOut'); out.className = 'muted';
     if (!$('pKey').value.trim()) { out.textContent = 'Paste the API key first.'; return; }
     out.textContent = 'checking…';
     api('POST', '/api/users/check', { api_key: $('pKey').value.trim(), user: editingId || undefined }).then(function (r) {
-      out.textContent = '✔ belongs to ' + (r.immich_user.name || '?') + ' (' + r.immich_user.email + ')' + (r.album_permission.ok === false ? ' — but no album permission: imports work, albums will not' : '');
+      out.textContent = '✔ belongs to ' + (r.immich_user.name || '?') + ' (' + r.immich_user.email + ')' + (r.album_permission.ok === false ? ' — imports will work, but folder albums will NOT: the key is missing ' + r.album_permission.missing.map(function (p) { return p + (r.album_permission.why && r.album_permission.why[p] ? ' (' + r.album_permission.why[p] + ')' : ''); }).join(', ') : ' — all permissions OK');
       out.className = 'ok'; out.style.display = '';
     }).catch(function (e) { if (e.message !== 'auth') { out.textContent = '✘ ' + e.message; out.className = 'errs'; out.style.display = 'inline-block'; out.style.margin = '4px 0'; } });
   };

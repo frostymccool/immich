@@ -527,7 +527,7 @@ def make_handler(
                 elif parts == ["api", "users", "check"]:
                     who = body.get("user")
                     info = manager.check_key(str(body.get("api_key") or ""), ignore_uid=who if isinstance(who, str) else None)
-                    self._send_json(200, {"immich_user": info["who"], "album_permission": info["albums"]})
+                    self._send_json(200, {"immich_user": info["who"], "album_permission": info["albums"], "permissions": info["permissions"]})
                 elif parts == ["api", "users", "ignored", "preview"]:
                     self._send_json(200, manager.ignored_preview(str(body.get("folder") or "")))
                 elif parts == ["api", "users", "ignored", "remove"]:

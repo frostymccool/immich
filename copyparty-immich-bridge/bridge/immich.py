@@ -24,6 +24,17 @@ log = logging.getLogger("bridge.immich")
 
 # What the API key needs for albums (Immich permission names, from its OpenAPI spec). "all" covers them.
 ALBUM_PERMISSIONS = ("album.read", "album.create", "albumAsset.create")
+# Without these the bridge cannot work at all (names checked against Immich's server/src/enum.ts and controllers):
+# GET /users/me needs user.read; POST /assets and /assets/bulk-upload-check need asset.upload.
+REQUIRED_PERMISSIONS = {
+    "user.read": "to tell which Immich account the key belongs to",
+    "asset.upload": "to upload files and check for duplicates",
+}
+ALBUM_PERMISSION_WHY = {
+    "album.read": "to find an existing album",
+    "album.create": "to create folder albums",
+    "albumAsset.create": "to add files to an album",
+}
 
 # Fallback when Immich is unreachable at startup and INCLUDE_EXTENSIONS is not
 # set. Conservative subset of Immich's supported media types.
@@ -225,21 +236,51 @@ class ImmichClient:
         missing = [p for p in ALBUM_PERMISSIONS if p not in granted]
         return {"ok": not missing, "missing": missing}
 
-    def whoami(self) -> dict | None:
-        """The Immich account this API key belongs to: {'id', 'name', 'email'} or None. Everything the bridge
-        imports, and every album it creates, belongs to THIS account - which may not be the one you log in
-        with, and then you would not see any of it."""
+    def key_permissions(self) -> tuple[set[str] | None, str | None]:
+        """What this API key may do: (granted permissions, None) or (None, reason). GET /api-keys/me needs no
+        permission at all, so it works even for a key that cannot do anything else."""
+        try:
+            resp = self._session.get(self._base + "/api/api-keys/me", timeout=self._timeout)
+        except requests.RequestException as ex:
+            return None, f"Could not reach Immich at {self._base} ({type(ex).__name__}); is the address right and Immich running?"
+        if resp.status_code == 401:
+            return None, "Immich says that API key is not valid. Check it was copied completely and was created on THIS Immich server."
+        if resp.status_code != 200:
+            return None, f"Immich answered HTTP {resp.status_code} when asked what the key may do."
+        try:
+            return set(resp.json().get("permissions") or []), None
+        except (ValueError, AttributeError):
+            return None, "Immich's answer was not understood (is the address really Immich?)."
+
+    def whoami_ex(self) -> tuple[dict | None, str | None]:
+        """Like whoami(), but says WHY it failed, in plain words, when it did: (account, None) or (None, reason).
+        Immich answers GET /users/me only for a key with the user.read permission (or 'all')."""
         try:
             resp = self._session.get(self._base + "/api/users/me", timeout=self._timeout)
-            resp.raise_for_status()
+        except requests.RequestException as ex:
+            return None, f"Could not reach Immich at {self._base} ({type(ex).__name__}); is the address right and Immich running?"
+        if resp.status_code == 401:
+            return None, "Immich says that API key is not valid. Check it was copied completely and was created on THIS Immich server."
+        if resp.status_code == 403:
+            return None, ("That key is valid, but it was created without the 'user.read' permission, which the bridge needs "
+                          "to tell whose account it is. In Immich create a new key (Account Settings > API Keys) with all permissions.")
+        if resp.status_code != 200:
+            return None, f"Immich answered HTTP {resp.status_code} when asked who the key belongs to."
+        try:
             body = resp.json()
             return {
                 "id": str(body.get("id") or ""),
                 "name": str(body.get("name") or ""),
                 "email": str(body.get("email") or ""),
-            }
-        except (requests.RequestException, ValueError, AttributeError):
-            return None
+            }, None
+        except (ValueError, AttributeError):
+            return None, "Immich's answer was not understood (is the address really Immich?)."
+
+    def whoami(self) -> dict | None:
+        """The Immich account this API key belongs to: {'id', 'name', 'email'} or None. Everything the bridge
+        imports, and every album it creates, belongs to THIS account - which may not be the one you log in
+        with, and then you would not see any of it."""
+        return self.whoami_ex()[0]
 
     def known_albums(self) -> dict[str, str]:
         """album name -> Immich album id for the albums this bridge has used since it started."""

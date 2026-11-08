@@ -397,7 +397,7 @@ def test_bad_key_is_refused_and_nothing_saved(world):
         world.base, "POST", "/api/users",
         {"name": "Nobody", "api_key": "unknown-key-1234", "folders": [f"{world.tree}/shared/bob"]},
     )
-    assert status == 400 and "rejected" in body["error"]
+    assert status == 400 and "Could not reach Immich" in body["error"]  # the harness maps unknown keys to a dead address
     assert world.users.users() == []
 
 
@@ -854,3 +854,61 @@ def test_shutdown_waits_for_workers_then_closes_the_stores(world):
     world.manager.close_all()
     assert rt.state.counts() == {}
     assert not any(t.is_alive() for t in rt.worker._threads)
+
+
+def check(world, **body):
+    return call(world.base, "POST", "/api/users/check", {"api_key": "key-alice-123456", **body})
+
+
+def test_invalid_key_is_called_invalid(world):
+    world.stub_alice.api_key_status = 401
+    code, body = check(world)
+    assert code == 400 and "not valid" in body["error"]
+
+
+def test_missing_permissions_are_listed_explicitly(world):
+    world.stub_alice.key_permissions = ["asset.upload", "album.read"]
+    code, body = check(world)
+    assert code == 400
+    assert "user.read" in body["error"] and "to tell which Immich account" in body["error"]
+    assert "missing required permission:" in body["error"] and "asset.upload (needed" not in body["error"]
+    assert "It currently has: album.read, asset.upload" in body["error"]
+
+
+def test_every_missing_permission_is_named(world):
+    world.stub_alice.key_permissions = ["album.read"]
+    code, body = check(world)
+    assert code == 400 and "permissions:" in body["error"]
+    assert "user.read (needed" in body["error"] and "asset.upload (needed" in body["error"]
+    world.stub_alice.key_permissions = []
+    assert "no permissions at all" in check(world)[1]["error"]
+
+
+def test_missing_permission_blocks_adding_the_person(world):
+    world.stub_alice.key_permissions = ["user.read"]
+    code, body = call(world.base, "POST", "/api/users",
+                      {"name": "A", "api_key": "key-alice-123456", "folders": [f"{world.tree}/shared/alice"]})
+    assert code == 400 and "asset.upload" in body["error"] and world.users.users() == []
+
+
+def test_missing_album_permissions_are_listed_but_do_not_block(world):
+    world.stub_alice.key_permissions = ["user.read", "asset.upload", "album.read"]
+    code, body = check(world)
+    assert code == 200
+    assert body["album_permission"]["ok"] is False
+    assert body["album_permission"]["missing"] == ["album.create", "albumAsset.create"]
+    assert "create folder albums" in body["album_permission"]["why"]["album.create"]
+    world.stub_alice.key_permissions = ["all"]
+    assert check(world)[1]["album_permission"] == {"ok": True, "missing": [], "why": {}}
+
+
+def test_other_immich_failures_are_reported_with_their_status(world):
+    world.stub_alice.users_me_status = 500
+    code, body = check(world)
+    assert code == 400 and "HTTP 500" in body["error"]
+
+
+def test_key_check_says_when_immich_is_unreachable(world):
+    world.by_key["key-lost-1234567"] = "http://127.0.0.1:9"
+    code, body = call(world.base, "POST", "/api/users/check", {"api_key": "key-lost-1234567"})
+    assert code == 400 and "Could not reach Immich" in body["error"]

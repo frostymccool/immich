@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from bridge.config import Config
-from bridge.immich import ImmichClient
+from bridge.immich import ALBUM_PERMISSION_WHY, ALBUM_PERMISSIONS, REQUIRED_PERMISSIONS, ImmichClient
 from bridge.router import Router
 from bridge.scanner import is_within_dirs, iter_candidates
 from bridge.state import StateStore
@@ -274,13 +274,33 @@ class UserManager:
     # -- changes ------------------------------------------------------------------------------
 
     def _probe(self, api_key: str) -> dict:
-        """Asks Immich who this key is. Raises UsersError with a plain message when it is not usable."""
+        """Asks Immich who this key is and what it may do. Raises UsersError naming EXACTLY what is wrong: an invalid
+        key, Immich unreachable, or the list of permissions the key lacks."""
         client = self._client_factory(api_key)
         try:
-            who = client.whoami()
+            granted, why = client.key_permissions()
+            if granted is None:
+                log.warning("key check failed: %s", why)
+                raise UsersError(why or "Immich did not say what that key may do")
+            has_all = "all" in granted
+            missing = [] if has_all else [p for p in REQUIRED_PERMISSIONS if p not in granted]
+            if missing:
+                have = ", ".join(sorted(granted)) or "no permissions at all"
+                lines = "; ".join(f"{p} (needed {REQUIRED_PERMISSIONS[p]})" for p in missing)
+                log.warning("key check failed: key lacks %s; it has: %s", ", ".join(missing), have)
+                raise UsersError(
+                    f"That Immich API key is missing required permission{'s' if len(missing) > 1 else ''}: {lines}. "
+                    f"It currently has: {have}. In Immich (Account Settings > API Keys) create a new key with all "
+                    "permissions, or at least the ones listed above plus album.read, album.create and albumAsset.create."
+                )
+            who, why = client.whoami_ex()
             if who is None or not who.get("id"):
-                raise UsersError("Immich rejected that API key (or could not be reached)")
-            return {"who": who, "albums": client.album_permission_status()}
+                log.warning("key check failed: %s", why or "Immich gave no account id")
+                raise UsersError(why or "Immich did not say whose account that key is")
+            album_missing = [] if has_all else [p for p in ALBUM_PERMISSIONS if p not in granted]
+            albums = {"ok": not album_missing, "missing": album_missing,
+                      "why": {p: ALBUM_PERMISSION_WHY[p] for p in album_missing}}
+            return {"who": who, "albums": albums, "permissions": sorted(granted)}
         finally:
             client.close()
 

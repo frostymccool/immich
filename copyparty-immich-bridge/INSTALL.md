@@ -117,7 +117,9 @@ single-person install: with nobody added, the bridge behaves exactly as before.
 
 **1. Give each person their own Immich account and API key.** In Immich: create the user, log in as them,
 Account Settings → API Keys → new key ("all permissions" is simplest; without album permissions imports still work
-but folder albums do not). Two people can never share one Immich account (the bridge refuses it).
+but folder albums do not). Two people can never share one Immich account (the bridge refuses it). The key must have at least `user.read` and
+`asset.upload` (or "all"); *Test key* names exactly which permissions a key is missing. Without `album.read`,
+`album.create` and `albumAsset.create` imports work but folder albums do not (also listed).
 
 **2. Decide where their files live.** Either one copyparty with a folder per person (`/w/alex`, `/w/sam`), or a
 second copyparty container with its own data folder:

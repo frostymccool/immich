@@ -23,6 +23,8 @@ class StubImmich:
         self.user_id = "user-1"
         self.user_email = "test@example.test"
         self.key_permissions: list[str] = ["all"]
+        self.api_key_status = 200  # status of GET /api-keys/me (401 = key not valid)
+        self.users_me_status = 200  # e.g. 401 (bad key) or 403 (key without user.read)
         self.forbid_albums = False  # every album call answers 403 (a key without album permissions)
         self.album_item_error: str | None = None  # PUT answers 200 but with a per-asset error
         self.album_fail_ids: set[str] = set()
@@ -47,8 +49,12 @@ class StubImmich:
             def do_GET(self):
                 if self.path == stub.media_types_route:
                     self._json(200, {"image": [".jpg", ".png", ".heic"], "video": [".mp4"], "sidecar": [".xmp"]})
+                elif self.path == "/api/users/me" and stub.users_me_status != 200:
+                    self._json(stub.users_me_status, {"message": "nope"})
                 elif self.path == "/api/users/me":
                     self._json(200, {"id": stub.user_id, "name": stub.user_name, "email": stub.user_email})
+                elif self.path == "/api/api-keys/me" and stub.api_key_status != 200:
+                    self._json(stub.api_key_status, {"message": "nope"})
                 elif self.path == "/api/api-keys/me":
                     self._json(200, {"id": "key-1", "name": "bridge", "permissions": stub.key_permissions})
                 elif self.path == "/api/albums" and stub.forbid_albums:
