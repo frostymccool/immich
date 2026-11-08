@@ -35,6 +35,7 @@ class CopypartySettings extends ConsumerWidget {
           if (showServerConfig) ...const [
             SettingGroupTitle(title: 'Copyparty Server', icon: Icons.cloud_upload_outlined),
             _HostUrlTile(),
+            _UsernameTile(),
             _PasswordTile(),
             _UploadPathTile(),
             _SelfSignedCertTile(),
@@ -307,6 +308,34 @@ class _HostUrlTile extends ConsumerWidget {
           hint: 'https://copyparty.yourdomain.com',
           initialValue: hostUrl,
           onSave: (value) => ref.read(settingsProvider).write(SettingsKey.copypartyHostUrl, value.trim()),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Username
+// ---------------------------------------------------------------------------
+
+class _UsernameTile extends ConsumerWidget {
+  const _UsernameTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final username = ref.watch(appConfigProvider.select((c) => c.copyparty.username));
+    return Padding(
+      padding: const EdgeInsets.only(left: 8.0),
+      child: SettingListTile(
+        title: 'Copyparty username',
+        subtitle: username.isEmpty ? 'Not set (password only)' : username,
+        leading: const Icon(Icons.person_outline),
+        onTap: () => _showTextDialog(
+          context,
+          title: 'Copyparty Username',
+          hint: 'Leave empty to log in with the password alone',
+          initialValue: username,
+          onSave: (value) => ref.read(settingsProvider).write(SettingsKey.copypartyUsername, value.trim()),
         ),
       ),
     );

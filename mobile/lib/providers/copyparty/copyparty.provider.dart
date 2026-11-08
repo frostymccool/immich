@@ -78,12 +78,14 @@ final copypartyLoggerProvider = Provider<CopypartyLogger>((ref) => CopypartyLogg
 
 final copypartyUploaderProvider = Provider<CopypartyUploaderService>((ref) {
   final allowSelfSigned = ref.watch(appConfigProvider.select((c) => c.copyparty.allowSelfSignedCert));
+  final username = ref.watch(appConfigProvider.select((c) => c.copyparty.username));
   // No explicit `client:` here (unlike before) — letting the service build its
   // own means it owns the client and resetConnection() can actually swap it
   // out later (see CopypartyUploaderService.resetConnection).
   final service = CopypartyUploaderService(
     logger: ref.watch(copypartyLoggerProvider),
     acceptSelfSignedCert: allowSelfSigned,
+    username: username,
   );
   ref.onDispose(service.dispose);
   return service;

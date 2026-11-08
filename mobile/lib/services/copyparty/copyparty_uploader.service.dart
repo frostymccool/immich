@@ -40,11 +40,33 @@ class CopypartyUploaderService {
   // is a no-op in that case.
   final bool _ownsClient;
 
-  CopypartyUploaderService({http.Client? client, CopypartyLogger? logger, bool acceptSelfSignedCert = true})
-    : _client = client ?? _createClient(acceptSelfSignedCert),
-      _log = logger,
-      _acceptSelfSignedCert = acceptSelfSignedCert,
-      _ownsClient = client == null;
+  /// Copyparty account name; empty = password-only login (the original behaviour, `?pw=` query parameter).
+  final String _username;
+
+  CopypartyUploaderService({
+    http.Client? client,
+    CopypartyLogger? logger,
+    bool acceptSelfSignedCert = true,
+    String username = '',
+  }) : _client = client ?? _createClient(acceptSelfSignedCert),
+       _log = logger,
+       _acceptSelfSignedCert = acceptSelfSignedCert,
+       _ownsClient = client == null,
+       _username = username.trim();
+
+  /// With a username, credentials travel as HTTP Basic `username:password` and NOT in the `pw` query parameter.
+  /// copyparty (httpcli.py) tries the whole decoded string, then `password`, then `username`, so this works whether
+  /// or not the server was started with `--usernames` (which would need `?pw=username:password`, wrong without it).
+  bool get _basicAuth => _username.isNotEmpty;
+
+  /// Extra request headers that carry the credentials; empty without a username.
+  Map<String, String> _authHeaders(String password) {
+    if (!_basicAuth) {
+      return const {};
+    }
+    final token = base64.encode(utf8.encode('$_username:$password'));
+    return {'Authorization': 'Basic $token'};
+  }
 
   // Build an HTTP client, optionally accepting self-signed certs (common for
   // home servers).
@@ -90,7 +112,9 @@ class CopypartyUploaderService {
         return 'Host URL is not configured';
       }
       final uri = Uri.parse(base);
-      final headers = password.isNotEmpty ? {'X-Password': password} : <String, String>{};
+      final headers = _basicAuth
+          ? _authHeaders(password)
+          : (password.isNotEmpty ? {'X-Password': password} : <String, String>{});
       final response = await _client.get(uri, headers: headers).timeout(const Duration(seconds: 10));
       if (response.statusCode < 400) {
         return null;
@@ -277,7 +301,7 @@ class CopypartyUploaderService {
     // Stop+Resume cleared). Bound it with a stall timeout AND race it against the
     // cancel token so Stop is immediate. Mirrors _uploadChunk.
     final postFuture = _client
-        .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
+        .post(uri, headers: {'Content-Type': 'application/json', ..._authHeaders(password)}, body: body)
         .timeout(
           const Duration(seconds: 60),
           onTimeout: () => throw CopypartyUploadException('$label stalled (no response in 60s)'),
@@ -386,7 +410,7 @@ class CopypartyUploaderService {
   /// [folderUri] must point at the folder (path ending in `/`).
   Future<Map<String, int>> listFolderSizes(Uri folderUri, String password) async {
     final params = <String, String>{'ls': ''};
-    if (password.isNotEmpty) {
+    if (password.isNotEmpty && !_basicAuth) {
       params['pw'] = password;
     }
     final uri = folderUri.replace(queryParameters: params);
@@ -399,7 +423,7 @@ class CopypartyUploaderService {
     // called it just sat there with no feedback. Same 60s stall guard as the
     // handshake POST.
     final resp = await _client
-        .get(uri, headers: {'Accept': 'application/json'})
+        .get(uri, headers: {'Accept': 'application/json', ..._authHeaders(password)})
         .timeout(
           const Duration(seconds: 60),
           onTimeout: () => throw const CopypartyUploadException('Folder listing stalled (no response in 60s)'),
@@ -475,11 +499,13 @@ class CopypartyUploaderService {
           host: fileUri.host,
           port: fileUri.hasPort ? fileUri.port : null,
           pathSegments: [...segs, name],
-          queryParameters: password.isNotEmpty ? {'pw': password} : null,
+          queryParameters: password.isNotEmpty && !_basicAuth ? {'pw': password} : null,
         );
         try {
           _log?.request('DELETE', target, const {});
-          final resp = await _client.delete(target).timeout(const Duration(seconds: 30));
+          final resp = await _client
+              .delete(target, headers: _authHeaders(password))
+              .timeout(const Duration(seconds: 30));
           _log?.response(resp.statusCode, headers: resp.headers, body: resp.body);
           if (resp.statusCode < 300) {
             removed.add(name);
@@ -508,7 +534,7 @@ class CopypartyUploaderService {
     final folderUri = _buildUri(hostUrl, uploadPath, password);
     final fileUri = folderUri.replace(pathSegments: [...folderUri.pathSegments.where((s) => s.isNotEmpty), filename]);
     _log?.request('DELETE', fileUri, const {});
-    final response = await _client.delete(fileUri);
+    final response = await _client.delete(fileUri, headers: _authHeaders(password));
     _log?.response(response.statusCode, headers: response.headers, body: response.body);
     if (response.statusCode >= 300) {
       throw CopypartyUploadException('DELETE $filename failed: HTTP ${response.statusCode}');
@@ -634,13 +660,15 @@ class CopypartyUploaderService {
   // Chunk upload (step 2)
   // ---------------------------------------------------------------------------
 
-  /// Uploads a single chunk to the server.
+  /// Uploads a single chunk to the server. [password] only matters with a username (Basic auth header);
+  /// without one it already rides in [chunkUri]'s `pw` parameter.
   Future<void> _uploadChunk(
     Uri chunkUri,
     String wark,
     String chunkHash,
     Uint8List chunkBytes,
-    int chunkIdx, {
+    int chunkIdx,
+    String password, {
     Completer<void>? cancelToken,
   }) async {
     // X-Up2k-Stat is optional progress telemetry (u2c.py only sends it "if
@@ -657,6 +685,7 @@ class CopypartyUploaderService {
 
     final request = http.Request('POST', chunkUri);
     request.headers.addAll(headers);
+    request.headers.addAll(_authHeaders(password));
     request.bodyBytes = chunkBytes;
 
     // A stuck socket (bad hotel/airport wifi) can hang a chunk POST forever.
@@ -790,6 +819,7 @@ class CopypartyUploaderService {
               file.chunkHashes[chunkIdx],
               chunkBytes,
               chunkIdx,
+              password,
               cancelToken: cancelToken,
             );
             break;
@@ -1421,7 +1451,7 @@ class CopypartyUploaderService {
       '',
     ];
     var uri = baseUri.replace(pathSegments: segments);
-    if (password.isNotEmpty) {
+    if (password.isNotEmpty && !_basicAuth) {
       uri = uri.replace(queryParameters: {'pw': password});
     }
     return uri;
@@ -1442,7 +1472,7 @@ class CopypartyUploaderService {
       // Fallback: use the same base URL as the handshake
       return _buildUri(hostUrl, '', password).replace(path: Uri.parse(hostUrl.trimRight()).path);
     }
-    if (password.isEmpty) {
+    if (password.isEmpty || _basicAuth) {
       return base;
     }
     final params = Map<String, String>.from(base.queryParameters);
