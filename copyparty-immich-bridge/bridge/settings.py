@@ -35,6 +35,7 @@ EDITABLE = (
     "post_import_action",
     "album_name",
     "album_from_folder",
+    "people_root",
     "paused",
     "include_extensions",
     "log_level",
@@ -141,6 +142,23 @@ def validate(cfg: Config, changes: dict[str, Any], browse_roots: list[str]) -> d
         else:
             out["album_name"] = album
 
+    if "people_root" in changes:
+        raw = changes["people_root"]
+        root = "" if raw is None or (isinstance(raw, str) and not raw.strip()) else _norm_dir(raw)
+        if root is None:
+            problems.append("people_root must be a folder path (or empty to switch folder-per-person off)")
+        elif root:
+            if root == "/":
+                problems.append("people_root: '/' is not allowed")
+            elif browse_roots and not is_within_dirs(root, browse_roots):
+                problems.append(f"people_root: {root} is outside the folders this container can see ({', '.join(browse_roots)})")
+            elif not os.path.isdir(root):
+                problems.append(f"people_root: {root} does not exist in the container (is it mounted?)")
+            else:
+                out["people_root"] = root
+        else:
+            out["people_root"] = ""
+
     for flag in ("album_from_folder", "paused"):
         if flag in changes:
             raw = changes[flag]
@@ -243,6 +261,16 @@ class SettingsStore:
         with self._lock:
             # watch_dirs first so priority_dirs is checked against the folders it will live in
             for key in sorted(overrides, key=lambda k: (k != "watch_dirs", k)):
+                if key == "people_root" and isinstance(overrides[key], str):
+                    # Keep it even when the folder is not mounted at boot: an empty scan imports nothing, whereas
+                    # dropping it would hand main the whole tree.
+                    root = _norm_dir(overrides[key]) if overrides[key].strip() else ""
+                    if root is not None and root != "/" and (not root or not self.browse_roots or is_within_dirs(root, self.browse_roots)):
+                        if root and not os.path.isdir(root):
+                            log.warning("saved people folder %s is not there right now: nothing is imported for anybody until it is", root)
+                        self._apply({"people_root": root})
+                        usable["people_root"] = root
+                        continue
                 try:
                     clean = validate(self._cfg, {key: overrides[key]}, self.browse_roots)
                 except SettingsError as ex:

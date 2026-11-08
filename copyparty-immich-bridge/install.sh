@@ -33,6 +33,10 @@ BRIDGE_PORT="${BRIDGE_PORT:-8099}"
 # comma list of container names, e.g. EXTRA_COPYPARTY=copyparty-alex,copyparty-kids . If a container has several
 # data mounts, pick one with name=/host/folder. Remembered by re-runs; EXTRA_COPYPARTY=none forgets them.
 EXTRA_COPYPARTY="${EXTRA_COPYPARTY:-}"
+# Folder-per-person mode: a folder (relative to the data folder; . = the data folder itself) whose subfolders are
+# named firstname-<immich user id>. Then adding a person = pick the name + paste their API key. Remembered by
+# re-runs; PEOPLE_ROOT=none switches it off. (It can also be set on the bridge page: People tab.)
+PEOPLE_ROOT="${PEOPLE_ROOT:-}"
 
 MARKER="# managed by the immich-bridge installer"
 SWEEP_NOTE="15 minutes"
@@ -109,6 +113,22 @@ if [ "$HOOK" = "1" ] && grep -qE '^[[:space:]]+command:' "$COPYPARTY_DIR/docker-
   HOOK=0
 fi
 
+# --- folder-per-person (optional) ------------------------------------------------------
+if [ -z "$PEOPLE_ROOT" ] && [ -f "$OVERRIDE" ] && grep -qF "$MARKER" "$OVERRIDE"; then
+  prev_people="$(sed -n 's/^[[:space:]]*PEOPLE_ROOT:[[:space:]]*//p' "$OVERRIDE" | head -n1)"
+  case "$prev_people" in
+    "$MOUNT_DEST") PEOPLE_ROOT="." ;;
+    "$MOUNT_DEST"/*) PEOPLE_ROOT="${prev_people#"$MOUNT_DEST"/}" ;;
+  esac
+fi
+[ "$PEOPLE_ROOT" != "none" ] || PEOPLE_ROOT=""
+if [ -n "$PEOPLE_ROOT" ]; then
+  [[ "$PEOPLE_ROOT" =~ ^[A-Za-z0-9_./@+\ -]+$ ]] || die "PEOPLE_ROOT has unusual characters; use letters, digits and _ . / - only"
+  PEOPLE_ROOT="${PEOPLE_ROOT#/}"; PEOPLE_ROOT="${PEOPLE_ROOT%/}"; [ -n "$PEOPLE_ROOT" ] || PEOPLE_ROOT="."
+  [ -n "$APP_FOLDER" ] || APP_FOLDER="."   # nothing to ask: everybody's folder is found by name
+  echo "Folder-per-person: $MOUNT_DEST/$PEOPLE_ROOT (subfolders are named firstname-<immich user id>)"
+fi
+
 # --- which folder does the phone app upload into? ----------------------------------
 # 1) explicit APP_FOLDER=..., 2) the value a previous run of this installer wrote, 3) ask once.
 if [ -z "$APP_FOLDER" ] && [ -f "$OVERRIDE" ] && grep -qF "$MARKER" "$OVERRIDE"; then
@@ -158,6 +178,12 @@ if [ "$APP_FOLDER" != "." ]; then
   PRIORITY_LINE="      PRIORITY_DIRS: $PRIORITY"
 fi
 if [ "$WRITABLE" = "1" ]; then MOUNT_MODE=rw; else MOUNT_MODE=ro; fi
+if [ -n "$PEOPLE_ROOT" ]; then
+  PEOPLE_DIR="$MOUNT_DEST"; [ "$PEOPLE_ROOT" = "." ] || PEOPLE_DIR="$MOUNT_DEST/$PEOPLE_ROOT"
+  PEOPLE_LINE="      PEOPLE_ROOT: $PEOPLE_DIR"
+else
+  PEOPLE_LINE="      # PEOPLE_ROOT: not set (folder-per-person is off)"
+fi
 
 # --- more copyparty containers (optional) ---------------------------------------------
 # Each one's data folder is mounted at /cp/<name>. Two copyparty containers can both call their volume /w, so the
@@ -324,6 +350,7 @@ EOF
 $PRIORITY_LINE
       BROWSE_ROOTS: $EXTRA_ROOTS
 $EXTRA_MAPS_LINE
+$PEOPLE_LINE
       BRIDGE_BUILD: "$BUILD_ID"
     volumes:
       - $MOUNT_SRC:$MOUNT_DEST:$MOUNT_MODE
@@ -364,6 +391,11 @@ say "Installed"
 echo "Watching:        $WATCH"
 echo "Imported first:  ${PRIORITY:-nothing in particular}"
 if [ "$HOOK" = "1" ]; then echo "Instant import:  on (copyparty hook)"; else echo "Instant import:  off (the sweep checks every 15 minutes)"; fi
+if [ -n "$PEOPLE_ROOT" ]; then
+  echo "Folder per person: on. Open the People tab, pick a name, paste that person's Immich API key."
+  echo "                   The bridge checks the key belongs to the account id in the folder name; a folder"
+  echo "                   nobody has been set up for is imported by nobody."
+fi
 if [ "$WIDE" != "1" ] && [ "$APP_FOLDER" != "." ]; then
   echo "Only the app's folder is watched. To also import the rest of '$BASE_FOLDER', re-run with WIDE=1 in front."
 fi

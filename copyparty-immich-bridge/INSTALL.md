@@ -110,6 +110,45 @@ index database onto the VM's own disk, because sqlite cannot lock files on those
 `database is locked` and switches its upload index off). After a move copyparty re-indexes the folder, and uploads pause
 until that finishes.
 
+## Folder per person (no folders or logins to type)
+
+If copyparty gives every person their own folder named **`<firstname>-<their Immich user id>`** (the full id, e.g.
+`leza-3f2a9c1e-7b4d-4e0a-9d21-1c8e5a6b91c2`) inside one folder (say the network share `/mnt/picsupload`), the bridge can
+work out the rest:
+
+1. Turn it on: on the bridge page, **People → Folder per person → Choose the people folder…** (or install with
+   `PEOPLE_ROOT=.`, meaning the copyparty data folder itself; `PEOPLE_ROOT=Share/People` for a subfolder;
+   `PEOPLE_ROOT=none` switches it off; re-runs and `update-bridge.sh` remember it).
+2. **Add a person:** pick their first name from the dropdown (the id is not shown; if two people share a first name
+   the last 4 digits of the id are shown to tell them apart) and paste **their own** Immich API key. *Test key* confirms
+   the key belongs to the exact Immich account whose full id is in the folder name. A key from a different account is
+   refused and the message says so (naming only the last 4 digits of each id).
+3. They start paused; **Review & start** as usual.
+
+What changes in this mode:
+- The **main account imports only its own folder** (`<name>-<its id>`), found by asking Immich whose key it is. Until
+  Immich has answered, main imports nothing. It no longer imports "everything under the data folder".
+- A folder that matches **nobody** (not named `name-<id>`, or nobody set up for that id yet) is imported by **nobody**
+  and is listed in the dropdown note ("Ignored …"). Files loose in the people folder itself are ignored too.
+- No folder or copyparty-login fields: the folder *is* the identity. (Logins still work for people added the old way.)
+- Files directly in a person's folder get no folder album (the album would be named after the id); files in
+  subfolders still get an album named after that subfolder.
+- A person's key can only ever be replaced by a key of the **same** Immich account.
+- Folders still have to be created on the copyparty side, with copyparty permissions so each person can write only
+  their own folder; the bridge does not manage copyparty accounts.
+- Moving existing files: put them into the person's folder and press *Review & start* (see above).
+- **Safety rules from the review:** a symlink in the people folder is never a person's folder (it could point at
+  somebody else's photos); the main account's own folder is found only from Immich's *current* answer (an id
+  remembered from an earlier run is never used, and until Immich answers main imports nothing); if a person's key
+  later resolves to a different Immich account than their folder is named for they are **held**; inside the people
+  folder a person can only ever have folders named for their own account; the saved people folder is kept even if
+  the share is not mounted at boot (then nothing imports, rather than the main account taking the whole tree).
+- **Switching it off** sends main back to the installer's folders, so any folder under them that nobody was set up
+  for is then imported into the *main* account (the page warns you first).
+- The setting saved on the page wins over `PEOPLE_ROOT` from the installer (same rule as every other page setting;
+  the bridge log shows the value in effect at startup). The folder names (with the full id) are visible to anyone
+  with the bridge token via the API; the page itself shows only the last 4 digits.
+
 ## More than one person (several Immich accounts)
 
 One bridge can import for several people, each into **their own Immich account**. Nothing changes for a

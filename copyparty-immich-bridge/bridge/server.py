@@ -222,7 +222,7 @@ def make_handler(
                         "active": active,
                         "backlog": backlog,
                         "watch_dirs": dirs,
-                        "priority_dirs": cfg.priority_dirs if one in (None, MAIN_ID) else [],
+                        "priority_dirs": (manager.runtime(MAIN_ID).view.priority_dirs if manager and manager.runtime(MAIN_ID) else cfg.priority_dirs) if one in (None, MAIN_ID) else [],
                         "albums": parts[0][0].album_info() if one is not None else worker.album_info(),
                         "recent": recent,
                         "users": len(parts) if one is None else 1,
@@ -248,8 +248,8 @@ def make_handler(
                     "paused": cfg.paused,
                     "active": worker.active(),
                     "backlog": worker.backlog(),
-                    "watch_dirs": cfg.watch_dirs,
-                    "priority_dirs": cfg.priority_dirs,
+                    "watch_dirs": manager.router.folders_of(MAIN_ID) if manager else cfg.watch_dirs,
+                    "priority_dirs": (manager.runtime(MAIN_ID).view.priority_dirs if manager and manager.runtime(MAIN_ID) else cfg.priority_dirs),
                     "albums": worker.album_info(),
                     "recent": recent,
                 },
@@ -271,6 +271,9 @@ def make_handler(
             elif route == "/api/users" and manager is not None:
                 if self._require_api():
                     self._send_json(200, manager.describe_all())
+            elif route == "/api/people-folders" and manager is not None:
+                if self._require_api():
+                    self._send_json(200, manager.people_folders())
             elif route.startswith("/api/users/") and route.endswith("/adopt") and manager is not None:
                 if self._require_api():
                     uid = route[len("/api/users/") : -len("/adopt")]
@@ -520,12 +523,21 @@ def make_handler(
                 return
             parts = self.path.strip("/").split("/")  # api users [id] [action]
             try:
-                if parts == ["api", "users"]:
+                if parts == ["api", "users"] and "people_folder" in body:
+                    self._send_json(201, manager.add_person_from_folder(body))
+                    if scan_now is not None:
+                        scan_now()
+                elif parts == ["api", "users"]:
                     self._send_json(201, manager.add_user(body))
                     if scan_now is not None:
                         scan_now()
                 elif parts == ["api", "users", "check"]:
                     who = body.get("user")
+                    if isinstance(body.get("people_folder"), str):
+                        info = manager.check_person_key(body["people_folder"], str(body.get("api_key") or ""))
+                        self._send_json(200, {"immich_user": info["who"], "album_permission": info["albums"],
+                                              "permissions": info["permissions"], "folder_ok": True})
+                        return
                     info = manager.check_key(str(body.get("api_key") or ""), ignore_uid=who if isinstance(who, str) else None)
                     self._send_json(200, {"immich_user": info["who"], "album_permission": info["albums"], "permissions": info["permissions"]})
                 elif parts == ["api", "users", "ignored", "preview"]:

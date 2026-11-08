@@ -91,6 +91,7 @@ starts the bridge, asks only for the Immich API key). The manual steps below are
 | `BROWSE_ROOTS` | *(empty)* | Folders the web page's folder picker may list, and watched folders must sit inside (the installer sets it to copyparty's data mount). Empty = no folder picker |
 | `SETTINGS_FILE` | `/data/settings.json` | Where settings saved from the web page are kept (on the state volume) |
 | `USERS_FILE` | `/data/users.json` | The other people (Immich key, folders, copyparty logins), written by the People tab. Holds API keys: mode 600. Unreadable = the bridge refuses to start |
+| `PEOPLE_ROOT` | *(empty)* | Folder-per-person mode: a folder whose subfolders are named `<firstname>-<immich user id>`. The main account then imports only its own folder; a folder nobody is set up for is imported by nobody (also editable on the page: People tab) |
 | `SOURCE_MAPS` | *(empty)* | Several copyparty containers: `name\|/their/path=/bridge/path[,…]` — how to translate hook paths from the container whose hook sets `IMMICH_BRIDGE_SOURCE=name` (the installer writes this for `EXTRA_COPYPARTY`) |
 
 ## Web page (settings, folder picker, status, logs)
@@ -129,7 +130,7 @@ read-write (installer option `WRITABLE=1`); the page refuses them while it is re
 - `GET /` — the web page (the page itself is public; all data behind it needs the token)
 - `GET|PUT /api/config`, `POST /api/config/reset`, `GET /api/fs?path=`, `GET /api/logs`,
   `GET /api/logs/download`, `POST /api/scan`,
-  `GET|POST /api/users`, `PUT|DELETE /api/users/<id>`, `POST /api/users/check`, `GET|POST /api/users/<id>/adopt`, `POST /api/users/ignored/remove` (the People tab; see INSTALL.md "More than one person"; `?user=<id>` or `{"user": id}` scopes the other endpoints, default `main`), `POST /api/pause` (`{"paused": true|false}`), `POST /api/reimport` (`{"confirm": true}`: forget what was imported and import it all again), `POST /api/account/ack` (accept the current Immich account), `POST /api/albums/backfill` (add everything already imported to its folder album), `POST /api/albums/recheck` (re-test the key's album permissions) — the web page's backend. Send the token as
+  `GET|POST /api/users`, `PUT|DELETE /api/users/<id>`, `POST /api/users/check`, `GET|POST /api/users/<id>/adopt`, `GET /api/people-folders` (dropdown data), `POST /api/users {people_folder, api_key}` (folder-per-person add), `POST /api/users/ignored/remove` (the People tab; see INSTALL.md "More than one person"; `?user=<id>` or `{"user": id}` scopes the other endpoints, default `main`), `POST /api/pause` (`{"paused": true|false}`), `POST /api/reimport` (`{"confirm": true}`: forget what was imported and import it all again), `POST /api/account/ack` (accept the current Immich account), `POST /api/albums/backfill` (add everything already imported to its folder album), `POST /api/albums/recheck` (re-test the key's album permissions) — the web page's backend. Send the token as
   `X-Bridge-Token: <token>` or `Authorization: Bearer <token>`
 
 ## Notes & limits

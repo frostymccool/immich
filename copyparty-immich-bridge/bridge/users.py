@@ -45,6 +45,7 @@ class User:
     album_from_folder: bool = True
     paused: bool = False
     enabled: bool = True
+    immich_id: str = ""  # the Immich account id this person was verified against when added (folder-per-person mode)
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)
@@ -105,6 +106,7 @@ class UsersStore:
                         album_from_folder=bool(u.get("album_from_folder", True)),
                         paused=bool(u.get("paused", False)),
                         enabled=bool(u.get("enabled", True)),
+                        immich_id=str(u.get("immich_id") or ""),
                     )
                     for u in raw.get("users") or []
                 ]
@@ -211,7 +213,7 @@ class UsersStore:
     def _validate(self, data: dict[str, Any], current: User | None) -> dict[str, Any]:
         problems: list[str] = []
         out: dict[str, Any] = {}
-        allowed = {"name", "api_key", "folders", "priority_dirs", "cp_logins", "album_name", "album_from_folder", "paused", "enabled"}
+        allowed = {"name", "api_key", "folders", "priority_dirs", "cp_logins", "album_name", "album_from_folder", "paused", "enabled", "immich_id"}
         unknown = sorted(set(data) - allowed - {"id"})
         if unknown:
             problems.append(f"unknown field(s): {', '.join(unknown)}")
@@ -242,6 +244,12 @@ class UsersStore:
                 problems.append("album_name must be text of at most 200 characters")
             else:
                 out["album_name"] = " ".join(data["album_name"].split())
+        if "immich_id" in data:
+            iid = data["immich_id"]
+            if not isinstance(iid, str) or not re.fullmatch(r"[0-9a-fA-F-]{8,64}", iid):
+                problems.append("immich_id is not a valid id")
+            else:
+                out["immich_id"] = iid.lower()
         for flag in ("album_from_folder", "paused", "enabled"):
             if flag in data:
                 if not isinstance(data[flag], bool):

@@ -32,9 +32,10 @@ class _Root:
 
 
 class Router:
-    def __init__(self, main_dirs, users: UsersStore, claims_db: str | None = None):
+    def __init__(self, main_dirs, users: UsersStore, claims_db: str | None = None, strict=None):
         """`main_dirs` is a callable returning main's CURRENT watched folders (settings can change them)."""
         self._main_dirs = main_dirs
+        self._strict = strict  # callable: True = refuse symlinks even with a single person (folder-per-person mode)
         self._users = users
         self._claims_db = claims_db
         self._db: sqlite3.Connection | None = None
@@ -48,7 +49,7 @@ class Router:
 
     @property
     def multi(self) -> bool:
-        return bool(self._users.users())
+        return bool(self._users.users()) or bool(self._strict and self._strict())
 
     def _layout(self) -> list[_Root]:
         key = (tuple(self._main_dirs()), self._users.version)

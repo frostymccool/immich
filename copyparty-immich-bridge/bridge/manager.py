@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from bridge.config import Config
+from bridge.people import PeopleLayout, last4, parse_folder
 from bridge.immich import ALBUM_PERMISSION_WHY, ALBUM_PERMISSIONS, REQUIRED_PERMISSIONS, ImmichClient
 from bridge.router import Router
 from bridge.scanner import is_within_dirs, iter_candidates
@@ -58,6 +59,9 @@ class UserManager:
                 cfg.immich_url, key, cfg.device_id, verify_tls=cfg.verify_tls, upload_timeout=cfg.upload_timeout
             )
         )
+        # Folder-per-person mode (cfg.people_root): which folder is whose, proven by the Immich id in its name
+        self.people = PeopleLayout(lambda: cfg.people_root, self._main_id, lambda: cfg.watch_dirs)
+        self.wake: Callable[[], None] | None = None  # asks the sweep to run (set by __main__)
         self._rt: dict[str, Runtime] = {}
         self._seq = 0
         # Guards the runtime table and routing decisions ONLY. Never held across a network call or a thread join.
@@ -66,6 +70,15 @@ class UserManager:
         self.unassigned_count = 0
         self.unassigned_recent: collections.deque[dict] = collections.deque(maxlen=20)
         self._unassigned_seen: set[str] = set()
+
+    def _main_id(self) -> str:
+        """The Immich account id of the main key: confirmed by Immich, else the one remembered from the last run."""
+        rt = self._rt.get(MAIN_ID)
+        if rt is None:
+            return ""
+        # LIVE answer only. The id remembered from an earlier run must never route files: the key may belong to a
+        # different account now, and then the old account's folder would be uploaded with the new key.
+        return (rt.worker.immich_user or {}).get("id") or ""
 
     # -- lifecycle -----------------------------------------------------------------------
 
@@ -77,6 +90,8 @@ class UserManager:
 
     def start_main(self, state: StateStore, client: ImmichClient) -> Runtime:
         view = UserView(self.cfg, MAIN_ID, self.users)
+        view.main_dirs = self.people.main_dirs
+        view.people_enabled = lambda: self.people.enabled
         worker = ImportWorker(view, state, client, self._allowed, router=self.router, user_id=MAIN_ID)
         rt = Runtime(MAIN_ID, worker, state, client, view)
         with self._lock:
@@ -148,6 +163,9 @@ class UserManager:
         for rt in self.runtimes():
             self._identify(rt)
         self._flag_duplicates()
+        self.people.invalidate()
+        if self.wake:
+            self.wake()  # main's folder is only known now: look at it right away
 
     def _identify(self, rt: Runtime) -> None:
         try:
@@ -165,6 +183,12 @@ class UserManager:
         main_known = bool(main_rt and (main_rt.worker.immich_user or {}).get("id"))
         for rt in runtimes:
             who = (rt.worker.immich_user or {}).get("id")
+            user = self.users.get(rt.uid) if rt.uid != MAIN_ID else None
+            if user and user.immich_id and who and who.lower() != user.immich_id:
+                # the key no longer belongs to the account this person's folder is named for
+                rt.view.blocked = f"the API key now belongs to a different Immich account (…{last4(who)}) than this person's folder (…{last4(user.immich_id)})"
+                log.error("user %s held: %s", rt.uid, rt.view.blocked)
+                continue
             if not who or (rt.uid != MAIN_ID and not main_known):
                 # fail closed: until main's account is known nobody can be shown to differ from it
                 if rt.uid != MAIN_ID:
@@ -237,8 +261,9 @@ class UserManager:
         user = None if main else self.users.get(uid)
         if not main and user is None:
             return None
-        folders = self.cfg.watch_dirs if main else user.folders
+        folders = self.people.main_dirs() if main else user.folders
         who = rt.worker.immich_user if rt else None
+        iid = (who or {}).get("id") or ("" if main else user.immich_id)
         return {
             "id": uid,
             "name": self.users.main["name"] if main else user.name,
@@ -249,7 +274,9 @@ class UserManager:
             "running": rt is not None,
             "folders": list(folders),
             "missing_folders": [f for f in folders if not os.path.isdir(f)],
-            "priority_dirs": list(self.cfg.priority_dirs if main else user.priority_dirs),
+            "priority_dirs": [] if (main and self.people.enabled) else list(self.cfg.priority_dirs if main else user.priority_dirs),
+            "folder_waiting": bool(main and self.people.enabled and not folders),
+            "id_last4": last4(iid),
             "cp_logins": list(self.users.main["cp_logins"] if main else user.cp_logins),
             "album_name": self.cfg.album_name if main else user.album_name,
             "album_from_folder": self.cfg.album_from_folder if main else user.album_from_folder,
@@ -267,6 +294,8 @@ class UserManager:
         people = [self.describe(MAIN_ID)] + [self.describe(u.id) for u in self.users.users()]
         return {
             "users": people,
+            "people_root": self.people.root(),
+            "people_folders": self.people_folders(),
             "ignored_dirs": list(self.users.ignored_dirs),
             "unassigned": {"count": self.unassigned_count, "recent": list(self.unassigned_recent)},
         }
@@ -317,13 +346,86 @@ class UserManager:
                 name = self.describe(rt.uid)["name"]
                 raise UsersError(f"That API key belongs to the same Immich account as {name}; each person needs their own account")
 
-    def add_user(self, data: dict) -> dict:
+    def _check_people_folders(self, folders: list[str], identity: str, name: str) -> None:
+        """Inside the people folder a person may only have a folder named for THEIR Immich account (and never main's)."""
+        if not self.people.enabled or not identity:
+            return
+        root = os.path.realpath(self.people.root())
+        main_id = self._main_id().lower()
+        for f in folders:
+            real = os.path.realpath(f)
+            if not is_within_dirs(real, [root]) or real == root:
+                continue
+            top = os.path.relpath(real, root).split(os.sep)[0]
+            parsed = parse_folder(top)
+            if parsed is None or parsed[1] != identity.lower():
+                raise UsersError(f"{f} is inside the people folder, so it must be named <firstname>-<{name}'s Immich id>; it is not")
+            if main_id and parsed[1] == main_id:
+                raise UsersError(f"{f} is the main account's folder")
+
+    def people_folders(self) -> dict:
+        """What the Add person dropdown shows: folders under the people root, who has them, never the full id."""
+        if not self.people.enabled:
+            return {"enabled": False, "root": "", "folders": [], "skipped": []}
+        entries, skipped = self.people.scan(force=True)
+        main_id = self._main_id().lower()
+        taken = {(u.immich_id or "").lower(): u.id for u in self.users.users() if u.immich_id}
+        by_path = {f: u.id for u in self.users.users() for f in u.folders}
+        names: dict[str, int] = {}
+        for e in entries:
+            names[e["name"].lower()] = names.get(e["name"].lower(), 0) + 1
+        out = []
+        for e in entries:
+            claimed = MAIN_ID if (main_id and e["id"] == main_id) else taken.get(e["id"]) or by_path.get(e["path"])
+            out.append({"folder": e["folder"], "name": e["name"], "claimed_by": claimed,
+                        "last4": last4(e["id"]), "duplicate_name": names[e["name"].lower()] > 1})
+        return {"enabled": True, "root": self.people.root(), "folders": out, "skipped": skipped}
+
+    def _folder_for_key(self, folder: str, info: dict) -> dict:
+        """The detected folder entry, if this key's account is the one whose id is in the folder's name."""
+        entry = next((e for e in self.people.scan(force=True)[0] if e["folder"] == folder), None)
+        if entry is None:
+            raise UsersError("That folder was not found any more. Press refresh and pick it again.")
+        key_id = (info["who"].get("id") or "").lower()
+        if key_id != entry["id"]:
+            who = info["who"]
+            raise UsersError(
+                f"That API key belongs to {who.get('name') or '?'} ({who.get('email') or '?'}), whose account id ends "
+                f"…{last4(key_id)}, but the folder for {entry['name']} is for the account ending …{last4(entry['id'])}. "
+                f"Use {entry['name']}'s own API key (created while logged in to Immich as {entry['name']}), or pick the "
+                "folder that belongs to this key.")
+        return entry
+
+    def check_person_key(self, folder: str, api_key: str) -> dict:
+        info = self.check_key(api_key.strip())
+        self._folder_for_key(folder, info)
+        info["folder_ok"] = True
+        return info
+
+    def add_person_from_folder(self, data: dict) -> dict:
+        folder, key = data.get("people_folder"), data.get("api_key")
+        if not isinstance(folder, str) or not isinstance(key, str) or not key.strip():
+            raise UsersError("pick a person and paste their API key")
+        if not self.people.enabled:
+            raise UsersError("folder-per-person mode is off (set the people folder first)")
+        info = self.check_key(key.strip())
+        entry = self._folder_for_key(folder, info)
+        for e in self.people_folders()["folders"]:
+            if e["folder"] == folder and e["claimed_by"]:
+                raise UsersError(f"{entry['name']} is already set up")
+        return self.add_user({"name": entry["name"], "api_key": key.strip(), "folders": [entry["path"]],
+                              "immich_id": entry["id"]}, info=info)
+
+    def add_user(self, data: dict, info: dict | None = None) -> dict:
         key = data.get("api_key")
         if not isinstance(key, str) or not key.strip():
             raise UsersError("api_key is required")
-        info = self.check_key(key.strip())  # network: outside the lock
+        if info is None:
+            info = self.check_key(key.strip())  # network: outside the lock
         with self._lock:
             self._refuse_shared_account(info, None)  # re-check: somebody may have been added meanwhile
+            if isinstance(data.get("folders"), list):
+                self._check_people_folders([f for f in data["folders"] if isinstance(f, str)], info["who"].get("id") or "", str(data.get("name") or "this person"))
             user = self.users.add(data)  # starts paused: review, then press Review & start
             try:
                 rt = self.start_user(user)
@@ -361,6 +463,13 @@ class UserManager:
                 raise UsersError("no such user", 404)
             if info is not None:
                 self._refuse_shared_account(info, uid)
+                if old.immich_id and (info["who"].get("id") or "").lower() != old.immich_id:
+                    raise UsersError(
+                        f"That key belongs to a different Immich account (…{last4(info['who'].get('id') or '')}) than "
+                        f"{old.name}'s folder is for (…{last4(old.immich_id)}). Use {old.name}'s own API key.")
+            if isinstance(data.get("folders"), list):
+                ident = old.immich_id or ((self.runtime(uid).worker.immich_user or {}).get("id") if self.runtime(uid) else "") or ""
+                self._check_people_folders([f for f in data["folders"] if isinstance(f, str)], ident, old.name)
             was_enabled, was_paused = old.enabled, old.paused
             if data.get("paused") is False and was_paused:
                 # Resume must not skip the review: files already imported by someone else would be duplicated

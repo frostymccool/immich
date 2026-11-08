@@ -164,3 +164,19 @@ Operations / UX
 * Page: People tab with plain-language states (paused, held, key rejected, albums off, folder missing, key moved
   account), unassigned-files banner, switcher hidden for one person, Everyone view = totals.
 * Docs: INSTALL.md "More than one person" with a manual checklist for the cross-container hook.
+
+## Revision 3: folder-per-person (owner request, build 245)
+
+Owner's layout: one shared folder (e.g. a network mount) holding `<firstname>-<full Immich user id>` folders.
+Decisions (asked + answered): full UUID in the folder name; a folder that matches nobody is imported by nobody; main
+(the installer's key) imports only its own `name-<its id>` folder; Add person = dropdown of first names + paste key.
+
+* `bridge/people.py`: `parse_folder` (`name-<uuid>`, hyphenated names ok, uuid lower-cased), `PeopleLayout`
+  (3-second scan cache, `main_dirs()` = only the folder whose id equals main's id, nothing while main's id is unknown).
+* The id binding: `POST /api/users {people_folder, api_key}` probes the key (permissions + whoami), requires
+  `whoami.id == id in the folder name`, stores `immich_id` on the person, and refuses a later key of another account.
+* The router needs no new concept: main's roots simply become its own folder; every other `name-<id>` folder is
+  either a person's explicit folder or in nobody's roots (so owner() is None).
+* `people_root` is an editable setting (page) with an env default (`PEOPLE_ROOT`, installer remembers it).
+* No full ids anywhere in the UI/API errors/log text (last 4 digits only); the folder name is the option value only.
+* Files directly in a `name-<id>` folder get no folder album (it would put the id into Immich).

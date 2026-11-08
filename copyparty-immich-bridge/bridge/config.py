@@ -50,6 +50,9 @@ class Config:
     # Where the other people are stored (their API keys live here: keep it on the state volume).
     users_file: str = ""
 
+    # Folder-per-person mode: a folder whose subfolders are named `<firstname>-<immich user id>`. Empty = off.
+    people_root: str = ""
+
     sweep_interval: int = 900
     min_file_age: int = 30
     max_attempts: int = 5
@@ -170,6 +173,7 @@ class Config:
             path_map=path_map,
             source_maps=source_maps,
             users_file=e.get("USERS_FILE", "").strip(),
+            people_root=(os.path.normpath(e.get("PEOPLE_ROOT", "").strip()) if e.get("PEOPLE_ROOT", "").strip() else ""),
             sweep_interval=_int("SWEEP_INTERVAL_SECONDS", 900),
             min_file_age=_int("MIN_FILE_AGE_SECONDS", 30),
             max_attempts=_int("MAX_ATTEMPTS", 5, minimum=1),

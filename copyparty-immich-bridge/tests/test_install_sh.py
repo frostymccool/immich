@@ -316,3 +316,41 @@ def test_uninstall_says_where_the_keys_live(box):
     box.run(env={"APP_FOLDER": "Work"})
     r = box.run("--uninstall")
     assert r.returncode == 0 and "API key" in r.stdout and "docker volume rm" in r.stdout
+
+
+# ---- folder-per-person -------------------------------------------------------------------------------
+
+
+def test_people_root_is_written_asks_no_folder_question_and_is_remembered(box):
+    r = box.run(env={"PEOPLE_ROOT": "."})
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = box.override.read_text()
+    assert "      PEOPLE_ROOT: /w\n" in text and "Which folder" not in r.stdout
+    assert "WATCH_DIRS: /w\n" in text
+    assert "People tab" in r.stdout
+    again = box.run()  # update-bridge.sh: no variables
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert box.override.read_text() == text
+
+
+def test_people_root_in_a_subfolder_round_trips(box):
+    r = box.run(env={"PEOPLE_ROOT": "Trips"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    first = box.override.read_text()
+    assert "PEOPLE_ROOT: /w/Trips\n" in first
+    assert box.run().returncode == 0 and box.override.read_text() == first
+
+
+def test_people_root_none_switches_it_off_and_default_has_none(box):
+    box.run(env={"PEOPLE_ROOT": "Trips"})
+    r = box.run(env={"PEOPLE_ROOT": "none", "APP_FOLDER": "Work"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "PEOPLE_ROOT: not set" in box.override.read_text() and "      PEOPLE_ROOT: /w" not in box.override.read_text()
+    plain = box.run(env={"APP_FOLDER": "Work"})
+    assert plain.returncode == 0 and "PEOPLE_ROOT: not set" in box.override.read_text()
+
+
+def test_people_root_with_yaml_specials_is_refused(box):
+    r = box.run(env={"PEOPLE_ROOT": "x: [y]\n  evil: 1"})
+    assert r.returncode != 0 and "unusual characters" in r.stderr
+    assert not box.override.exists()

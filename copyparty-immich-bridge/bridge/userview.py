@@ -19,6 +19,9 @@ class UserView:
         self.uid = uid
         # Set by the manager: the reason this person's imports are held (same Immich account as someone else ...).
         self.blocked: str | None = None
+        # main account in folder-per-person mode: its folders come from the people root (set by the manager)
+        self.main_dirs = None
+        self.people_enabled = None
 
     def _user(self) -> User | None:
         return None if self.uid == MAIN_ID else self._store.get(self.uid)
@@ -41,12 +44,16 @@ class UserView:
     @property
     def watch_dirs(self) -> list[str]:
         user = self._user()
-        return user.folders if user else self._cfg.watch_dirs
+        if user:
+            return user.folders
+        return self.main_dirs() if self.main_dirs else self._cfg.watch_dirs
 
     @property
     def priority_dirs(self) -> list[str]:
         user = self._user()
-        return user.priority_dirs if user else self._cfg.priority_dirs
+        if user:
+            return user.priority_dirs
+        return [] if (self.people_enabled and self.people_enabled()) else self._cfg.priority_dirs
 
     @property
     def album_name(self) -> str:

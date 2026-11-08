@@ -281,10 +281,10 @@ def test_router_claims_survive_restart_and_gc_forgets_gone_files(tmp_path, tree)
 
 
 class World:
-    def __init__(self, tmp_path, tree, stub_main, stub_alice):
+    def __init__(self, tmp_path, tree, stub_main, stub_alice, people_root=None, extra_keys=None):
         self.tree = tree
         self.stub_main, self.stub_alice = stub_main, stub_alice
-        self.by_key = {"main-key": stub_main.url, "key-alice-123456": stub_alice.url}
+        self.by_key = {"main-key": stub_main.url, "key-alice-123456": stub_alice.url, **(extra_keys or {})}
         self.cfg = Config(
             immich_url=stub_main.url,
             api_key="main-key",
@@ -296,10 +296,14 @@ class World:
             token=TOKEN,
             bind_host="127.0.0.1",
             bind_port=0,
+            people_root=people_root or "",
         )
         self.users = UsersStore(str(tmp_path / "data" / "users.json"), [tree])
-        self.router = Router(lambda: self.cfg.watch_dirs, self.users, str(tmp_path / "data" / "router.db"))
+        holder = []
+        self.router = Router(lambda: holder[0].people.main_dirs() if holder else self.cfg.watch_dirs, self.users,
+                             str(tmp_path / "data" / "router.db"), strict=lambda: bool(holder and holder[0].people.enabled))
         self.manager = UserManager(self.cfg, self.users, self.router, set(EXTS), client_factory=self._client)
+        holder.append(self.manager)
         self.state = StateStore(self.cfg.state_db)
         self.manager.start_main(self.state, self._client("main-key"))
         self.manager.check_identities()
@@ -912,3 +916,261 @@ def test_key_check_says_when_immich_is_unreachable(world):
     world.by_key["key-lost-1234567"] = "http://127.0.0.1:9"
     code, body = call(world.base, "POST", "/api/users/check", {"api_key": "key-lost-1234567"})
     assert code == 400 and "Could not reach Immich" in body["error"]
+
+
+
+# ------------------------------------------- folder-per-person mode: <firstname>-<immich user id> ----------------------
+
+from bridge.people import PeopleLayout, parse_folder  # noqa: E402
+
+ID_MAIN = "11111111-aaaa-4bbb-8ccc-000000005567"
+ID_LEZA = "22222222-aaaa-4bbb-8ccc-0000000091c2"
+ID_SAM = "33333333-aaaa-4bbb-8ccc-00000000d00d"
+
+
+@pytest.fixture
+def pworld(tmp_path, tree):
+    root = os.path.join(tree, "people")
+    for d in (f"ian-{ID_MAIN}", f"leza-{ID_LEZA}", f"sam-{ID_SAM}", "notes", ".hidden"):
+        os.makedirs(os.path.join(root, d))
+    with StubImmich() as s_main, StubImmich() as s_leza, StubImmich() as s_sam:
+        for stub, uid, name in ((s_main, ID_MAIN, "Ian"), (s_leza, ID_LEZA, "Leza"), (s_sam, ID_SAM, "Sam")):
+            stub.user_id, stub.user_name, stub.user_email = uid, name, f"{name.lower()}@example.test"
+        w = World(tmp_path, tree, s_main, s_leza, people_root=root,
+                  extra_keys={"key-leza-1234567": s_leza.url, "key-sam-12345678": s_sam.url})
+        w.by_key["key-alice-123456"] = s_leza.url
+        w.s_sam, w.s_leza, w.root = s_sam, s_leza, root
+        yield w
+        w.close()
+
+
+def folder_of(world, who):
+    return next(e["folder"] for e in world.manager.people_folders()["folders"] if e["name"].lower() == who)
+
+
+def test_parse_folder_names():
+    assert parse_folder(f"leza-{ID_LEZA}") == ("Leza", ID_LEZA)
+    assert parse_folder(f"mary-ann-{ID_LEZA.upper()}") == ("Mary-ann", ID_LEZA)  # hyphenated name; id lower-cased
+    for bad in ("leza", "leza-5567", f"-{ID_LEZA}", f".leza-{ID_LEZA}", f"leza_{ID_LEZA}", f"leza-{ID_LEZA}x"):
+        assert parse_folder(bad) is None, bad
+
+
+def test_main_imports_only_its_own_folder_and_nobody_imports_unmatched_ones(pworld):
+    mine = put(pworld.root, f"ian-{ID_MAIN}/a.jpg", b"ian photo")
+    put(pworld.root, f"leza-{ID_LEZA}/l.jpg", b"leza photo before she is added")
+    put(pworld.root, "loose.jpg", b"file directly in the people root")
+    put(pworld.root, "notes/n.jpg", b"folder that is not name-id")
+    pworld.manager.people.invalidate()
+    pworld.manager.sweep_all()
+    assert pworld.drain(MAIN_ID)
+    assert len(pworld.stub_main.uploads) == 1 and pworld.s_leza.uploads == []
+    assert pworld.manager.runtime(MAIN_ID).state.get(mine).status == "imported"
+    # the open hook cannot route them either: not imported, reported
+    f = os.path.join(pworld.root, f"leza-{ID_LEZA}", "l.jpg")
+    assert call(pworld.base, "POST", "/hook", {"ap": f})[1] == {"queued": 0}
+
+
+def test_dropdown_lists_names_without_ids_and_marks_who_has_what(pworld):
+    body = call(pworld.base, "GET", "/api/people-folders")[1]
+    assert body["enabled"] and body["root"] == pworld.root
+    by = {e["name"]: e for e in body["folders"]}
+    assert set(by) == {"Ian", "Leza", "Sam"}
+    assert by["Ian"]["claimed_by"] == MAIN_ID and by["Leza"]["claimed_by"] is None
+    assert by["Leza"]["last4"] == "91c2" and by["Leza"]["duplicate_name"] is False
+    assert body["skipped"] == ["notes"]
+    assert ID_LEZA not in json.dumps([{k: v for k, v in e.items() if k != "folder"} for e in body["folders"]])
+
+
+def test_add_person_from_folder_checks_the_whole_id(pworld):
+    leza = folder_of(pworld, "leza")
+    status, body = call(pworld.base, "POST", "/api/users", {"people_folder": leza, "api_key": "key-leza-1234567"})
+    assert status == 201, body
+    assert body["name"] == "Leza" and body["paused"] is True and body["id_last4"] == "91c2"
+    assert body["folders"] == [os.path.join(pworld.root, leza)]
+    assert pworld.users.get("leza").immich_id == ID_LEZA
+    put(pworld.root, f"{leza}/l.jpg", b"leza photo")
+    assert call(pworld.base, "POST", "/api/users/leza/adopt", {"confirm": True, "expected_count": 0})[0] == 200
+    pworld.manager.sweep_all()
+    assert pworld.drain("leza") and pworld.drain(MAIN_ID)
+    assert len(pworld.s_leza.uploads) == 1 and pworld.stub_main.uploads == []
+
+
+def test_the_wrong_account_key_is_refused_with_last_four_digits_not_the_id(pworld):
+    leza = folder_of(pworld, "leza")
+    status, body = call(pworld.base, "POST", "/api/users", {"people_folder": leza, "api_key": "key-sam-12345678"})
+    assert status == 400 and pworld.users.users() == []
+    msg = body["error"]
+    assert "Sam" in msg and "…d00d" in msg and "…91c2" in msg and "Leza" in msg
+    assert ID_LEZA not in msg and ID_SAM not in msg
+    status, body = call(pworld.base, "POST", "/api/users/check", {"people_folder": leza, "api_key": "key-sam-12345678"})
+    assert status == 400 and "…91c2" in body["error"]
+    ok = call(pworld.base, "POST", "/api/users/check", {"people_folder": leza, "api_key": "key-leza-1234567"})
+    assert ok[0] == 200 and ok[1]["folder_ok"] is True and ok[1]["immich_user"]["name"] == "Leza"
+
+
+def test_folder_must_exist_and_cannot_be_taken_twice(pworld):
+    assert call(pworld.base, "POST", "/api/users", {"people_folder": "ghost-" + ID_SAM, "api_key": "key-sam-12345678"})[0] == 400
+    assert call(pworld.base, "POST", "/api/users", {"people_folder": "../etc", "api_key": "key-sam-12345678"})[0] == 400
+    leza = folder_of(pworld, "leza")
+    assert call(pworld.base, "POST", "/api/users", {"people_folder": leza, "api_key": "key-leza-1234567"})[0] == 201
+    status, body = call(pworld.base, "POST", "/api/users", {"people_folder": leza, "api_key": "key-leza-1234567"})
+    assert status == 400  # the same account / folder again
+    assert call(pworld.base, "POST", "/api/users", {"people_folder": folder_of(pworld, "ian"), "api_key": "main-key"})[0] == 400
+
+
+def test_a_persons_key_can_only_be_replaced_by_a_key_of_the_same_account(pworld):
+    leza = folder_of(pworld, "leza")
+    call(pworld.base, "POST", "/api/users", {"people_folder": leza, "api_key": "key-leza-1234567"})
+    status, body = call(pworld.base, "PUT", "/api/users/leza", {"api_key": "key-sam-12345678"})
+    assert status == 400 and "different Immich account" in body["error"] and "…91c2" in body["error"]
+    assert pworld.users.get("leza").api_key == "key-leza-1234567"
+
+
+def test_main_waits_until_its_account_id_is_known(tmp_path, tree):
+    root = os.path.join(tree, "people")
+    os.makedirs(os.path.join(root, f"ian-{ID_MAIN}"))
+    ids = {"v": ""}
+    lay = PeopleLayout(lambda: root, lambda: ids["v"], lambda: ["/unused"])
+    assert lay.main_dirs() == []  # id unknown: imports NOTHING rather than guess
+    ids["v"] = ID_MAIN.upper()
+    assert lay.main_dirs() == [os.path.join(root, f"ian-{ID_MAIN}")]
+    off = PeopleLayout(lambda: "", lambda: ID_MAIN, lambda: ["/data/x"])
+    assert off.enabled is False and off.main_dirs() == ["/data/x"]
+
+
+def test_people_root_is_validated_when_saved_and_can_be_switched_off(world):
+    assert call(world.base, "PUT", "/api/config", {"people_root": "relative"})[0] == 400
+    assert call(world.base, "PUT", "/api/config", {"people_root": "/"})[0] == 400
+    assert call(world.base, "PUT", "/api/config", {"people_root": "/etc"})[0] == 400
+    assert call(world.base, "PUT", "/api/config", {"people_root": world.tree + "/nope"})[0] == 400
+    assert call(world.base, "PUT", "/api/config", {"people_root": world.tree + "/shared"})[0] == 200
+    assert call(world.base, "GET", "/api/people-folders")[1]["enabled"] is True
+    assert call(world.base, "PUT", "/api/config", {"people_root": ""})[0] == 200
+    assert call(world.base, "GET", "/api/people-folders")[1]["enabled"] is False
+    assert call(world.base, "POST", "/api/users", {"people_folder": "x", "api_key": "key-alice-123456"})[0] == 400
+
+
+def test_two_people_with_the_same_first_name_get_a_hint(pworld):
+    other = "44444444-aaaa-4bbb-8ccc-00000000beef"
+    os.makedirs(os.path.join(pworld.root, f"sam-{other}"))
+    body = call(pworld.base, "GET", "/api/people-folders")[1]
+    sams = [e for e in body["folders"] if e["name"] == "Sam"]
+    assert len(sams) == 2 and all(e["duplicate_name"] for e in sams)
+    assert sorted(e["last4"] for e in sams) == ["beef", "d00d"]
+
+
+def test_a_persons_id_folder_does_not_become_an_immich_album_name(pworld):
+    leza = folder_of(pworld, "leza")
+    call(pworld.base, "POST", "/api/users", {"people_folder": leza, "api_key": "key-leza-1234567"})
+    call(pworld.base, "POST", "/api/users/leza/adopt", {"confirm": True, "expected_count": 0})
+    put(pworld.root, f"{leza}/top.jpg", b"directly in the person's folder")
+    put(pworld.root, f"{leza}/Holiday/sub.jpg", b"in a subfolder")
+    pworld.manager.sweep_all()
+    assert pworld.drain("leza")
+    names = [a["albumName"] for a in pworld.s_leza.albums]
+    assert names == ["Holiday"], names  # no album carrying the account id
+    assert not any(ID_LEZA in n for n in names)
+
+
+# ------------------------------------------ review fixes for folder-per-person ----------------------------------------
+
+
+def test_a_symlinked_folder_can_never_be_somebodys_folder(pworld):
+    sam = f"sam-{ID_SAM}"
+    os.symlink(os.path.join(pworld.root, sam), os.path.join(pworld.root, f"evil-{ID_LEZA}"))  # right id, wrong target
+    os.symlink(os.path.join(pworld.root, f"leza-{ID_LEZA}"), os.path.join(pworld.root, f"mirror-{ID_MAIN}"))
+    body = call(pworld.base, "GET", "/api/people-folders")[1]
+    assert "evil-" + ID_LEZA not in [e["folder"] for e in body["folders"]]
+    assert f"evil-{ID_LEZA}" in body["skipped"]
+    assert all("mirror" not in d for d in pworld.manager.people.main_dirs())
+    status, err = call(pworld.base, "POST", "/api/users", {"people_folder": f"evil-{ID_LEZA}", "api_key": "key-leza-1234567"})
+    assert status == 400 and "not found" in err["error"]
+    put(pworld.root, f"leza-{ID_LEZA}/l.jpg", b"leza's photo")
+    pworld.manager.people.invalidate()
+    pworld.manager.sweep_all()
+    assert pworld.drain(MAIN_ID)
+    assert pworld.stub_main.uploads == []  # the linked copy of Leza's folder was not imported into Ian's account
+
+
+def test_a_file_symlink_inside_mains_own_folder_is_refused_in_this_mode(pworld):
+    secret = put(pworld.root, f"leza-{ID_LEZA}/secret.jpg", b"leza's private photo")
+    os.symlink(secret, os.path.join(pworld.root, f"ian-{ID_MAIN}", "leak.jpg"))
+    put(pworld.root, f"ian-{ID_MAIN}/mine.jpg", b"ian's own")
+    pworld.manager.people.invalidate()
+    pworld.manager.sweep_all()
+    assert pworld.drain(MAIN_ID)
+    assert len(pworld.stub_main.uploads) == 1  # only his own file, with a SINGLE person (no extra people yet)
+
+
+def test_a_remembered_main_id_never_routes_files(pworld):
+    rt = pworld.manager.runtime(MAIN_ID)
+    rt.state.set_meta("immich_user_id", ID_LEZA)  # an old run saw another account
+    rt.worker.immich_user = None                   # and Immich has not answered yet this run
+    pworld.manager.people.invalidate()
+    assert pworld.manager.people.main_dirs() == []
+    rt.worker.immich_user = {"id": ID_MAIN, "name": "Ian", "email": "x"}
+    pworld.manager.people.invalidate()
+    assert pworld.manager.people.main_dirs() == [os.path.join(pworld.root, f"ian-{ID_MAIN}")]
+
+
+def test_a_person_is_held_when_their_key_stops_matching_their_folder(pworld):
+    leza = folder_of(pworld, "leza")
+    call(pworld.base, "POST", "/api/users", {"people_folder": leza, "api_key": "key-leza-1234567"})
+    rt = pworld.manager.runtime("leza")
+    rt.worker.immich_user = {"id": ID_SAM, "name": "Sam", "email": "sam@example.test"}  # the key now resolves elsewhere
+    pworld._flag = pworld.manager._flag_duplicates()
+    assert "different Immich account" in rt.view.blocked and "…d00d" in rt.view.blocked and "…91c2" in rt.view.blocked
+    assert rt.view.paused is True
+
+
+def test_folders_inside_the_people_folder_must_be_named_for_that_persons_account(pworld):
+    leza = folder_of(pworld, "leza")
+    call(pworld.base, "POST", "/api/users", {"people_folder": leza, "api_key": "key-leza-1234567"})
+    status, body = call(pworld.base, "PUT", "/api/users/leza", {"folders": [os.path.join(pworld.root, f"sam-{ID_SAM}")]})
+    assert status == 400 and "must be named" in body["error"]
+    status, body = call(pworld.base, "PUT", "/api/users/leza", {"folders": [os.path.join(pworld.root, f"ian-{ID_MAIN}")]})
+    assert status == 400
+    ok = os.path.join(pworld.root, f"leza-{ID_LEZA}", "Holiday")
+    os.makedirs(ok)
+    assert call(pworld.base, "PUT", "/api/users/leza", {"folders": [ok]})[0] == 200  # a subfolder of her own is fine
+    assert pworld.manager.describe("leza")["paused"] is True
+    # the old way, with a hand-typed folder named for somebody else's account, is refused the same way
+    status, body = call(pworld.base, "POST", "/api/users", {"name": "Eve", "api_key": "key-sam-12345678",
+                                                            "folders": [os.path.join(pworld.root, f"ian-{ID_MAIN}")]})
+    assert status == 400 and "must be named" in body["error"] and pworld.users.get("eve") is None
+
+
+def test_status_priority_dirs_follow_the_workers_view(pworld):
+    pworld.cfg.priority_dirs = ["/elsewhere"]
+    st = call(pworld.base, "GET", "/status", token=None)[1]
+    assert st["priority_dirs"] == []  # in this mode the main account has no priority folder
+
+
+def test_a_saved_people_root_survives_a_missing_mount_at_boot(tmp_path, tree):
+    missing = os.path.join(tree, "not-mounted-yet")
+    cfg = Config(immich_url="http://x", api_key="k", watch_dirs=[f"{tree}/shared"], state_db=str(tmp_path / "s.db"))
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"overrides": {"people_root": missing}}))
+    store_ = SettingsStore(cfg, str(path), [tree])
+    store_.load()
+    assert cfg.people_root == missing  # kept: an empty scan imports nothing, dropping it would hand main the whole tree
+    lay = PeopleLayout(lambda: cfg.people_root, lambda: ID_MAIN, lambda: cfg.watch_dirs)
+    assert lay.enabled and lay.main_dirs() == []
+    path.write_text(json.dumps({"overrides": {"people_root": "/etc"}}))
+    cfg2 = Config(immich_url="http://x", api_key="k", watch_dirs=[f"{tree}/shared"], state_db=str(tmp_path / "s2.db"))
+    SettingsStore(cfg2, str(path), [tree]).load()
+    assert cfg2.people_root == ""  # outside the visible folders: still refused
+
+
+def test_identity_check_wakes_the_sweep(tmp_path, tree):
+    with StubImmich() as s_main:
+        cfg = Config(immich_url=s_main.url, api_key="main-key", watch_dirs=[f"{tree}/shared"], state_db=str(tmp_path / "data" / "state.db"))
+        users = UsersStore(str(tmp_path / "data" / "users.json"), [tree])
+        router = Router(lambda: cfg.watch_dirs, users, str(tmp_path / "data" / "router.db"))
+        m = UserManager(cfg, users, router, set(EXTS), client_factory=lambda k: ImmichClient(s_main.url, k, "d", timeout=2))
+        m.start_main(StateStore(cfg.state_db), ImmichClient(s_main.url, "main-key", "d", timeout=2))
+        woke = []
+        m.wake = lambda: woke.append(1)
+        m.check_identities()
+        assert woke == [1]
+        m.stop_all()

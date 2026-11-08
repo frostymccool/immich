@@ -13,6 +13,7 @@ import time
 import requests
 
 from bridge.config import Config
+from bridge.people import parse_folder
 from bridge.immich import ImmichClient, ImmichError, UploadOutcome, sha1_hex
 from bridge.scanner import (
     check_candidate,
@@ -433,6 +434,8 @@ class ImportWorker:
             albums.append(self._cfg.album_name)
         if self._cfg.album_from_folder:
             folder = folder_album_name(path)
+            if folder and parse_folder(folder) is not None:
+                folder = None  # a person's own `name-<immich id>` folder: no album (it would put the id in Immich)
             if folder and folder not in albums:
                 albums.append(folder)
         return albums

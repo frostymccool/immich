@@ -80,15 +80,22 @@ def main() -> int:
     wake_sweep = threading.Event()  # "scan now", or settings changed
 
     # Saved settings must be applied BEFORE the first sweep, so it uses them.
-    settings = SettingsStore(cfg, cfg.settings_file, cfg.browse_roots, on_change=wake_sweep.set)
+    settings = SettingsStore(cfg, cfg.settings_file, cfg.browse_roots, on_change=lambda: (holder[0].people.invalidate() if holder else None, wake_sweep.set()))
     settings.load()
     if cfg.token:
         log.info("web page: http://<host>:%d/ (token required)", cfg.bind_port)
     else:
         log.warning("BRIDGE_TOKEN is not set: the settings web page is switched off; /hook is unauthenticated")
 
-    router = Router(lambda: cfg.watch_dirs, users, claims_db=os.path.join(data_dir, "router.db"))
+    holder: list[UserManager] = []
+    # main's folders: WATCH_DIRS, or in folder-per-person mode only its own `name-<its id>` folder
+    router = Router(lambda: holder[0].people.main_dirs() if holder else cfg.watch_dirs, users, claims_db=os.path.join(data_dir, "router.db"),
+                    strict=lambda: bool(holder and holder[0].people.enabled))
     manager = UserManager(cfg, users, router, allowed)
+    holder.append(manager)
+    manager.wake = wake_sweep.set
+    if cfg.people_root:
+        log.info("folder-per-person: %s (main imports only its own name-<id> folder; a folder nobody is set up for is imported by nobody)", cfg.people_root)
     worker = manager.start_main(state, client).worker
     manager.start_all()
     threading.Thread(target=manager.check_identities, name="immich-checks", daemon=True).start()
