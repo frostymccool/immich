@@ -180,3 +180,8 @@ Decisions (asked + answered): full UUID in the folder name; a folder that matche
 * `people_root` is an editable setting (page) with an env default (`PEOPLE_ROOT`, installer remembers it).
 * No full ids anywhere in the UI/API errors/log text (last 4 digits only); the folder name is the option value only.
 * Files directly in a `name-<id>` folder get no folder album (it would put the id into Immich).
+
+Revision 4 (owner feedback, build 247): no folder picker. `people_root` empty = AUTO (the first mounted data folder that
+directly contains a `firstname-<uuid>` folder), `off` = disabled, a path = that folder (page: Advanced). The Add person
+section shows the first-name dropdown straight away; the by-hand fields live under "Add by hand instead" and appear
+only when no such folders exist. Installer: `PEOPLE_ROOT=off|none|<path>`.

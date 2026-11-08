@@ -354,3 +354,20 @@ def test_people_root_with_yaml_specials_is_refused(box):
     r = box.run(env={"PEOPLE_ROOT": "x: [y]\n  evil: 1"})
     assert r.returncode != 0 and "unusual characters" in r.stderr
     assert not box.override.exists()
+
+
+def test_people_root_off_is_written_and_remembered_but_none_forgets_it(box):
+    r = box.run(env={"APP_FOLDER": "Work", "PEOPLE_ROOT": "off"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    first = box.override.read_text()
+    assert "      PEOPLE_ROOT: off\n" in first
+    assert box.run().returncode == 0 and box.override.read_text() == first  # an update keeps it
+    r = box.run(env={"PEOPLE_ROOT": "none"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "PEOPLE_ROOT: off" not in box.override.read_text() and "switches on by itself" in box.override.read_text()
+
+
+def test_default_install_leaves_folder_per_person_automatic(box):
+    r = box.run(env={"APP_FOLDER": "Work"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "switches on by itself" in box.override.read_text() and "PEOPLE_ROOT: /w" not in box.override.read_text()

@@ -1174,3 +1174,65 @@ def test_identity_check_wakes_the_sweep(tmp_path, tree):
         m.check_identities()
         assert woke == [1]
         m.stop_all()
+
+
+# ----------------------------------------------- automatic detection of the people folder ------------------------------
+
+
+def test_people_folders_are_detected_automatically_in_the_mounted_data_folder(tmp_path, tree):
+    for d in (f"ian-{ID_MAIN}", f"leza-{ID_LEZA}", "notes"):
+        os.makedirs(os.path.join(tree, d))
+    cfg = {"v": ""}
+    lay = PeopleLayout(lambda: cfg["v"], lambda: ID_MAIN, lambda: ["/legacy"], lambda: [tree])
+    assert lay.mode() == "auto" and lay.enabled and lay.root() == tree
+    assert lay.main_dirs() == [os.path.join(tree, f"ian-{ID_MAIN}")]
+    assert [e["name"] for e in lay.scan()[0]] == ["Ian", "Leza"]
+    cfg["v"] = "off"
+    lay.invalidate()
+    assert lay.mode() == "off" and not lay.enabled and lay.main_dirs() == ["/legacy"]
+    cfg["v"] = os.path.join(tree, "other")  # an explicit folder wins over detection
+    lay.invalidate()
+    assert lay.mode() == "set" and lay.root() == os.path.join(tree, "other")
+
+
+def test_nothing_is_detected_without_matching_folders(tmp_path, tree):
+    lay = PeopleLayout(lambda: "", lambda: ID_MAIN, lambda: ["/legacy"], lambda: [tree])
+    assert lay.mode() == "auto" and lay.root() == "" and not lay.enabled
+    assert lay.main_dirs() == ["/legacy"]  # a plain install keeps behaving exactly as before
+    os.makedirs(os.path.join(tree, f"sam-{ID_SAM}"))
+    lay.invalidate()
+    assert lay.enabled  # switches on by itself as soon as such a folder appears
+
+
+def test_auto_detected_dropdown_adds_a_person_end_to_end(tmp_path, tree):
+    for d in (f"ian-{ID_MAIN}", f"leza-{ID_LEZA}"):
+        os.makedirs(os.path.join(tree, d))
+    with StubImmich() as s_main, StubImmich() as s_leza:
+        for stub, uid, name in ((s_main, ID_MAIN, "Ian"), (s_leza, ID_LEZA, "Leza")):
+            stub.user_id, stub.user_name, stub.user_email = uid, name, f"{name.lower()}@example.test"
+        w = World(tmp_path, tree, s_main, s_leza, people_root="", extra_keys={"key-leza-1234567": s_leza.url})
+        try:
+            w.manager.people.invalidate()
+            body = call(w.base, "GET", "/api/people-folders")[1]
+            assert body["enabled"] and body["mode"] == "auto" and body["root"] == tree
+            assert [e["name"] for e in body["folders"] if not e["claimed_by"]] == ["Leza"]
+            users = call(w.base, "GET", "/api/users")[1]
+            assert users["people_mode"] == "auto" and users["people_root"] == tree
+            assert call(w.base, "POST", "/api/users", {"people_folder": f"leza-{ID_LEZA}", "api_key": "key-leza-1234567"})[0] == 201
+        finally:
+            w.close()
+
+
+def test_people_root_setting_accepts_off_and_empty(world):
+    assert call(world.base, "PUT", "/api/config", {"people_root": "off"})[0] == 200
+    assert world.cfg.people_root == "off"
+    assert call(world.base, "GET", "/api/people-folders")[1]["mode"] == "off"
+    assert call(world.base, "PUT", "/api/config", {"people_root": ""})[0] == 200
+    assert world.cfg.people_root == "" and call(world.base, "GET", "/api/people-folders")[1]["mode"] == "auto"
+    assert call(world.base, "PUT", "/api/config", {"people_root": "Off "})[0] == 200 and world.cfg.people_root == "off"
+
+
+def test_people_root_env_values():
+    base = {"IMMICH_URL": "http://i", "IMMICH_API_KEY": "k", "WATCH_DIRS": "/x"}
+    for raw, want in (("", ""), ("off", "off"), ("NONE", "off"), ("/w/people/", "/w/people")):
+        assert Config.from_env({**base, "PEOPLE_ROOT": raw}).people_root == want

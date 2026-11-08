@@ -94,8 +94,7 @@ def main() -> int:
     manager = UserManager(cfg, users, router, allowed)
     holder.append(manager)
     manager.wake = wake_sweep.set
-    if cfg.people_root:
-        log.info("folder-per-person: %s (main imports only its own name-<id> folder; a folder nobody is set up for is imported by nobody)", cfg.people_root)
+    log.info("folder-per-person: %s", {"off": "switched off", "": "automatic (on as soon as a firstname-<immich id> folder appears in the mounted data folder)"}.get(cfg.people_root, cfg.people_root + " (set)"))
     worker = manager.start_main(state, client).worker
     manager.start_all()
     threading.Thread(target=manager.check_identities, name="immich-checks", daemon=True).start()

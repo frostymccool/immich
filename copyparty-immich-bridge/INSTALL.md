@@ -116,13 +116,17 @@ If copyparty gives every person their own folder named **`<firstname>-<their Imm
 `leza-3f2a9c1e-7b4d-4e0a-9d21-1c8e5a6b91c2`) inside one folder (say the network share `/mnt/picsupload`), the bridge can
 work out the rest:
 
-1. Turn it on: on the bridge page, **People → Folder per person → Choose the people folder…** (or install with
-   `PEOPLE_ROOT=.`, meaning the copyparty data folder itself; `PEOPLE_ROOT=Share/People` for a subfolder;
-   `PEOPLE_ROOT=none` switches it off; re-runs and `update-bridge.sh` remember it).
-2. **Add a person:** pick their first name from the dropdown (the id is not shown; if two people share a first name
-   the last 4 digits of the id are shown to tell them apart) and paste **their own** Immich API key. *Test key* confirms
-   the key belongs to the exact Immich account whose full id is in the folder name. A key from a different account is
-   refused and the message says so (naming only the last 4 digits of each id).
+1. **There is nothing to turn on.** The bridge looks in the mounted data folder, and as soon as it finds folders named
+   like that, folder-per-person is ON (the People tab says "ON (found automatically)"). It switches itself on when the
+   first such folder appears. If your folders live deeper, use *Advanced: use a specific folder* on the People tab (or
+   install with `PEOPLE_ROOT=Share/People`; a path is relative to the copyparty data folder, `.` = the folder itself).
+   `PEOPLE_ROOT=off` (or *Switch off* on the page) disables it; `PEOPLE_ROOT=none` forgets a remembered folder and goes
+   back to automatic. Re-runs and `update-bridge.sh` remember it.
+2. **Add a person:** in the *Add a person* section pick their first name from the dropdown (the id is not shown; if two
+   people share a first name the last 4 digits of the id are shown to tell them apart) and paste **their own** Immich API
+   key. *Test key* confirms the key belongs to the exact Immich account whose full id is in the folder name. A key from a
+   different account is refused and the message says so (naming only the last 4 digits of each id). No folder or login
+   fields are shown in this mode (they are only under "Add by hand instead" when no such folders exist).
 3. They start paused; **Review & start** as usual.
 
 What changes in this mode:
@@ -145,7 +149,7 @@ What changes in this mode:
   the share is not mounted at boot (then nothing imports, rather than the main account taking the whole tree).
 - **Switching it off** sends main back to the installer's folders, so any folder under them that nobody was set up
   for is then imported into the *main* account (the page warns you first).
-- The setting saved on the page wins over `PEOPLE_ROOT` from the installer (same rule as every other page setting;
+- A setting saved on the page (Switch off / a specific folder) wins over `PEOPLE_ROOT` from the installer (same rule as every other page setting;
   the bridge log shows the value in effect at startup). The folder names (with the full id) are visible to anyone
   with the bridge token via the API; the page itself shows only the last 4 digits.
 

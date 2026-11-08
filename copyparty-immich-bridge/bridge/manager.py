@@ -60,7 +60,7 @@ class UserManager:
             )
         )
         # Folder-per-person mode (cfg.people_root): which folder is whose, proven by the Immich id in its name
-        self.people = PeopleLayout(lambda: cfg.people_root, self._main_id, lambda: cfg.watch_dirs)
+        self.people = PeopleLayout(lambda: cfg.people_root, self._main_id, lambda: cfg.watch_dirs, lambda: cfg.browse_roots)
         self.wake: Callable[[], None] | None = None  # asks the sweep to run (set by __main__)
         self._rt: dict[str, Runtime] = {}
         self._seq = 0
@@ -295,6 +295,7 @@ class UserManager:
         return {
             "users": people,
             "people_root": self.people.root(),
+            "people_mode": self.people.mode(),
             "people_folders": self.people_folders(),
             "ignored_dirs": list(self.users.ignored_dirs),
             "unassigned": {"count": self.unassigned_count, "recent": list(self.unassigned_recent)},
@@ -366,7 +367,7 @@ class UserManager:
     def people_folders(self) -> dict:
         """What the Add person dropdown shows: folders under the people root, who has them, never the full id."""
         if not self.people.enabled:
-            return {"enabled": False, "root": "", "folders": [], "skipped": []}
+            return {"enabled": False, "mode": self.people.mode(), "root": "", "folders": [], "skipped": []}
         entries, skipped = self.people.scan(force=True)
         main_id = self._main_id().lower()
         taken = {(u.immich_id or "").lower(): u.id for u in self.users.users() if u.immich_id}
@@ -379,7 +380,7 @@ class UserManager:
             claimed = MAIN_ID if (main_id and e["id"] == main_id) else taken.get(e["id"]) or by_path.get(e["path"])
             out.append({"folder": e["folder"], "name": e["name"], "claimed_by": claimed,
                         "last4": last4(e["id"]), "duplicate_name": names[e["name"].lower()] > 1})
-        return {"enabled": True, "root": self.people.root(), "folders": out, "skipped": skipped}
+        return {"enabled": True, "mode": self.people.mode(), "root": self.people.root(), "folders": out, "skipped": skipped}
 
     def _folder_for_key(self, folder: str, info: dict) -> dict:
         """The detected folder entry, if this key's account is the one whose id is in the folder's name."""
@@ -407,7 +408,7 @@ class UserManager:
         if not isinstance(folder, str) or not isinstance(key, str) or not key.strip():
             raise UsersError("pick a person and paste their API key")
         if not self.people.enabled:
-            raise UsersError("folder-per-person mode is off (set the people folder first)")
+            raise UsersError("no folders named <firstname>-<immich id> were found (create them in copyparty, then refresh)")
         info = self.check_key(key.strip())
         entry = self._folder_for_key(folder, info)
         for e in self.people_folders()["folders"]:

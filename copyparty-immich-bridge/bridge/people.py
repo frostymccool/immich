@@ -39,17 +39,52 @@ class PeopleLayout:
 
     TTL = 3.0
 
-    def __init__(self, get_root: Callable[[], str], main_id: Callable[[], str], fallback_main_dirs: Callable[[], list[str]]):
+    def __init__(
+        self,
+        get_root: Callable[[], str],
+        main_id: Callable[[], str],
+        fallback_main_dirs: Callable[[], list[str]],
+        get_browse_roots: Callable[[], list[str]] | None = None,
+    ):
         self._get_root = get_root
+        self._browse_roots = get_browse_roots or (lambda: [])
+        self._auto_cache: tuple[float, str] | None = None
         self._main_id = main_id
         self._fallback = fallback_main_dirs
         self._lock = threading.Lock()
         self._cache: tuple[str, float, list[dict], list[str]] | None = None
 
-    def root(self) -> str:
-        """The people root, or '' when folder-per-person mode is off (or the folder is not there)."""
+    def mode(self) -> str:
+        """'off' (switched off), 'set' (an explicit folder), or 'auto' (the mounted data folder is searched)."""
         raw = (self._get_root() or "").strip()
-        return os.path.normpath(raw) if raw else ""
+        if raw.lower() == "off":
+            return "off"
+        return "set" if raw else "auto"
+
+    def root(self) -> str:
+        """The people root, or '' when folder-per-person mode is off / nothing to detect.
+        Auto: the first mounted data folder that directly contains at least one `firstname-<uuid>` folder."""
+        raw = (self._get_root() or "").strip()
+        if raw.lower() == "off":
+            return ""
+        if raw:
+            return os.path.normpath(raw)
+        now = time.time()
+        with self._lock:
+            c = self._auto_cache
+            if c and now - c[0] < self.TTL:
+                return c[1]
+        found = ""
+        for r in self._browse_roots():
+            try:
+                if any(parse_folder(n) and os.path.isdir(os.path.join(r, n)) for n in os.listdir(r)):
+                    found = os.path.normpath(r)
+                    break
+            except OSError:
+                continue
+        with self._lock:
+            self._auto_cache = (now, found)
+        return found
 
     @property
     def enabled(self) -> bool:
@@ -58,6 +93,7 @@ class PeopleLayout:
     def invalidate(self) -> None:
         with self._lock:
             self._cache = None
+            self._auto_cache = None
 
     def scan(self, force: bool = False) -> tuple[list[dict], list[str]]:
         """(entries, skipped): entries = [{folder, name, id, path}] for folders named like `name-<uuid>`;

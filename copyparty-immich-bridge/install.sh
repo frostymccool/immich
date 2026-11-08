@@ -34,8 +34,9 @@ BRIDGE_PORT="${BRIDGE_PORT:-8099}"
 # data mounts, pick one with name=/host/folder. Remembered by re-runs; EXTRA_COPYPARTY=none forgets them.
 EXTRA_COPYPARTY="${EXTRA_COPYPARTY:-}"
 # Folder-per-person mode: a folder (relative to the data folder; . = the data folder itself) whose subfolders are
-# named firstname-<immich user id>. Then adding a person = pick the name + paste their API key. Remembered by
-# re-runs; PEOPLE_ROOT=none switches it off. (It can also be set on the bridge page: People tab.)
+# named firstname-<immich user id>. Then adding a person = pick the name + paste their API key. Not needed: the bridge
+# detects such folders in the mounted data folder by itself. PEOPLE_ROOT=off disables it, PEOPLE_ROOT=none forgets
+# a remembered folder (back to automatic). (Also on the bridge page: People tab.)
 PEOPLE_ROOT="${PEOPLE_ROOT:-}"
 
 MARKER="# managed by the immich-bridge installer"
@@ -114,6 +115,7 @@ if [ "$HOOK" = "1" ] && grep -qE '^[[:space:]]+command:' "$COPYPARTY_DIR/docker-
 fi
 
 # --- folder-per-person (optional) ------------------------------------------------------
+prev_people=""; PEOPLE_GIVEN="$PEOPLE_ROOT"
 if [ -z "$PEOPLE_ROOT" ] && [ -f "$OVERRIDE" ] && grep -qF "$MARKER" "$OVERRIDE"; then
   prev_people="$(sed -n 's/^[[:space:]]*PEOPLE_ROOT:[[:space:]]*//p' "$OVERRIDE" | head -n1)"
   case "$prev_people" in
@@ -122,6 +124,9 @@ if [ -z "$PEOPLE_ROOT" ] && [ -f "$OVERRIDE" ] && grep -qF "$MARKER" "$OVERRIDE"
   esac
 fi
 [ "$PEOPLE_ROOT" != "none" ] || PEOPLE_ROOT=""
+PEOPLE_OFF=0
+case "$prev_people" in off) [ -n "$PEOPLE_GIVEN" ] || PEOPLE_ROOT=off ;; esac
+if [ "$PEOPLE_ROOT" = "off" ]; then PEOPLE_OFF=1; PEOPLE_ROOT=""; fi
 if [ -n "$PEOPLE_ROOT" ]; then
   [[ "$PEOPLE_ROOT" =~ ^[A-Za-z0-9_./@+\ -]+$ ]] || die "PEOPLE_ROOT has unusual characters; use letters, digits and _ . / - only"
   PEOPLE_ROOT="${PEOPLE_ROOT#/}"; PEOPLE_ROOT="${PEOPLE_ROOT%/}"; [ -n "$PEOPLE_ROOT" ] || PEOPLE_ROOT="."
@@ -181,8 +186,10 @@ if [ "$WRITABLE" = "1" ]; then MOUNT_MODE=rw; else MOUNT_MODE=ro; fi
 if [ -n "$PEOPLE_ROOT" ]; then
   PEOPLE_DIR="$MOUNT_DEST"; [ "$PEOPLE_ROOT" = "." ] || PEOPLE_DIR="$MOUNT_DEST/$PEOPLE_ROOT"
   PEOPLE_LINE="      PEOPLE_ROOT: $PEOPLE_DIR"
+elif [ "$PEOPLE_OFF" = 1 ]; then
+  PEOPLE_LINE="      PEOPLE_ROOT: off"
 else
-  PEOPLE_LINE="      # PEOPLE_ROOT: not set (folder-per-person is off)"
+  PEOPLE_LINE="      # PEOPLE_ROOT: not set (folder-per-person switches on by itself when firstname-<immich id> folders appear in the data folder)"
 fi
 
 # --- more copyparty containers (optional) ---------------------------------------------

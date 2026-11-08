@@ -9,8 +9,9 @@ Versions are shown in the page header, `GET /healthz`, the start-up log line and
 - **Several Immich accounts in one bridge** (People tab, header switcher): each person has their own API key, folders,
   import records and queue. A file goes to the owner of the most specific folder; for the shared area the uploader's
   copyparty login can decide. New people start paused; *Review & start* hands over files already imported elsewhere.
-- **Folder per person**: folders named `<firstname>-<full Immich user id>`; add a person by picking the first name and
-  pasting their key, and the bridge checks the key's account id against the folder name.
+- **Folder per person**: folders named `<firstname>-<full Immich user id>` in the mounted data folder are detected
+  automatically; add a person by picking the first name and pasting their key, and the bridge checks the key's account
+  id against the folder name. Nothing to configure; `PEOPLE_ROOT=off` or the page's *Switch off* disables it.
 - **Several copyparty containers** (`EXTRA_COPYPARTY=...`), explicit API-key errors that name missing permissions,
   `update-bridge.sh`, HTTPS-proxy notes.
 
@@ -18,7 +19,7 @@ Versions are shown in the page header, `GET /healthz`, the start-up log line and
 - *A single-person install needs nothing and behaves as before* (same `state.db`, same `/status` fields).
 - With **two or more people**: `/hook` needs `BRIDGE_TOKEN`; the open `/status` shows totals only (no file names or
   errors; per-person detail needs the token); symbolic links out of a person's folder are no longer followed.
-- With **folder per person on** (opt-in): the main account imports **only its own `name-<id>` folder**, no longer
+- With **folder per person on** (automatic when such folders exist in the data folder): the main account imports **only its own `name-<id>` folder**, no longer
   everything under the data folder; a folder nobody is set up for is imported by nobody; files directly in a person's
   folder get no folder album. Switching it off returns main to the installer's folders.
 - New files on the state volume: `users.json` (holds every person's API key, plaintext, mode 600), `router.db`,

@@ -144,9 +144,14 @@ def validate(cfg: Config, changes: dict[str, Any], browse_roots: list[str]) -> d
 
     if "people_root" in changes:
         raw = changes["people_root"]
-        root = "" if raw is None or (isinstance(raw, str) and not raw.strip()) else _norm_dir(raw)
+        if isinstance(raw, str) and raw.strip().lower() == "off":
+            root = "off"
+        else:
+            root = "" if raw is None or (isinstance(raw, str) and not raw.strip()) else _norm_dir(raw)
         if root is None:
-            problems.append("people_root must be a folder path (or empty to switch folder-per-person off)")
+            problems.append("people_root must be a folder path, empty (detect automatically) or 'off'")
+        elif root == "off":
+            out["people_root"] = "off"
         elif root:
             if root == "/":
                 problems.append("people_root: '/' is not allowed")
@@ -264,9 +269,9 @@ class SettingsStore:
                 if key == "people_root" and isinstance(overrides[key], str):
                     # Keep it even when the folder is not mounted at boot: an empty scan imports nothing, whereas
                     # dropping it would hand main the whole tree.
-                    root = _norm_dir(overrides[key]) if overrides[key].strip() else ""
-                    if root is not None and root != "/" and (not root or not self.browse_roots or is_within_dirs(root, self.browse_roots)):
-                        if root and not os.path.isdir(root):
+                    root = "off" if overrides[key].strip().lower() == "off" else (_norm_dir(overrides[key]) if overrides[key].strip() else "")
+                    if root is not None and root != "/" and (root in ("", "off") or not self.browse_roots or is_within_dirs(root, self.browse_roots)):
+                        if root not in ("", "off") and not os.path.isdir(root):
                             log.warning("saved people folder %s is not there right now: nothing is imported for anybody until it is", root)
                         self._apply({"people_root": root})
                         usable["people_root"] = root

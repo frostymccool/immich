@@ -24,6 +24,14 @@ def _split_list(raw: str) -> list[str]:
     return parts
 
 
+def _people_root_env(raw: str) -> str:
+    """'' = auto-detect, 'off' = disabled, otherwise an explicit folder."""
+    raw = raw.strip()
+    if not raw:
+        return ""
+    return "off" if raw.lower() in ("off", "none", "no", "false") else os.path.normpath(raw)
+
+
 def normalize_ext(ext: str) -> str:
     return ext.strip().lstrip(".").lower()
 
@@ -50,7 +58,8 @@ class Config:
     # Where the other people are stored (their API keys live here: keep it on the state volume).
     users_file: str = ""
 
-    # Folder-per-person mode: a folder whose subfolders are named `<firstname>-<immich user id>`. Empty = off.
+    # Folder-per-person mode: a folder whose subfolders are named `<firstname>-<immich user id>`.
+    # Empty = detect it automatically in the mounted data folder; "off" = disabled; a path = that folder.
     people_root: str = ""
 
     sweep_interval: int = 900
@@ -173,7 +182,7 @@ class Config:
             path_map=path_map,
             source_maps=source_maps,
             users_file=e.get("USERS_FILE", "").strip(),
-            people_root=(os.path.normpath(e.get("PEOPLE_ROOT", "").strip()) if e.get("PEOPLE_ROOT", "").strip() else ""),
+            people_root=_people_root_env(e.get("PEOPLE_ROOT", "")),
             sweep_interval=_int("SWEEP_INTERVAL_SECONDS", 900),
             min_file_age=_int("MIN_FILE_AGE_SECONDS", 30),
             max_attempts=_int("MAX_ATTEMPTS", 5, minimum=1),

@@ -154,7 +154,11 @@
       <div class="card" id="rootCard">
         <h2>Folder per person</h2>
         <p class="muted" id="rootText"></p>
-        <p><button id="rootPick">Choose the people folder…</button> <button id="rootOff" class="hidden">Switch off</button> <span id="rootMsg" class="ok hidden"></span></p>
+        <p><button id="rootOff" class="hidden">Switch off</button> <button id="rootOn" class="hidden">Switch on (detect automatically)</button> <span id="rootMsg" class="ok hidden"></span></p>
+        <details id="rootAdv"><summary class="muted" style="cursor:pointer">Advanced: use a specific folder</summary>
+          <p class="muted">Normally not needed: the bridge finds the folders by itself. Use this only if they are not directly inside the mounted data folder.</p>
+          <p><button id="rootPick">Choose a folder…</button></p>
+        </details>
         <div id="rootErr" class="errs hidden"></div>
       </div>
       <div class="card">
@@ -170,18 +174,18 @@
       <div class="card">
         <h2 id="formTitle">Add a person</h2>
         <p class="muted">Create their Immich account first and an API key inside it (Account Settings &gt; API Keys, “all permissions” is simplest). They start <b>paused</b> so you can look first; then press <b>Review &amp; start</b>.</p>
+        <div id="pOffNote" class="errs hidden" style="color:var(--warn);border-color:var(--warn)"></div>
         <div id="pFolderRow" class="hidden">
           <label class="f" for="pFolder">Person</label>
           <select id="pFolder"></select> <button id="pRefresh" type="button">Refresh</button>
           <div class="muted" id="pFolderNote"></div>
         </div>
-        <div class="legacy">
-        <label class="f" for="pName">Name</label><input id="pName" type="text" placeholder="e.g. Alex" autocomplete="off">
-        </div>
         <label class="f" for="pKey">Immich API key <span class="muted" id="pKeyNote"></span></label>
         <input id="pKey" type="password" autocomplete="new-password" placeholder="paste the person's API key">
         <div><button id="pCheck" type="button">Test key</button> <span id="pCheckOut" class="muted"></span></div>
-        <div class="legacy">
+        <details id="byHand" class="hidden" style="margin-top:12px">
+        <summary style="cursor:pointer;color:var(--accent)">Add by hand instead (name, folders, copyparty login)</summary>
+        <label class="f" for="pName">Name</label><input id="pName" type="text" placeholder="e.g. Alex" autocomplete="off">
         <label class="f" for="pFolders">Their folder(s) — one per line</label>
         <textarea id="pFolders" placeholder="/data/alex"></textarea>
         <div><button id="pPick" type="button">Choose folder…</button></div>
@@ -190,7 +194,7 @@
         <div class="muted">Files this login uploads into the shared area (outside their folder) go to this person.</div>
         <label class="f" style="display:flex;gap:8px;align-items:center;cursor:pointer"><input id="pAlbumsFolder" type="checkbox" checked style="width:auto"> Add each file to an album named after its folder</label>
         <label class="f" for="pAlbum">Also add everything to this one album (optional)</label><input id="pAlbum" type="text" autocomplete="off">
-        </div>
+        </details>
         <div id="pErrs" class="errs hidden"></div>
         <p><button id="pSave" class="primary">Add person</button> <button id="pCancelEdit" class="hidden">Cancel editing</button></p>
         <div id="pOk" class="ok hidden"></div>
@@ -664,10 +668,16 @@
   function pmode() { return !!(people && people.people_root); }
   function applyFormMode() {
     var on = pmode(), ed = editingId;
-    Array.prototype.forEach.call(document.querySelectorAll('#tab-people .legacy'), function (n) { n.classList.toggle('hidden', on); });
+    var byHandVisible = !on || ed === 'main';
+    $('byHand').classList.toggle('hidden', !byHandVisible);
+    if (ed && byHandVisible) { $('byHand').open = true; }
     $('pFolderRow').classList.toggle('hidden', !on || !!ed);
-    if (on && ed && ed !== 'main') { /* editing someone in folder mode: only the key can change */ }
-    if (on && ed === 'main') { $('pName').closest('.legacy').classList.remove('hidden'); }
+    var off = $('pOffNote');
+    off.classList.toggle('hidden', on || !!ed);
+    var mode = people && people.people_mode;
+    off.textContent = mode === 'off'
+      ? 'Folder per person is switched off, so people are added by hand (open “Add by hand instead” below), or switch it on in the card above.'
+      : 'No folders named firstname-<immich id> were found in the mounted data folder yet. Create them in copyparty and press Refresh here — this form then shows a dropdown of first names by itself. Or add a person by hand below.';
     var f = $('pFolder'), pf = people && people.people_folders ? people.people_folders.folders : [];
     var keep = f.value; f.textContent = '';
     var free = pf.filter(function (e) { return !e.claimed_by; });
@@ -680,21 +690,29 @@
     $('pSave').textContent = ed ? 'Save changes' : 'Add person';
   }
   function renderRoot() {
-    var on = pmode(), t = $('rootText');
-    t.textContent = on
-      ? 'Folder-per-person is ON. Each person has a folder inside ' + people.people_root + ' named firstname-<their Immich user id>. The bridge proves a folder is theirs by checking that their API key belongs to that exact Immich account, so there is nothing to type: choose their name below. A folder nobody has been set up for is imported by nobody.'
-      : 'Optional. If every person has a folder named firstname-<their Immich user id> inside one folder, choose that folder here and adding a person becomes: pick the name, paste their API key. Off = choose each person’s folders by hand.';
-    $('rootPick').textContent = on ? 'Change people folder…' : 'Choose the people folder…';
-    $('rootOff').classList.toggle('hidden', !on);
+    var on = pmode(), mode = people && people.people_mode, t = $('rootText');
+    var n = people && people.people_folders ? people.people_folders.folders.length : 0;
+    if (mode === 'off') {
+      t.textContent = 'Switched OFF. People are added by hand (name, folders, copyparty login), and the main account imports the folders from the installer / Folders & settings.';
+    } else if (on) {
+      t.textContent = 'ON' + (mode === 'auto' ? ' (found automatically)' : ' (folder chosen by you)') + ': ' + n + ' folder' + (n === 1 ? '' : 's') + ' named firstname-<Immich user id> in ' + people.people_root +
+        '. To add a person just pick their first name below and paste their API key: the bridge checks the key belongs to the exact account in the folder name. The main account imports only its own folder; a folder nobody is set up for is imported by nobody.';
+    } else {
+      t.textContent = 'Waiting: no folders named firstname-<Immich user id> found in the mounted data folder yet. As soon as copyparty creates them this switches on by itself.';
+    }
+    $('rootOff').classList.toggle('hidden', mode === 'off');
+    $('rootOn').classList.toggle('hidden', mode !== 'off');
+    $('rootPick').textContent = mode === 'set' ? 'Change the folder…' : 'Choose a folder…';
   }
   function setRoot(path) {
     $('rootErr').classList.add('hidden');
     api('PUT', '/api/config', { people_root: path }).then(function () { return loadPeople(); }).then(function () {
-      var m = $('rootMsg'); m.textContent = path ? 'Saved: ' + path : 'Switched off'; m.classList.remove('hidden'); setTimeout(function () { m.classList.add('hidden'); }, 4000);
+      var m = $('rootMsg'); m.textContent = path === 'off' ? 'Switched off' : (path ? 'Saved: ' + path : 'Switched on (automatic)'); m.classList.remove('hidden'); setTimeout(function () { m.classList.add('hidden'); }, 4000);
     }).catch(function (e) { if (e.message === 'auth') { return; } var b = $('rootErr'); b.textContent = (e.problems && e.problems.length ? e.problems : [e.message]).join(' '); b.classList.remove('hidden'); });
   }
   $('rootPick').onclick = function () { pickCb = setRoot; $('picker').classList.remove('hidden'); pkLoad(null); };
-  $('rootOff').onclick = function () { if (confirm('Switch off folder-per-person?\n\nThe main account goes back to importing ' + ((cfg && cfg.values.watch_dirs) || []).join(', ') + ' — and any folder under it that nobody has been set up for will then be imported into the MAIN account. People already added keep their own folders.')) { setRoot(''); } };
+  $('rootOn').onclick = function () { setRoot(''); };
+  $('rootOff').onclick = function () { if (confirm('Switch off folder-per-person?\n\nThe main account goes back to importing ' + ((cfg && cfg.values.watch_dirs) || []).join(', ') + ' — and any folder under it that nobody has been set up for will then be imported into the MAIN account. People already added keep their own folders.')) { setRoot('off'); } };
   $('pRefresh').onclick = function () { loadPeople(); };
   function loadPeople() {
     return api('GET', '/api/users').then(function (p) { people = p; fillSelector(); renderRoot(); applyFormMode(); if (tab === 'people') { renderPeople(); } renderScopeNote(); });
@@ -872,6 +890,7 @@
       $('pKey').value = ''; resetForm(); ['pKey', 'pFolders', 'pPick', 'pAlbum', 'pAlbumsFolder'].forEach(function (i) { $(i).disabled = false; }); return loadPeople().then(function () { $('peopleList').scrollIntoView(); }); })
       .catch(function (e) {
         if (e.message === 'auth') { return; }
+        if (!pmode()) { $('byHand').open = true; }
         var b = $('pErrs'); b.textContent = ''; (e.problems && e.problems.length ? e.problems : [e.message]).forEach(function (p) { b.appendChild(el('div', {}, p)); }); b.classList.remove('hidden');
       });
   };
