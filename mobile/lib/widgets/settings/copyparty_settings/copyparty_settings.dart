@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/domain/models/config/copyparty_config.dart';
 import 'package:immich_mobile/domain/models/settings_key.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/pages/copyparty/copyparty_cache.page.dart';
@@ -330,15 +331,56 @@ class _UsernameTile extends ConsumerWidget {
         title: 'Copyparty username',
         subtitle: username.isEmpty ? 'Not set (password only)' : username,
         leading: const Icon(Icons.person_outline),
-        onTap: () => _showTextDialog(
-          context,
-          title: 'Copyparty Username',
-          hint: 'Leave empty to log in with the password alone',
-          initialValue: username,
-          onSave: (value) => ref.read(settingsProvider).write(SettingsKey.copypartyUsername, value.trim()),
-        ),
+        onTap: () => _showUsernameDialog(context, ref, username),
       ),
     );
+  }
+
+  /// Two ways to confirm: plain OK saves just the username; the second also sets the upload path to the same value
+  /// (`ian` -> `/ian`), for servers that give every person a folder named after their account.
+  Future<void> _showUsernameDialog(BuildContext context, WidgetRef ref, String current) async {
+    final controller = TextEditingController(text: current);
+    final result = await showDialog<({String name, bool setPath})>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Copyparty Username'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: 'Leave empty to log in with the password alone',
+            border: OutlineInputBorder(),
+          ),
+          autofocus: true,
+          onSubmitted: (v) => Navigator.pop(ctx, (name: v, setPath: false)),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, (name: controller.text, setPath: false)),
+            child: const Text('OK'),
+          ),
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: controller,
+            builder: (_, value, _) {
+              final path = uploadPathForUsername(value.text);
+              return FilledButton.tonal(
+                onPressed: path.isEmpty ? null : () => Navigator.pop(ctx, (name: value.text, setPath: true)),
+                child: Text(path.isEmpty ? 'OK + set upload path' : 'OK + set upload path to $path'),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+    if (result == null) {
+      return;
+    }
+    final settings = ref.read(settingsProvider);
+    final name = result.name.trim();
+    await settings.write(SettingsKey.copypartyUsername, name);
+    if (result.setPath) {
+      await settings.write(SettingsKey.copypartyUploadPath, uploadPathForUsername(name));
+    }
   }
 }
 

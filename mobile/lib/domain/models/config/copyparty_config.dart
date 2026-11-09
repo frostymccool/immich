@@ -165,3 +165,10 @@ class CopypartyConfig {
     return true;
   }
 }
+
+/// The upload path a person's own folder gets by default: their username as the single top-level folder
+/// (`ian` -> `/ian`). Empty when there is no usable username. Used by the "set upload path to the same value" button.
+String uploadPathForUsername(String username) {
+  final name = username.trim().replaceAll(RegExp(r'^/+|/+$'), '');
+  return name.isEmpty ? '' : '/$name';
+}

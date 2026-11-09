@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:immich_mobile/domain/models/config/copyparty_config.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 
 const _host = 'https://cp.example.test';
@@ -63,6 +64,23 @@ void main() {
       final t = _setup(username: 'sam');
       expect(await t.service.testConnection(_host, 'hunter2'), isNull);
       expect(t.seen.single.headers['authorization'], _basic('sam', 'hunter2'));
+    });
+  });
+
+  group('upload path for a username ("OK + set upload path")', () {
+    test('a username becomes a single top-level folder', () {
+      expect(uploadPathForUsername('ian'), '/ian');
+    });
+
+    test('whitespace and stray slashes are dropped', () {
+      expect(uploadPathForUsername('  ian  '), '/ian');
+      expect(uploadPathForUsername('/ian/'), '/ian');
+    });
+
+    test('no usable username gives no path', () {
+      expect(uploadPathForUsername(''), '');
+      expect(uploadPathForUsername('   '), '');
+      expect(uploadPathForUsername('//'), '');
     });
   });
 }
