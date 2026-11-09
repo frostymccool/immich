@@ -12,7 +12,7 @@ Versions are shown in the page header, `GET /healthz`, the start-up log line and
 - **Folder per person**: folders named `<firstname>-<full Immich user id>` in the mounted data folder are detected
   automatically; add a person by picking the first name and pasting their key, and the bridge checks the key's account
   id against the folder name. Nothing to configure; `PEOPLE_ROOT=off` or the page's *Switch off* disables it.
-- **Tab and person in the address**: `?t=status|people|settings|logs` opens that tab and `?user=ian` (id, name, Immich name or email) selects that person; clicking a tab or the switcher updates the address, so views can be bookmarked or shared. The folder-selection card is now "Debug folder selection" at the bottom of the People tab.
+- **Tab and person in the address**: `?t=status|people|settings|logs` opens that tab and `?user=ian` (id, name, Immich name or email) selects that person; clicking a tab or the switcher updates the address, so views can be bookmarked or shared. The folder-selection card is now "Debug folder selection" at the bottom of the People tab. In folder-per-person mode *Edit* shows only the key (name for the main account) and the folder as text, and has a *Remove person…* button.
 - **Several copyparty containers** (`EXTRA_COPYPARTY=...`), explicit API-key errors that name missing permissions,
   `update-bridge.sh`, HTTPS-proxy notes.
 

@@ -134,7 +134,9 @@ What changes in this mode:
   Immich has answered, main imports nothing. It no longer imports "everything under the data folder".
 - A folder that matches **nobody** (not named `name-<id>`, or nobody set up for that id yet) is imported by **nobody**
   and is listed in the dropdown note ("Ignored …"). Files loose in the people folder itself are ignored too.
-- No folder or copyparty-login fields: the folder *is* the identity. (Logins still work for people added the old way.)
+- No folder or copyparty-login fields, also not when editing: the folder *is* the identity. *Edit* shows the folder as
+  plain text and only lets you replace the API key (a key of the same Immich account); the main account's Edit lets you
+  rename it. The main account cannot be removed. (Logins still work for people added the old way.)
 - Files directly in a person's folder get no folder album (the album would be named after the id); files in
   subfolders still get an album named after that subfolder.
 - A person's key can only ever be replaced by a key of the **same** Immich account.
@@ -201,7 +203,7 @@ start* (or *Re-check files*) on that person.
 (their status, recent files, albums, pause, re-import). The *Folders & settings* tab still holds the shared
 settings and the main account's folders.
 
-**Removing a person** (People → Remove…, type their id): the bridge stops importing for them and forgets its own
+**Removing a person** (People → **Remove…** on their card, or **Remove person…** inside their Edit form; one confirmation): the bridge stops importing for them and forgets its own
 records for them; their folders go on a "Folders nobody imports" list so their files do **not** quietly flow into
 the main account. Nothing is deleted in Immich or on disk. *Give back to the main account* undoes the ignore.
 

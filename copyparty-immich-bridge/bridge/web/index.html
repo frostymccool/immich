@@ -163,7 +163,8 @@
       </div>
       <div class="card">
         <h2 id="formTitle">Add a person</h2>
-        <p class="muted">Create their Immich account first and an API key inside it (Account Settings &gt; API Keys, “all permissions” is simplest). They start <b>paused</b> so you can look first; then press <b>Review &amp; start</b>.</p>
+        <p class="muted" id="pIntro">Create their Immich account first and an API key inside it (Account Settings &gt; API Keys, “all permissions” is simplest). They start <b>paused</b> so you can look first; then press <b>Review &amp; start</b>.</p>
+        <div id="pEditFolder" class="muted hidden" style="margin:6px 0 10px"></div>
         <div id="pOffNote" class="errs hidden" style="color:var(--warn);border-color:var(--warn)"></div>
         <div id="pFolderRow" class="hidden">
           <label class="f" for="pFolder">Person</label>
@@ -176,6 +177,7 @@
         <details id="byHand" class="hidden" style="margin-top:12px">
         <summary style="cursor:pointer;color:var(--accent)">Add by hand instead (name, folders, copyparty login)</summary>
         <label class="f" for="pName">Name</label><input id="pName" type="text" placeholder="e.g. Alex" autocomplete="off">
+        <div id="byHandExtra">
         <label class="f" for="pFolders">Their folder(s) — one per line</label>
         <textarea id="pFolders" placeholder="/data/alex"></textarea>
         <div><button id="pPick" type="button">Choose folder…</button></div>
@@ -184,9 +186,11 @@
         <div class="muted">Files this login uploads into the shared area (outside their folder) go to this person.</div>
         <label class="f" style="display:flex;gap:8px;align-items:center;cursor:pointer"><input id="pAlbumsFolder" type="checkbox" checked style="width:auto"> Add each file to an album named after its folder</label>
         <label class="f" for="pAlbum">Also add everything to this one album (optional)</label><input id="pAlbum" type="text" autocomplete="off">
+        </div>
         </details>
         <div id="pErrs" class="errs hidden"></div>
-        <p><button id="pSave" class="primary">Add person</button> <button id="pCancelEdit" class="hidden">Cancel editing</button></p>
+        <p><button id="pSave" class="primary">Add person</button> <button id="pCancelEdit" class="hidden">Cancel editing</button> <button id="pRemove" type="button" class="danger hidden" style="margin-left:12px">Remove person…</button></p>
+        <div id="pMainNote" class="muted hidden">The main account is set by the installer and can’t be removed here.</div>
         <div id="pOk" class="ok hidden"></div>
       </div>
       <div class="card" id="rootCard">
@@ -692,9 +696,20 @@
   function pmode() { return !!(people && people.people_root); }
   function applyFormMode() {
     var on = pmode(), ed = editingId;
+    // Folder-per-person edit: only what can change (the key; the name for the main account). The folder is shown as
+    // plain text; no folder picker, no copyparty login, no album fields.
     var byHandVisible = !on || ed === 'main';
     $('byHand').classList.toggle('hidden', !byHandVisible);
+    $('byHandExtra').classList.toggle('hidden', on && !!ed);
     if (ed && byHandVisible) { $('byHand').open = true; }
+    var who = ed && people ? people.users.filter(function (x) { return x.id === ed; })[0] : null;
+    var ef = $('pEditFolder');
+    ef.classList.toggle('hidden', !(on && who));
+    if (on && who) { ef.textContent = 'Folder: ' + (who.folders.length ? who.folders.map(maskId).join(', ') : 'none found yet'); }
+    $('pRemove').classList.toggle('hidden', !(ed && ed !== 'main'));
+    $('pIntro').classList.toggle('hidden', !!ed);
+    if (ed) { $('pOk').classList.add('hidden'); }
+    $('pMainNote').classList.toggle('hidden', ed !== 'main');
     $('pFolderRow').classList.toggle('hidden', !on || !!ed);
     var off = $('pOffNote');
     off.classList.toggle('hidden', on || !!ed);
@@ -849,12 +864,7 @@
       var ed = el('button', {}, 'Edit'); ed.onclick = function () { startEdit(u); }; acts.appendChild(ed);
       if (!u.is_main) {
         var rm = el('button', { 'class': 'danger' }, 'Remove…');
-        rm.onclick = function () {
-          var typed = prompt('Remove ' + u.name + '?\n\nTheir folders stay on disk and nothing is deleted in Immich; the bridge just stops importing for them, forgets its records for them, and ignores their folders.\n\nType their id (' + u.id + ') to confirm:');
-          if (typed === null) { return; }
-          api('DELETE', '/api/users/' + encodeURIComponent(u.id), { confirm: typed.trim() }).then(function () { if (viewUser === u.id) { viewUser = ''; } return loadPeople(); })
-            .catch(function (e) { if (e.message !== 'auth') { alert(e.message); } });
-        };
+        rm.onclick = function () { removePerson(u); };
         acts.appendChild(rm);
       }
       box.appendChild(acts);
@@ -863,17 +873,29 @@
     var ig = $('ignoredList'); ig.textContent = '';
     $('ignoredCard').classList.toggle('hidden', !people.ignored_dirs.length);
     people.ignored_dirs.forEach(function (d) {
-      var r = el('div', { 'class': 'row' }); r.appendChild(el('span', { 'class': 'p' }, d));
+      var r = el('div', { 'class': 'row' }); r.appendChild(el('span', { 'class': 'p' }, maskId(d)));
       var b = el('button', {}, 'Give back to the main account');
       b.onclick = function () {
         api('POST', '/api/users/ignored/preview', { folder: d }).then(function (pv) {
-          if (!confirm('Give ' + d + ' back to the main account?\n\nIt holds ' + pv.files + ' media file' + (pv.files === 1 ? '' : 's') + ', and the main account will import all of them into ITS Immich account. Nothing is deleted anywhere.')) { return; }
+          if (!confirm('Give ' + maskId(d) + ' back to the main account?\n\nIt holds ' + pv.files + ' media file' + (pv.files === 1 ? '' : 's') + ', and the main account will import all of them into ITS Immich account. Nothing is deleted anywhere.')) { return; }
           return api('POST', '/api/users/ignored/remove', { folder: d, confirm: true, expected_count: pv.expected_count }).then(loadPeople);
         }).catch(fail);
       };
       r.appendChild(b); ig.appendChild(r);
     });
   }
+  function removePerson(u) {
+    if (!confirm('Remove ' + u.name + '?\n\nThe bridge stops importing for them and forgets its own records for them. Their folder stays on disk, nothing is deleted in Immich, and the folder goes on the “Folders nobody imports” list so it is not imported into the main account.\n\nRemove ' + u.name + ' now?')) { return; }
+    api('DELETE', '/api/users/' + encodeURIComponent(u.id), { confirm: u.id }).then(function () {
+      if (viewUser === u.id) { viewUser = ''; setUrlUser(''); }
+      if (editingId === u.id) { resetForm(); applyFormMode(); }
+      return loadPeople();
+    }).catch(fail);
+  }
+  $('pRemove').onclick = function () {
+    var u = people ? people.users.filter(function (x) { return x.id === editingId; })[0] : null;
+    if (u) { removePerson(u); }
+  };
   function reviewPerson(u) {
     api('GET', '/api/users/' + encodeURIComponent(u.id) + '/adopt').then(function (pv) {
       var msg = u.name + '\'s folders hold ' + pv.files_in_folders + ' media file' + (pv.files_in_folders === 1 ? '' : 's') + '.\n\n';
