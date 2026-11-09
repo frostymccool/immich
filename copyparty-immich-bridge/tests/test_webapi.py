@@ -348,3 +348,12 @@ def test_build_comes_from_the_environment(monkeypatch):
     monkeypatch.setenv("WATCH_DIRS", "/w")
     monkeypatch.setenv("BRIDGE_BUILD", "abc1234 2026-11-01")
     assert Config.from_env().build == "abc1234 2026-11-01"
+
+
+@pytest.mark.parametrize("query", ["?t=people", "?t=logs", "?t=settings&foo=1", "?tab=status", "?t=nonsense"])
+def test_page_is_served_for_any_tab_link(app, query):
+    make, _ = app
+    base, *_ = make()
+    status, body, headers = call(base, "GET", "/" + query, token=None, raw=True)
+    assert status == 200 and b"<html" in body.lower() and "text/html" in headers["Content-Type"]
+    assert b"data-tab=\"people\"" in body  # the same single page: the tab is chosen in the browser

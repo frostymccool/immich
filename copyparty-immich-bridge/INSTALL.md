@@ -230,6 +230,13 @@ wrong account meanwhile.
 - Tested with fake Docker and a fake Immich only; the cross-container hook path (second copyparty → bridge) needs
   a manual check: upload a file as the second copyparty's user and watch the bridge log for `queued (hook)`.
 
+## Links to a tab
+
+The page remembers which tab it is on in the address, so you can bookmark or share a tab:
+`http://<vm-ip>:8099/?t=status`, `?t=people`, `?t=settings` (also `?t=folders`) and `?t=logs`. A sign-in link works the
+same way: `http://<vm-ip>:8099/?t=people#token=<token>`. Other query parameters are left alone, an unknown value opens
+Status, and if you are not signed in yet the sign-in box appears first and then opens the tab from the link.
+
 ## Using an HTTPS name (reverse proxy)
 
 The bridge itself only speaks plain HTTP on its port. If you put a LAN reverse proxy in front of it

@@ -339,21 +339,43 @@
     loadPeople().catch(function () { /* old bridge */ }).then(loadConfig).then(function () { refresh(); });
   }
   var m = /[#&]token=([^&]+)/.exec(location.hash);
-  if (m) { token = decodeURIComponent(m[1]); storeToken(token); history.replaceState(null, '', location.pathname); }
+  if (m) { token = decodeURIComponent(m[1]); storeToken(token); history.replaceState(null, '', location.pathname + location.search); }   // keep ?t=
   else { token = loadToken(); }
   $('tokenGo').onclick = function () { token = $('tokenIn').value.trim(); storeToken(token); $('gateErr').classList.add('hidden'); start(); };
   $('tokenIn').onkeydown = function (e) { if (e.key === 'Enter') { $('tokenGo').click(); } };
 
   // ---- tabs --------------------------------------------------------------------
+  // The tab lives in the address: /?t=status | people | settings | logs (also /?t=folders). Clicking a tab updates it,
+  // so the page can be bookmarked or shared (a link may also carry the sign-in: /?t=people#token=...).
+  var TABS = ['status', 'people', 'settings', 'logs'];
+  var TAB_ALIASES = { folders: 'settings', folder: 'settings', config: 'settings', log: 'logs', person: 'people', users: 'people' };
+  function tabFromUrl() {
+    var m = /[?&](?:t|tab)=([^&#]*)/.exec(location.search), v = '';
+    try { v = m ? decodeURIComponent(m[1]).toLowerCase() : ''; } catch (e) { v = ''; }
+    v = TAB_ALIASES[v] || v;
+    return TABS.indexOf(v) >= 0 ? v : 'status';
+  }
+  function setUrlTab(name) {
+    try {
+      var p = new URLSearchParams(location.search); p.delete('tab'); p.set('t', name);
+      history.replaceState(null, '', location.pathname + '?' + p.toString() + location.hash);
+    } catch (e) { /* old browser / sandbox: the page still works, just without the address update */ }
+  }
+  function showTab(name) {
+    tab = name;
+    Array.prototype.forEach.call(document.querySelectorAll('nav button'), function (x) { x.classList.toggle('on', x.getAttribute('data-tab') === name); });
+    TABS.forEach(function (t) { $('tab-' + t).classList.toggle('hidden', t !== name); });
+  }
   Array.prototype.forEach.call(document.querySelectorAll('nav button'), function (b) {
     b.onclick = function () {
-      tab = b.getAttribute('data-tab');
-      Array.prototype.forEach.call(document.querySelectorAll('nav button'), function (x) { x.classList.toggle('on', x === b); });
-      ['status', 'people', 'settings', 'logs'].forEach(function (t) { $('tab-' + t).classList.toggle('hidden', t !== tab); });
+      showTab(b.getAttribute('data-tab'));
+      setUrlTab(tab);
       markDirty();
       refresh();
     };
   });
+  window.addEventListener('popstate', function () { showTab(tabFromUrl()); refresh(); });
+  showTab(tabFromUrl()); setUrlTab(tab);
 
   // ---- status ------------------------------------------------------------------
   function renderStatus(s) {

@@ -12,6 +12,7 @@ Versions are shown in the page header, `GET /healthz`, the start-up log line and
 - **Folder per person**: folders named `<firstname>-<full Immich user id>` in the mounted data folder are detected
   automatically; add a person by picking the first name and pasting their key, and the bridge checks the key's account
   id against the folder name. Nothing to configure; `PEOPLE_ROOT=off` or the page's *Switch off* disables it.
+- **Tab in the address**: `?t=status|people|settings|logs` opens that tab and clicking a tab updates the address, so tabs can be bookmarked or shared.
 - **Several copyparty containers** (`EXTRA_COPYPARTY=...`), explicit API-key errors that name missing permissions,
   `update-bridge.sh`, HTTPS-proxy notes.
 
