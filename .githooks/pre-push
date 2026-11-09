@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Runs the fork audit before any push. Enable once per clone:  git config core.hooksPath .githooks
+exec bash "$(git rev-parse --show-toplevel)/scripts/fork-audit.sh"

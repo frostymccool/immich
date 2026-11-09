@@ -28,3 +28,17 @@ vite.config.js.timestamp-*
 .devcontainer/.env*
 *.tsbuildinfo
 *.tsbuildInfo
+
+# fork: never commit secrets or local state (installer-generated / signing / debug artifacts)
+immich-bridge*.env
+**/immich-bridge*.env
+docker-compose.override.yml
+key.properties
+**/key.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+!packages/e2e-auth-server/test-keys.*
+settings.json.tmp

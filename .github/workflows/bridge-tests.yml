@@ -1,0 +1,45 @@
+name: Copyparty Immich Bridge Tests
+
+on:
+  push:
+    paths:
+      - 'copyparty-immich-bridge/**'
+      - 'scripts/fork-audit.sh'
+      - '.github/workflows/bridge-tests.yml'
+  pull_request:
+    paths:
+      - 'copyparty-immich-bridge/**'
+      - 'scripts/fork-audit.sh'
+      - '.github/workflows/bridge-tests.yml'
+
+permissions: {}
+
+jobs:
+  test:
+    name: Bridge unit + integration tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: copyparty-immich-bridge
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # PR runs: check the real pushed commit, not GitHub's synthetic merge commit
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Fork audit (no secrets or personal data)
+        working-directory: .
+        run: bash scripts/fork-audit.sh
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest
+
+      - name: Run tests
+        run: python -m pytest tests/ -v
