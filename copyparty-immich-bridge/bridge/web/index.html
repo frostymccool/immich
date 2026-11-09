@@ -171,12 +171,15 @@
           <select id="pFolder"></select> <button id="pRefresh" type="button">Refresh</button>
           <div class="muted" id="pFolderNote"></div>
         </div>
+        <div id="pNameSlot"></div>
+        <div id="pKeyBox">
         <label class="f" for="pKey">Immich API key <span class="muted" id="pKeyNote"></span></label>
         <input id="pKey" type="password" autocomplete="new-password" placeholder="paste the person's API key">
         <div><button id="pCheck" type="button">Test key</button> <span id="pCheckOut" class="muted"></span></div>
+        </div>
         <details id="byHand" class="hidden" style="margin-top:12px">
         <summary style="cursor:pointer;color:var(--accent)">Add by hand instead (name, folders, copyparty login)</summary>
-        <label class="f" for="pName">Name</label><input id="pName" type="text" placeholder="e.g. Alex" autocomplete="off">
+        <div id="pNameWrap"><label class="f" for="pName">Name</label><input id="pName" type="text" placeholder="e.g. Alex" autocomplete="off"></div>
         <div id="byHandExtra">
         <label class="f" for="pFolders">Their folder(s) — one per line</label>
         <textarea id="pFolders" placeholder="/data/alex"></textarea>
@@ -778,7 +781,13 @@
     var on = pmode(), ed = editingId;
     // Folder-per-person edit: only what can change (the key; the name for the main account). The folder is shown as
     // plain text; no folder picker, no copyparty login, no album fields.
-    var byHandVisible = !on || ed === 'main';
+    // Editing the main account (folder mode): just its name, FIRST; its key is the installer's, so no key box at all.
+    var nameFirst = on && ed === 'main';
+    var wrap = $('pNameWrap');
+    if (nameFirst) { if (wrap.parentNode !== $('pNameSlot')) { $('pNameSlot').appendChild(wrap); } }
+    else if (wrap.parentNode !== $('byHand')) { $('byHand').insertBefore(wrap, $('byHandExtra')); }
+    $('pKeyBox').classList.toggle('hidden', nameFirst);
+    var byHandVisible = !on || (ed === 'main' && !nameFirst);
     $('byHand').classList.toggle('hidden', !byHandVisible);
     $('byHandExtra').classList.toggle('hidden', on && !!ed);
     if (ed && byHandVisible) { $('byHand').open = true; }
