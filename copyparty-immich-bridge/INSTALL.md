@@ -237,6 +237,12 @@ The page remembers which tab it is on in the address, so you can bookmark or sha
 same way: `http://<vm-ip>:8099/?t=people#token=<token>`. Other query parameters are left alone, an unknown value opens
 Status, and if you are not signed in yet the sign-in box appears first and then opens the tab from the link.
 
+**Person in the link:** with two or more people, `?user=<who>` selects that person in the header switcher, e.g.
+`/?t=people&user=ian` or `/?user=leza`. `<who>` can be the person's id or name, the Immich account name, or the email
+(or the part before the `@`), in any capitalisation (`?u=` is the short form). An unknown or ambiguous value is ignored
+(= Everyone). Choosing someone in the switcher updates the address, so a link to "Leza's logs" is
+`/?t=logs&user=leza`.
+
 ## Using an HTTPS name (reverse proxy)
 
 The bridge itself only speaks plain HTTP on its port. If you put a LAN reverse proxy in front of it

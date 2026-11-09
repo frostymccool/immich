@@ -151,16 +151,6 @@
 
     <section id="tab-people" class="hidden">
       <div id="peopleAlerts"></div>
-      <div class="card" id="rootCard">
-        <h2>Folder per person</h2>
-        <p class="muted" id="rootText"></p>
-        <p><button id="rootOff" class="hidden">Switch off</button> <button id="rootOn" class="hidden">Switch on (detect automatically)</button> <span id="rootMsg" class="ok hidden"></span></p>
-        <details id="rootAdv"><summary class="muted" style="cursor:pointer">Advanced: use a specific folder</summary>
-          <p class="muted">Normally not needed: the bridge finds the folders by itself. Use this only if they are not directly inside the mounted data folder.</p>
-          <p><button id="rootPick">Choose a folder…</button></p>
-        </details>
-        <div id="rootErr" class="errs hidden"></div>
-      </div>
       <div class="card">
         <h2>People</h2>
         <p class="muted">Each person has their own Immich account (API key) and their own folder(s). A file goes to the person whose folder it is in; for files in the shared area, the copyparty login of whoever uploaded it decides. Nothing is ever deleted in Immich or on disk from here.</p>
@@ -198,6 +188,12 @@
         <div id="pErrs" class="errs hidden"></div>
         <p><button id="pSave" class="primary">Add person</button> <button id="pCancelEdit" class="hidden">Cancel editing</button></p>
         <div id="pOk" class="ok hidden"></div>
+      </div>
+      <div class="card" id="rootCard">
+        <h2>Debug folder selection</h2>
+        <p class="muted" id="rootText"></p>
+        <p><button id="rootOff" class="hidden">Switch off</button> <button id="rootOn" class="hidden">Switch on (detect automatically)</button> <button id="rootPick">Choose a folder…</button> <span id="rootMsg" class="ok hidden"></span></p>
+        <div id="rootErr" class="errs hidden"></div>
       </div>
     </section>
 
@@ -374,7 +370,13 @@
       refresh();
     };
   });
-  window.addEventListener('popstate', function () { showTab(tabFromUrl()); refresh(); });
+  window.addEventListener('popstate', function () {
+    showTab(tabFromUrl());
+    var m = /[?&](?:user|u)=([^&#]*)/.exec(location.search), q = '';
+    try { q = m ? decodeURIComponent(m[1]).trim().toLowerCase() : ''; } catch (e) { q = ''; }
+    var want = resolveUser(q); if (want !== viewUser) { viewUser = want; $('userSel').value = want; batchMax = 0; renderScopeNote(); }
+    refresh();
+  });
   showTab(tabFromUrl()); setUrlTab(tab);
 
   // ---- status ------------------------------------------------------------------
@@ -714,17 +716,12 @@
   function renderRoot() {
     var on = pmode(), mode = people && people.people_mode, t = $('rootText');
     var n = people && people.people_folders ? people.people_folders.folders.length : 0;
-    if (mode === 'off') {
-      t.textContent = 'Switched OFF. People are added by hand (name, folders, copyparty login), and the main account imports the folders from the installer / Folders & settings.';
-    } else if (on) {
-      t.textContent = 'ON' + (mode === 'auto' ? ' (found automatically)' : ' (folder chosen by you)') + ': ' + n + ' folder' + (n === 1 ? '' : 's') + ' named firstname-<Immich user id> in ' + people.people_root +
-        '. To add a person just pick their first name below and paste their API key: the bridge checks the key belongs to the exact account in the folder name. The main account imports only its own folder; a folder nobody is set up for is imported by nobody.';
-    } else {
-      t.textContent = 'Waiting: no folders named firstname-<Immich user id> found in the mounted data folder yet. As soon as copyparty creates them this switches on by itself.';
-    }
+    if (mode === 'off') { t.textContent = 'Folder per person: switched OFF (people are added by hand).'; }
+    else if (on) { t.textContent = 'Folder per person: ON (' + (mode === 'auto' ? 'found automatically' : 'folder chosen by you') + ') - ' + n + ' firstname-<id> folder' + (n === 1 ? '' : 's') + ' in ' + people.people_root + '.'; }
+    else { t.textContent = 'Folder per person: waiting - no firstname-<id> folders found in the mounted data folder yet.'; }
     $('rootOff').classList.toggle('hidden', mode === 'off');
     $('rootOn').classList.toggle('hidden', mode !== 'off');
-    $('rootPick').textContent = mode === 'set' ? 'Change the folder…' : 'Choose a folder…';
+    $('rootPick').textContent = mode === 'set' ? 'Change folder…' : 'Choose a folder…';
   }
   function setRoot(path) {
     $('rootErr').classList.add('hidden');
@@ -740,17 +737,53 @@
     return api('GET', '/api/users').then(function (p) { people = p; fillSelector(); renderRoot(); applyFormMode(); if (tab === 'people') { renderPeople(); } renderScopeNote(); });
   }
   function personName(id) { var f = (people ? people.users : []).filter(function (u) { return u.id === id; })[0]; return f ? f.name : id; }
+  // The person lives in the address too: /?user=ian (also &t=people). Matches the person's id, name, the Immich account
+  // name or the email (or its part before the @); an unknown or ambiguous value is ignored (= Everyone).
+  var wantUser = (function () {
+    var m = /[?&](?:user|u)=([^&#]*)/.exec(location.search);
+    try { return m ? decodeURIComponent(m[1]).trim().toLowerCase() : ''; } catch (e) { return ''; }
+  })();
+  function resolveUser(q) {
+    if (!q || !people) { return ''; }
+    var us = people.users, rules = [
+      function (u) { return u.id === q; },
+      function (u) { return (u.name || '').toLowerCase() === q; },
+      function (u) { return u.immich_user && (u.immich_user.name || '').toLowerCase() === q; },
+      function (u) { return u.immich_user && (u.immich_user.email || '').toLowerCase() === q; },
+      function (u) { return u.immich_user && (u.immich_user.email || '').toLowerCase().split('@')[0] === q; }
+    ];
+    for (var i = 0; i < rules.length; i++) {
+      var hit = us.filter(rules[i]);
+      if (hit.length === 1) { return hit[0].id; }
+      if (hit.length > 1) { return ''; }   // ambiguous: do not guess
+    }
+    return '';
+  }
+  function urlKeyFor(id) {
+    var u = (people ? people.users : []).filter(function (x) { return x.id === id; })[0];
+    var k = u ? (u.name || '').toLowerCase() : id;
+    return (u && k && resolveUser(k) === id) ? k : id;   // a readable name when it points back to the same person
+  }
+  function setUrlUser(id) {
+    try {
+      var p = new URLSearchParams(location.search); p.delete('u');
+      if (id) { p.set('user', urlKeyFor(id)); } else { p.delete('user'); }
+      var q = p.toString();
+      history.replaceState(null, '', location.pathname + (q ? '?' + q : '') + location.hash);
+    } catch (e) { /* the page still works without the address update */ }
+  }
   function fillSelector() {
     var multi = people && people.users.length > 1, sel = $('userSel');
     sel.classList.toggle('hidden', !multi);
-    if (!multi) { viewUser = ''; return; }
+    if (!multi) { viewUser = ''; wantUser = ''; return; }
+    if (wantUser) { var hit = resolveUser(wantUser); wantUser = ''; if (hit) { viewUser = hit; batchMax = 0; } }
     if (!viewUser) { $('acct').classList.add('hidden'); }   // 'Everyone' has no single Immich account
     var cur = viewUser; sel.textContent = '';
     sel.appendChild(el('option', { value: '' }, 'Everyone'));
     people.users.forEach(function (u) { sel.appendChild(el('option', { value: u.id }, u.name + (u.immich_user && u.immich_user.email ? ' — ' + u.immich_user.email : ''))); });
     sel.value = cur; if (sel.value !== cur) { viewUser = ''; sel.value = ''; }
   }
-  $('userSel').onchange = function () { viewUser = this.value; batchMax = 0; renderScopeNote(); refresh(); };
+  $('userSel').onchange = function () { viewUser = this.value; batchMax = 0; setUrlUser(viewUser); renderScopeNote(); refresh(); };
   function renderScopeNote() {
     var n = $('scopeNote'), multi = people && people.users.length > 1;
     if (!multi) { n.classList.add('hidden'); return; }
