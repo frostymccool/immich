@@ -3,6 +3,14 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.2.1 - watched folders follow the person
+
+- *Folders & settings → Watched folders* now follows the person chosen at the top (or `?user=`). In folder-per-person
+  mode each person's own folder is fixed (shown as "(their folder)", id hidden); you can add folders **inside** it
+  (shown relative to it; the picker cannot leave it) and star one to import it first. Changes apply immediately, no
+  Save, and adding a folder inside one the person already has does not pause them. Everyone lists each person's folder;
+  the main account's folder is automatic. The server refuses extra folders outside a person's own folder.
+
 ## 0.2.0 - several people, folder per person
 
 **What is new**

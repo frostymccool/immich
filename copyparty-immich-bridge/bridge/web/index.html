@@ -206,6 +206,7 @@
       <div class="card">
         <h2>Watched folders</h2>
         <p class="muted">The bridge looks in these folders and all their subfolders for new files. The star marks a folder that is imported first (for example the one the phone app uploads into).</p>
+        <p class="muted hidden" id="dirsWho"></p>
         <div id="dirs"></div>
         <p><button id="addDir">Add folder…</button> <span id="dirNote" class="ok hidden"></span></p>
       </div>
@@ -573,8 +574,75 @@
     }).catch(function (e) { if (e.message !== 'auth') { $('gateErr').textContent = e.message; } });
   }
   function dirty() { return JSON.stringify(draft) !== JSON.stringify(cfg.values); }
+  // Folder-per-person: the card follows the person chosen at the top. Their own folder is fixed (shown by name only,
+  // id masked); extra folders INSIDE it can be added/removed and starred (imported first). Changes apply at once.
+  function relTo(base, p) { return p === base ? '(their folder)' : maskId(p.indexOf(base + '/') === 0 ? p.slice(base.length + 1) : p); }
+  function personBase(u) { return (u.folders || [])[0] || ''; }
+  function renderPersonDirs() {
+    var box = $('dirs'), who = $('dirsWho'); box.textContent = ''; who.classList.remove('hidden');
+    var everyone = !viewUser;
+    $('addDir').classList.toggle('hidden', everyone || viewUser === 'main');
+    if (everyone) {
+      who.textContent = 'Each person imports only their own folder. Pick a person at the top to see or add folders inside theirs.';
+      people.users.forEach(function (u) {
+        var row = el('div', { 'class': 'row' });
+        row.appendChild(el('span', { 'class': 'p' }, u.name + ': ' + (u.folders.length ? u.folders.map(maskId).join(', ') : 'no folder found yet')));
+        box.appendChild(row);
+      });
+      return;
+    }
+    var u = people.users.filter(function (x) { return x.id === viewUser; })[0];
+    if (!u) { return; }
+    var base = personBase(u);
+    who.textContent = u.is_main
+      ? u.name + ' imports only their own folder, found automatically. Nothing to change here.'
+      : u.name + ' imports their own folder and everything under it. You can add folders inside it below (for example to import one first with the star). Changes apply immediately.';
+    u.folders.forEach(function (d, i) {
+      var row = el('div', { 'class': 'row' });
+      var fixed = (i === 0);
+      var star = el('button', { 'class': 'star' + ((u.priority_dirs || []).indexOf(d) >= 0 ? ' on' : ''), title: 'Import this folder first' }, '★');
+      star.disabled = u.is_main;
+      star.onclick = function () {
+        var pr = (u.priority_dirs || []).slice(), j = pr.indexOf(d);
+        if (j >= 0) { pr.splice(j, 1); } else { pr.push(d); }
+        savePersonDirs(u, u.folders, pr);
+      };
+      row.appendChild(star); row.appendChild(el('span', { 'class': 'p' }, relTo(base, d)));
+      if (!fixed && !u.is_main) {
+        var rm = el('button', { 'class': 'danger', title: 'Stop watching this extra folder' }, 'Remove');
+        rm.onclick = function () {
+          var fs = u.folders.filter(function (x) { return x !== d; });
+          savePersonDirs(u, fs, (u.priority_dirs || []).filter(function (p) { return fs.some(function (w) { return p === w || p.indexOf(w + '/') === 0; }); }));
+        };
+        row.appendChild(rm);
+      }
+      box.appendChild(row);
+    });
+    if (!u.folders.length) { box.appendChild(el('p', { 'class': 'muted' }, 'No folder found for this person yet.')); }
+  }
+  function savePersonDirs(u, folders, priority) {
+    showErrs([]);
+    api('PUT', '/api/users/' + encodeURIComponent(u.id), { folders: folders, priority_dirs: priority }).then(function () {
+      return loadPeople();
+    }).then(function () {
+      renderSettings();
+      var ok = $('dirNote'); ok.textContent = 'Saved'; ok.classList.remove('hidden'); setTimeout(function () { ok.classList.add('hidden'); }, 3000);
+    }).catch(function (e) { if (e.message !== 'auth') { showErrs(e.problems || [e.message]); } });
+  }
   function renderSettings() {
     var box = $('dirs'); box.textContent = '';
+    var inPeople = !!(people && pmode());
+    $('dirsWho').classList.add('hidden'); $('addDir').classList.remove('hidden');
+    if (inPeople) { renderPersonDirs(); renderSettingsRest(); return; }
+    renderSettingsRest(true);
+  }
+  function renderSettingsRest(withDirs) {
+    var box = $('dirs');
+    if (withDirs === undefined) { withDirs = false; }
+    if (withDirs) { renderGlobalDirs(box); }
+    renderSettingsFields();
+  }
+  function renderGlobalDirs(box) {
     draft.watch_dirs.forEach(function (d, i) {
       var row = el('div', { 'class': 'row' });
       var star = el('button', { 'class': 'star' + (draft.priority_dirs.indexOf(d) >= 0 ? ' on' : ''), title: 'Import this folder first' }, '★');
@@ -592,6 +660,8 @@
       row.appendChild(star); row.appendChild(el('span', { 'class': 'p' }, d)); row.appendChild(rm); box.appendChild(row);
     });
     if (!draft.watch_dirs.length) { box.appendChild(el('p', { 'class': 'muted' }, 'No folders. Add at least one.')); }
+  }
+  function renderSettingsFields() {
     FIELDS.forEach(function (f) {
       var inp = $(f); var v = draft[f];
       if (inp.type === 'checkbox') { inp.checked = !!v; } else { inp.value = Array.isArray(v) ? v.join(' ') : (v === null || v === undefined ? '' : v); }
@@ -655,21 +725,26 @@
   var pkCur = null, pkParent = null;
   function pkLoad(path) {
     api('GET', '/api/fs' + (path ? '?path=' + encodeURIComponent(path) : '')).then(function (d) {
-      pkCur = d.path; pkParent = d.parent;
-      $('pkPath').textContent = d.path; $('pkUp').disabled = !d.parent;
+      pkCur = d.path; pkParent = (pkLimit && d.path === pkLimit) ? null : d.parent;
+      $('pkPath').textContent = pkLimit ? maskId(d.path) : d.path; $('pkUp').disabled = !pkParent;
       var list = $('pkList'); list.textContent = '';
       d.dirs.forEach(function (x) {
         var row = el('div', { 'class': 'dirrow' }); row.appendChild(el('span', {}, '📁')); row.appendChild(el('span', { 'class': 'crumb' }, x.name));
-        if (!pickCb && draft.watch_dirs.indexOf(x.path) >= 0) { row.appendChild(el('span', { 'class': 'pill' }, 'watched')); }
+        if (!pickCb && (personPick() ? personPick().folders : draft.watch_dirs).indexOf(x.path) >= 0) { row.appendChild(el('span', { 'class': 'pill' }, 'watched')); }
         row.onclick = function () { pkLoad(x.path); }; list.appendChild(row);
       });
       if (!d.dirs.length) { list.appendChild(el('p', { 'class': 'muted', style: 'padding:12px 14px' }, 'No subfolders here.')); }
       $('pkInfo').textContent = d.files + ' media file' + (d.files === 1 ? '' : 's') + ' directly in this folder' + (d.truncated ? ' (list truncated)' : '');
-      $('pkAdd').disabled = !pickCb && draft.watch_dirs.indexOf(d.path) >= 0;
+      $('pkAdd').disabled = !pickCb && (personPick() ? personPick().folders : draft.watch_dirs).indexOf(d.path) >= 0;
       $('pkAdd').textContent = pickCb ? 'Use this folder' : 'Watch this folder';
     }).catch(function (e) { if (e.message !== 'auth') { $('pkInfo').textContent = e.message; } });
   }
-  $('addDir').onclick = function () { $('picker').classList.remove('hidden'); pkLoad(null); };
+  var pkLimit = null;   // folder-per-person: the picker may not leave the chosen person's own folder
+  function personPick() { return (people && pmode() && viewUser) ? people.users.filter(function (x) { return x.id === viewUser; })[0] : null; }
+  $('addDir').onclick = function () {
+    var u = personPick(); pkLimit = u && !u.is_main ? personBase(u) : null;
+    $('picker').classList.remove('hidden'); pkLoad(pkLimit);
+  };
   $('pkUp').onclick = function () { if (pkParent) { pkLoad(pkParent); } };
   $('pkCancel').onclick = function () { pickCb = null; $('picker').classList.add('hidden'); };
   // Adding a folder applies at once (nothing else about it needs reviewing); removing one stays a draft until Save.
@@ -678,6 +753,11 @@
     if (!path) { return; }
     $('picker').classList.add('hidden');
     if (pickCb) { var cb = pickCb; pickCb = null; cb(path); return; }
+    var pu = personPick();
+    if (pu && !pu.is_main) {
+      if (pu.folders.indexOf(path) < 0) { savePersonDirs(pu, pu.folders.concat([path]), pu.priority_dirs || []); }
+      return;
+    }
     if (draft.watch_dirs.indexOf(path) >= 0) { return; }
     var applied = cfg.values.watch_dirs.indexOf(path) >= 0 ? cfg.values.watch_dirs : cfg.values.watch_dirs.concat([path]);
     showErrs([]);
@@ -744,12 +824,12 @@
       var m = $('rootMsg'); m.textContent = path === 'off' ? 'Switched off' : (path ? 'Saved: ' + path : 'Switched on (automatic)'); m.classList.remove('hidden'); setTimeout(function () { m.classList.add('hidden'); }, 4000);
     }).catch(function (e) { if (e.message === 'auth') { return; } var b = $('rootErr'); b.textContent = (e.problems && e.problems.length ? e.problems : [e.message]).join(' '); b.classList.remove('hidden'); });
   }
-  $('rootPick').onclick = function () { pickCb = setRoot; $('picker').classList.remove('hidden'); pkLoad(null); };
+  $('rootPick').onclick = function () { pickCb = setRoot; pkLimit = null; $('picker').classList.remove('hidden'); pkLoad(null); };
   $('rootOn').onclick = function () { setRoot(''); };
   $('rootOff').onclick = function () { if (confirm('Switch off folder-per-person?\n\nThe main account goes back to importing ' + ((cfg && cfg.values.watch_dirs) || []).join(', ') + ' — and any folder under it that nobody has been set up for will then be imported into the MAIN account. People already added keep their own folders.')) { setRoot('off'); } };
   $('pRefresh').onclick = function () { loadPeople(); };
   function loadPeople() {
-    return api('GET', '/api/users').then(function (p) { people = p; fillSelector(); renderRoot(); applyFormMode(); if (tab === 'people') { renderPeople(); } renderScopeNote(); });
+    return api('GET', '/api/users').then(function (p) { people = p; fillSelector(); renderRoot(); applyFormMode(); if (tab === 'people') { renderPeople(); } renderScopeNote(); if (cfg && draft) { renderSettings(); } });
   }
   function personName(id) { var f = (people ? people.users : []).filter(function (u) { return u.id === id; })[0]; return f ? f.name : id; }
   // The person lives in the address too: /?user=ian (also &t=people). Matches the person's id, name, the Immich account
@@ -798,11 +878,16 @@
     people.users.forEach(function (u) { sel.appendChild(el('option', { value: u.id }, u.name + (u.immich_user && u.immich_user.email ? ' — ' + u.immich_user.email : ''))); });
     sel.value = cur; if (sel.value !== cur) { viewUser = ''; sel.value = ''; }
   }
-  $('userSel').onchange = function () { viewUser = this.value; batchMax = 0; setUrlUser(viewUser); renderScopeNote(); refresh(); };
+  $('userSel').onchange = function () { viewUser = this.value; batchMax = 0; setUrlUser(viewUser); renderScopeNote(); if (cfg) { renderSettings(); } refresh(); };
   function renderScopeNote() {
     var n = $('scopeNote'), multi = people && people.users.length > 1;
     if (!multi) { n.classList.add('hidden'); return; }
     n.classList.remove('hidden');
+    if (pmode()) {
+      n.textContent = 'Watched folders follow the person chosen at the top. Behaviour and the settings below apply to everyone.' +
+        (viewUser ? ' The album and re-import buttons act on ' + personName(viewUser) + '.' : '');
+      return;
+    }
     n.textContent = 'Folders, behaviour and the settings below apply to everyone (and the main account’s folders). Each other person’s folders are on the People tab.' +
       (viewUser ? ' The album and re-import buttons act on ' + personName(viewUser) + '.' : ' The album and re-import buttons act on the main account; pick a person at the top to use them for someone else.');
   }
@@ -932,7 +1017,7 @@
   $('pCancelEdit').onclick = function () { resetForm(); applyFormMode(); ['pKey', 'pFolders', 'pPick', 'pAlbum', 'pAlbumsFolder'].forEach(function (i) { $(i).disabled = false; }); };
   $('pPick').onclick = function () {
     pickCb = function (path) { var cur = lines($('pFolders').value); if (cur.indexOf(path) < 0) { cur.push(path); } $('pFolders').value = cur.join('\n'); };
-    $('picker').classList.remove('hidden'); pkLoad(null);
+    pkLimit = null; $('picker').classList.remove('hidden'); pkLoad(null);
   };
   $('pCheck').onclick = function () {
     $('pErrs').classList.add('hidden');   // an old error from a previous attempt must not linger

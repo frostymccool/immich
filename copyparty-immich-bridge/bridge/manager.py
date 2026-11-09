@@ -347,6 +347,21 @@ class UserManager:
                 name = self.describe(rt.uid)["name"]
                 raise UsersError(f"That API key belongs to the same Immich account as {name}; each person needs their own account")
 
+    def _check_extra_folders(self, old, folders: list[str]) -> None:
+        """Folder-per-person: the person's own `<name>-<id>` folder is fixed (the folder name decides it); the only
+        thing that may change is extra folders INSIDE it."""
+        if not self.people.enabled:
+            return
+        root = os.path.realpath(self.people.root())
+        base = next((f for f in old.folders if os.path.dirname(os.path.realpath(f)) == root and parse_folder(os.path.basename(f))), None)
+        if base is None:
+            return
+        if os.path.normpath(base) not in [os.path.normpath(f) for f in folders]:
+            raise UsersError("a person's own folder cannot be removed here - it is chosen by the folder name")
+        for f in folders:
+            if not is_within_dirs(os.path.realpath(f), [os.path.realpath(base)]):
+                raise UsersError(f"{f} is outside this person's own folder; only folders inside it can be added")
+
     def _check_people_folders(self, folders: list[str], identity: str, name: str) -> None:
         """Inside the people folder a person may only have a folder named for THEIR Immich account (and never main's)."""
         if not self.people.enabled or not identity:
@@ -471,6 +486,7 @@ class UserManager:
             if isinstance(data.get("folders"), list):
                 ident = old.immich_id or ((self.runtime(uid).worker.immich_user or {}).get("id") if self.runtime(uid) else "") or ""
                 self._check_people_folders([f for f in data["folders"] if isinstance(f, str)], ident, old.name)
+                self._check_extra_folders(old, [f for f in data["folders"] if isinstance(f, str)])
             was_enabled, was_paused = old.enabled, old.paused
             if data.get("paused") is False and was_paused:
                 # Resume must not skip the review: files already imported by someone else would be duplicated
@@ -479,7 +495,10 @@ class UserManager:
                     raise UsersError(
                         f"{pending} file(s) in this person's folders were already imported by somebody else: "
                         "use Review & start so they are handled on purpose", 409)
-            folders_changed = "folders" in data and sorted(data["folders"] if isinstance(data["folders"], list) else []) != sorted(old.folders)
+            # A folder inside one the person already has adds no new files, so it needs no fresh review (extra
+            # subfolders, e.g. to import one first); anything outside their current folders does.
+            folders_changed = isinstance(data.get("folders"), list) and any(
+                isinstance(f, str) and not is_within_dirs(f, old.folders) for f in data["folders"])
             user = self.users.update(uid, data)
             if folders_changed and "paused" not in data:
                 self.users.update(uid, {"paused": True})  # a changed folder list needs a fresh look before importing

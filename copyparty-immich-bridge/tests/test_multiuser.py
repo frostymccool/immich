@@ -1132,7 +1132,9 @@ def test_folders_inside_the_people_folder_must_be_named_for_that_persons_account
     assert status == 400
     ok = os.path.join(pworld.root, f"leza-{ID_LEZA}", "Holiday")
     os.makedirs(ok)
-    assert call(pworld.base, "PUT", "/api/users/leza", {"folders": [ok]})[0] == 200  # a subfolder of her own is fine
+    base = os.path.join(pworld.root, f"leza-{ID_LEZA}")
+    assert call(pworld.base, "PUT", "/api/users/leza", {"folders": [ok]})[0] == 400  # her own folder cannot be dropped
+    assert call(pworld.base, "PUT", "/api/users/leza", {"folders": [base, ok]})[0] == 200  # an extra subfolder is fine
     assert pworld.manager.describe("leza")["paused"] is True
     # the old way, with a hand-typed folder named for somebody else's account, is refused the same way
     status, body = call(pworld.base, "POST", "/api/users", {"name": "Eve", "api_key": "key-sam-12345678",
@@ -1236,3 +1238,31 @@ def test_people_root_env_values():
     base = {"IMMICH_URL": "http://i", "IMMICH_API_KEY": "k", "WATCH_DIRS": "/x"}
     for raw, want in (("", ""), ("off", "off"), ("NONE", "off"), ("/w/people/", "/w/people")):
         assert Config.from_env({**base, "PEOPLE_ROOT": raw}).people_root == want
+
+
+def test_extra_folders_inside_a_persons_folder_apply_without_a_new_review(pworld):
+    leza = folder_of(pworld, "leza")
+    call(pworld.base, "POST", "/api/users", {"people_folder": leza, "api_key": "key-leza-1234567"})
+    base = os.path.join(pworld.root, leza)
+    sub = os.path.join(base, "Holiday")
+    os.makedirs(sub)
+    # a started person stays started when a folder INSIDE their own is added and starred
+    pworld.users.update("leza", {"paused": False})
+    status, body = call(pworld.base, "PUT", "/api/users/leza", {"folders": [base, sub], "priority_dirs": [sub]})
+    assert status == 200, body
+    d = pworld.manager.describe("leza")
+    assert d["paused"] is False and d["folders"] == [base, sub] and d["priority_dirs"] == [sub]
+    # removing the extra folder again keeps their own folder watched (and never ignores it)
+    assert call(pworld.base, "PUT", "/api/users/leza", {"folders": [base], "priority_dirs": []})[0] == 200
+    assert pworld.users.get("leza").folders == [base]
+
+
+def test_extra_folders_must_stay_inside_the_persons_own_folder(pworld):
+    leza = folder_of(pworld, "leza")
+    call(pworld.base, "POST", "/api/users", {"people_folder": leza, "api_key": "key-leza-1234567"})
+    base = os.path.join(pworld.root, leza)
+    outside = os.path.join(os.path.dirname(pworld.root), "elsewhere")
+    os.makedirs(outside, exist_ok=True)
+    status, body = call(pworld.base, "PUT", "/api/users/leza", {"folders": [base, outside]})
+    assert status == 400 and "outside this person" in body["error"]
+    assert pworld.users.get("leza").folders == [base]
