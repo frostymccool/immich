@@ -3,6 +3,13 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.4.2 - a sharper exact spot
+
+- The exact spot is now the densest knot of your photos (the photo with most others within 40 m), not the middle of
+  every photo nearby: a walk around the block could pull it 150 m away, onto a neighbour's address.
+- The exact spot is only pre-selected when its photos are within 60 m and are at least half of the photos nearby;
+  otherwise the town is pre-selected (the exact spot is still offered).
+
 ## 0.4.1 - layout fix
 
 - The exact spot / town choice was stretched across the card (the page's input width applied to the radio buttons);

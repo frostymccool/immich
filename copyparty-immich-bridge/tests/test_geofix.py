@@ -283,6 +283,31 @@ def test_a_suggestion_offers_the_exact_spot_and_the_town_each_with_its_zone_name
     assert [p["name"] for p in rig.gf.saved_places()] == ["Hotel"]
 
 
+def test_the_exact_spot_is_the_densest_knot_and_a_loose_one_is_not_the_default():
+    from bridge.geofix import rank_suggestions
+    start = datetime(2026, 5, 1, 14, 0)
+
+    def n(i, lat, lon, minutes):
+        return {"id": f"a{i}", "utc": start - timedelta(hours=9) + timedelta(minutes=minutes), "local": start + timedelta(minutes=minutes),
+                "offset": 540, "lat": lat, "lon": lon, "zone": "", "city": "Kyoto", "state": "", "country": "Japan"}
+
+    # nearest in time: one photo 120 m north; then four at home; the spot is home, not the middle of all five
+    home = [n(i, KYOTO[0], KYOTO[1] + 0.00001 * i, 30 + i) for i in range(4)]
+    top = rank_suggestions(start, start, None, [n(9, KYOTO[0] + 0.00108, KYOTO[1], 5)] + home)[0]
+    assert top["spot"]["photos"] == 4 and abs(top["spot"]["lat"] - KYOTO[0]) < 0.0001 and top["spot"]["radius_m"] == 25
+    # six photos strewn ~60 m apart with no knot: the spot is offered, but the town is the default even when confident
+    gf = GeoFix(":memory:", lambda: [], lambda: set())
+    strewn = [n(i, KYOTO[0] + 0.0006 * (i % 3), KYOTO[1] + 0.0007 * (i // 3), i) for i in range(6)]
+    g = rank_suggestions(start, start, None, strewn)[0]
+    g["confidence"] = "high"
+    gf._add_levels(g, {"need": [{"taken": start}]}, None)
+    assert g["spot"]["photos"] < 3 and g["spot"]["nearby"] == 6 and g["default_level"] == 1
+    top["confidence"] = "high"  # the home knot (4 of 5 photos, 25 m) IS the default
+    gf._add_levels(top, {"need": [{"taken": start}]}, None)
+    assert top["default_level"] == 0
+    gf.close()
+
+
 def test_each_file_gets_its_own_daylight_saving_offset():
     """A group that spans the start of daylight saving: each file gets the zone's offset at its own time."""
     from bridge.geofix import zone_at, zone_offset

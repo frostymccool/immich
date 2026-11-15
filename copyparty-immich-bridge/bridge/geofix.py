@@ -58,7 +58,10 @@ BATCH = 80
 ORIGINAL_MAX_BYTES = 4 << 30  # a missing Immich preview is made from the original; never download more than this
 MAX_FILES = 50000
 FILES_IN_PAYLOAD = 48
-SPOT_M = 150  # photos within this distance of the nearest-in-time one make up the "exact spot" level
+SPOT_M = 150  # photos within this distance of the nearest-in-time one are candidates for the "exact spot" level
+CORE_M = 40  # the exact spot is the densest knot of those: the photo with most others within this distance
+TIGHT_M = 60  # the exact spot is the default only when its photos lie within this radius and are at least half
+#               of the nearby ones (else the town is)
 SAVED_RADIUS_M = 150  # a saved place names any spot within this distance
 # Street names for an exact spot not covered by a saved place: OpenStreetMap's public reverse geocoder (sends only
 # that spot's coordinates; cached; at most 1 request a second per its usage policy). GEOFIX_REVERSE_GEOCODE=off
@@ -271,9 +274,12 @@ def rank_suggestions(start: datetime, end: datetime, known_offset: int | None, n
             confidence = "medium"
         else:
             confidence = "low"
-        # exact spot: the nearest-in-time photo and the photos taken within SPOT_M of it
+        # exact spot: among the photos within SPOT_M of the nearest-in-time one, the densest knot (a walk around the
+        # block must not pull the spot into a neighbour's garden: seen on real data, a 6-photo median 165 m off home)
         seed = members[0][1]
-        spot = [n for _, n in members if haversine_km(seed["lat"], seed["lon"], n["lat"], n["lon"]) * 1000 <= SPOT_M]
+        near = [n for _, n in members if haversine_km(seed["lat"], seed["lon"], n["lat"], n["lon"]) * 1000 <= SPOT_M]
+        knots = [[m for m in near if haversine_km(n["lat"], n["lon"], m["lat"], m["lon"]) * 1000 <= CORE_M] for n in near]
+        spot = max(knots, key=len)
         s_lat, s_lon = median(n["lat"] for n in spot), median(n["lon"] for n in spot)
         radius = max(25, round(max(haversine_km(s_lat, s_lon, n["lat"], n["lon"]) for n in spot) * 1000))
         in_city = [n for _, n in members if (n["city"], n["state"], n["country"]) == (city, state, country)] or [n for _, n in members]
@@ -282,7 +288,7 @@ def rank_suggestions(start: datetime, end: datetime, known_offset: int | None, n
                     "samples": [n["id"] for _, n in members[:3] if n["id"]],
                     "evidence": [{"id": n["id"], "local": n["local"].strftime("%Y-%m-%d %H:%M"), "place": n["city"] or n["country"]}
                                  for _, n in members[:3] if n["id"]],
-                    "spot": {"lat": round(s_lat, 6), "lon": round(s_lon, 6), "radius_m": radius, "photos": len(spot)},
+                    "spot": {"lat": round(s_lat, 6), "lon": round(s_lon, 6), "radius_m": radius, "photos": len(spot), "nearby": len(near)},
                     "area": {"lat": round(sum(n["lat"] for n in in_city) / len(in_city), 6),
                              "lon": round(sum(n["lon"] for n in in_city) / len(in_city), 6), "city": city, "state": state, "country": country}})
     order = {"high": 0, "medium": 1, "low": 2}
@@ -570,7 +576,8 @@ class GeoFix:
              "street": self._street_name(spot["lat"], spot["lon"])},
             {"kind": "town", "lat": round(t_lat, 6), "lon": round(t_lon, 6), "label": town or g["label"]},
         ]
-        g["default_level"] = 0 if g["confidence"] == "high" else 1
+        tight = spot["radius_m"] <= TIGHT_M and spot["photos"] >= max(2, (spot.get("nearby") or 0) / 2)
+        g["default_level"] = 0 if g["confidence"] == "high" and tight else 1
         start = session["need"][0]["taken"]
         for lv in g["levels"]:
             lv["zone"] = zone_at(lv["lat"], lv["lon"])
