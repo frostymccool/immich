@@ -642,19 +642,28 @@ class GeoFix:
             self._db.commit()
 
     @staticmethod
-    def _saved_name(saved: list[dict], lat: float, lon: float) -> str:
+    def _saved_place(saved: list[dict], lat: float, lon: float) -> tuple[dict, int] | None:
         near = [(haversine_km(lat, lon, p["lat"], p["lon"]) * 1000, p) for p in saved]
         near = [(d, p) for d, p in near if d <= p["radius_m"]]
-        return min(near, key=lambda x: x[0])[1]["name"] if near else ""
+        if not near:
+            return None
+        d, p = min(near, key=lambda x: x[0])
+        return p, round(d)
 
     def _level_view(self, lv: dict, saved: list[dict]) -> dict:
         out = dict(lv)
         if lv["kind"] == "spot":
-            name = self._saved_name(saved, lv["lat"], lv["lon"])
-            out["saved"] = bool(name)
-            out["label"] = name or lv.get("street") or "Exact spot of your photos"
-            out["detail"] = (f"±{lv['radius_m']} m · where {lv['photos']} of your photo{'s' if lv['photos'] != 1 else ''} were taken"
-                             + ("" if name else (" · street name from OpenStreetMap" if lv.get("street") else "")))
+            hit = self._saved_place(saved, lv["lat"], lv["lon"])
+            out["saved"] = bool(hit)
+            photos = f"{lv['photos']} of your photo{'s' if lv['photos'] != 1 else ''}"
+            if hit:
+                # the person said where this is: use their point, not the photos' (phone GPS drifts 100 m+ indoors)
+                place, away = hit
+                out["lat"], out["lon"], out["label"] = place["lat"], place["lon"], place["name"]
+                out["detail"] = f"your saved place · {photos} taken {away} m from it"
+            else:
+                out["label"] = lv.get("street") or "Exact spot of your photos"
+                out["detail"] = f"±{lv['radius_m']} m · where {photos} were taken" + (" · street name from OpenStreetMap" if lv.get("street") else "")
         return out
 
     # -- decisions --------------------------------------------------------------------------------------

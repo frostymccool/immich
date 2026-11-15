@@ -271,7 +271,13 @@ def test_a_suggestion_offers_the_exact_spot_and_the_town_each_with_its_zone_name
     # a saved place names the spot (and a far one does not)
     rig.gf.save_place("Hotel", KYOTO[0] + 0.0005, KYOTO[1], 150)
     rig.gf.save_place("Elsewhere", 0.0, 0.0)
-    assert rig.gf.describe()["sessions"][0]["suggestions"][0]["levels"][0]["label"] == "Hotel"
+    named = rig.gf.describe()["sessions"][0]["suggestions"][0]["levels"][0]
+    # the photos' GPS drifted ~56 m from the hotel: the saved point is used, and the import carries it
+    assert named["label"] == "Hotel" and (named["lat"], named["lon"]) == (KYOTO[0] + 0.0005, KYOTO[1])
+    assert named["detail"] == "your saved place · 5 of your photos taken 56 m from it"
+    rig.gf.decide(s["id"], "accept", 0, level=0)
+    d = rig.gf.describe()["sessions"][0]["decision"]
+    assert d["label"].startswith("Hotel, Kyoto") and (d["lat"], d["lon"]) == (KYOTO[0] + 0.0005, KYOTO[1])
     rig.gf.decide(s["id"], "accept", 0, level=1)  # the less exact choice
     d = rig.gf.describe()["sessions"][0]["decision"]
     assert d["label"] == "Kyoto, Japan" and (d["lat"], d["lon"]) == (35.02, 135.75)

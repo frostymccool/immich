@@ -3,6 +3,12 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.4.4 - a saved place gives its own GPS
+
+- When the exact spot falls inside a place you named, the place's own point is used, not the photos' average:
+  phone GPS indoors can drift 100 m+, which put home videos on a neighbour's street. The card says how far the
+  photos were from the saved place.
+
 ## 0.4.3 - imports with a fixed place work on a real Immich
 
 - An import carrying a place and time (from Fix locations) was refused by Immich with "Unsupported file type": Immich
