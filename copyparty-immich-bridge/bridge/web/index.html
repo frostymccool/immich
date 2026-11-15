@@ -75,11 +75,11 @@
   .gf-th.sm { width: 54px; height: 54px; }
   .gf-ph { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 11px; text-align: center; cursor: default; }
   .gf-more { flex: 0 0 auto; align-self: center; color: var(--muted); padding: 0 8px; white-space: nowrap; }
-  .gf-sug { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-top: 8px; }
+  .gf-sug { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-top: 8px; }
   .gf-sug .txt { flex: 1 1 220px; min-width: 0; } .gf-sug .name { font-weight: 600; } .gf-sug .ev { display: flex; gap: 4px; }
   .gf-sug .evbox { flex: 0 0 auto; } .gf-sug .evcap { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
-  .gf-lv { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; cursor: pointer; } .gf-lv input { margin-top: 3px; }
-  .gf-lv .d { font-size: 12px; color: var(--muted); } .gf-name { display: flex; gap: 6px; margin: 4px 0 0 24px; flex-wrap: wrap; }
+  .gf-lv { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; cursor: pointer; } .gf-lv input { width: auto; flex: 0 0 auto; padding: 0; margin-top: 4px; } .gf-lv > div { flex: 1 1 auto; min-width: 0; }
+  .gf-lv .d { font-size: 12px; color: var(--muted); } .gf-name { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; align-items: center; } .gf-name input { max-width: 200px; padding: 4px 8px; }
   .gf-ba { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 13px; margin-top: 6px; padding: 6px 8px; border-radius: 8px; background: var(--bg); }
   .gf-ba .k { color: var(--muted); } .gf-ba .warn { color: var(--warn); }
   button.link { background: none; border: none; color: var(--accent); padding: 2px 0; cursor: pointer; }
@@ -1001,7 +1001,7 @@
           t.appendChild(el('div', { 'class': 'd' }, lv.kind === 'spot' ? lv.detail : 'the town only, less exact'));
           lab.appendChild(t); lvBox.appendChild(lab);
           if (lv.kind === 'spot' && !lv.saved) {
-            var nameIt = el('button', { 'class': 'link', style: 'margin-left:24px;font-size:12px' }, 'Name this place…');
+            var nameIt = el('button', { 'class': 'link', style: 'font-size:12px' }, 'Name this place…');
             nameIt.onclick = function () {
               nameIt.classList.add('hidden');
               var f = el('div', { 'class': 'gf-name' }), inp = el('input', { type: 'text', placeholder: 'e.g. Home', maxlength: '80' }), ok = el('button', {}, 'Save');
@@ -1009,7 +1009,7 @@
               f.appendChild(inp); f.appendChild(ok); f.appendChild(el('span', { 'class': 'muted', style: 'font-size:12px' }, 'used for any spot within 150 m, in later scans too'));
               nameIt.parentNode.insertBefore(f, nameIt.nextSibling); inp.focus();
             };
-            lvBox.appendChild(nameIt);
+            t.appendChild(nameIt);
           }
         });
         txt.appendChild(lvBox);

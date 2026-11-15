@@ -3,6 +3,11 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.4.1 - layout fix
+
+- The exact spot / town choice was stretched across the card (the page's input width applied to the radio buttons);
+  "Name this place…" now sits under the street name.
+
 ## 0.4.0 - exact spot or town, time zone names, before and after
 
 - **How exact:** each suggestion offers the **exact spot** where your nearby photos were taken (within about 150 m,
