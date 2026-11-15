@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.parse
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -18,6 +19,13 @@ class StubImmich:
         self.uploads: list[dict] = []
         self.albums: list[dict] = []
         self.album_assets: dict[str, list[str]] = {}
+        # Fix locations: the account's existing photos (search), Immich's place index, one tiny PNG as every thumbnail
+        self.assets: list[dict] = []
+        self.searches: list[dict] = []
+        self.forbid_search = False
+        self.places: list[dict] = []
+        self.thumbnail = bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360f8cfc0000003010100c9fe92ef0000000049454e44ae426082")
         self._album_seq = 0
         self.user_name = "Test User"
         self.user_id = "user-1"
@@ -57,6 +65,16 @@ class StubImmich:
                     self._json(stub.api_key_status, {"message": "nope"})
                 elif self.path == "/api/api-keys/me":
                     self._json(200, {"id": "key-1", "name": "bridge", "permissions": stub.key_permissions})
+                elif self.path.startswith("/api/search/places"):
+                    name = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("name", [""])[0].lower()
+                    self._json(200, [p for p in stub.places if name in p["name"].lower()])
+                elif re.fullmatch(r"/api/assets/[^/]+/thumbnail(\?.*)?", self.path):
+                    data = stub.thumbnail
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
                 elif self.path == "/api/albums" and stub.forbid_albums:
                     self._json(403, {"message": "Missing required permission: album.read"})
                 elif self.path == "/api/albums":
@@ -88,8 +106,24 @@ class StubImmich:
                     asset_id = f"asset-{stub._counter}"
                     if checksum:
                         stub.known_checksums[checksum] = asset_id
-                    stub.uploads.append({"checksum": checksum, "raw_len": len(body)})
+                    sidecar = None
+                    mark = body.find(b'name="sidecarData"')
+                    if mark >= 0:  # the XMP part sent next to the file (Fix locations)
+                        start = body.find(b"\r\n\r\n", mark) + 4
+                        sidecar = body[start : body.find(b"\r\n--", start)].decode("utf-8")
+                    stub.uploads.append({"checksum": checksum, "raw_len": len(body), "sidecar": sidecar})
                     self._json(201, {"id": asset_id, "status": "created"})
+                elif self.path == "/api/search/metadata":
+                    if stub.forbid_search:
+                        self._json(403, {"message": "Missing required permission: asset.read"})
+                        return
+                    q = json.loads(body)
+                    stub.searches.append(q)
+                    hits = [a for a in stub.assets if q["takenAfter"][:19] <= a["fileCreatedAt"][:19] <= q["takenBefore"][:19]]
+                    size, page = int(q.get("size", 250)), int(q.get("page", 1))
+                    part = hits[(page - 1) * size : page * size]
+                    self._json(200, {"assets": {"items": part, "total": len(part), "count": len(part),
+                                                "nextPage": str(page + 1) if page * size < len(hits) else None}})
                 elif self.path == "/api/albums" and stub.forbid_albums:
                     self._json(403, {"message": "Missing required permission: album.create"})
                 elif self.path == "/api/albums":

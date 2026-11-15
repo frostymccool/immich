@@ -11,6 +11,7 @@ import time
 
 from bridge import __version__
 from bridge.config import Config, ConfigError
+from bridge.geofix import GeoFix
 from bridge.immich import DEFAULT_EXTENSIONS, ImmichClient, ImmichError
 from bridge.logbuffer import RingLogHandler
 from bridge.manager import UserManager
@@ -19,6 +20,7 @@ from bridge.server import serve
 from bridge.settings import SettingsStore
 from bridge.state import StateStore
 from bridge.users import UsersError, UsersStore
+from bridge.worker import ImportWorker
 
 log = logging.getLogger("bridge")
 
@@ -115,7 +117,10 @@ def main() -> int:
 
     if cfg.paused:
         log.warning("imports are PAUSED (saved setting) - press Resume on the web page to continue")
-    httpd = serve(cfg, state, worker, settings, logs, scan_now=wake_sweep.set, manager=manager)
+    # "Fix locations": places/time zones accepted on the page travel with the file as an XMP sidecar at import
+    geofix = GeoFix(os.path.join(data_dir, "geofix.db"), lambda: settings.browse_roots, lambda: worker.allowed_extensions)
+    ImportWorker.geofix = geofix
+    httpd = serve(cfg, state, worker, settings, logs, scan_now=wake_sweep.set, manager=manager, geofix=geofix)
 
     def shutdown(signum, frame) -> None:
         log.info("signal %d — shutting down", signum)
@@ -130,6 +135,7 @@ def main() -> int:
     httpd.serve_forever()
     manager.close_all()
     router.close()
+    geofix.close()
     state.close()
     client.close()
     log.info("bye")

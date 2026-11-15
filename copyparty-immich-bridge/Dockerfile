@@ -1,6 +1,7 @@
 FROM python:3.12-alpine
 
-RUN pip install --no-cache-dir requests==2.32.*
+# exiftool reads capture time/GPS for the Fix locations tab (the same tool Immich uses); ffmpeg makes its previews
+RUN apk add --no-cache exiftool ffmpeg && pip install --no-cache-dir requests==2.32.*
 
 WORKDIR /app
 COPY bridge/ /app/bridge/

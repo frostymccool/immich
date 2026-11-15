@@ -121,6 +121,22 @@ somewhere else, add a volume mount and re-run the installer. To change the port 
 installer with `BRIDGE_PORT=9000`. `move`/`delete` after import also need the data mounted
 read-write (installer option `WRITABLE=1`); the page refuses them while it is read-only.
 
+## Fix locations (missing GPS / time zone)
+
+GoPro and Insta360 files often carry a clock time with no time zone and no GPS. The **Fix locations** tab
+(`/?t=locations`) scans a folder for such files, suggests a place and time zone for each group from your own Immich
+photos taken around the same time, and lets you confirm. Accepted choices are sent with each file as an XMP sidecar
+when the bridge imports it. Files are never modified and nothing is written next to them. See `CHANGELOG.md` (0.3.0)
+for the limits. Example of what is sent next to `GX010011.MP4` (made-up data):
+
+```xml
+<exif:DateTimeOriginal>2026-06-14T10:20:05+01:00</exif:DateTimeOriginal>
+<exif:GPSLatitude>41,9.096000N</exif:GPSLatitude>
+<exif:GPSLongitude>8,36.654000W</exif:GPSLongitude>
+```
+
+![Fix locations tab](docs/ui-fix-locations.png)
+
 ## Endpoints
 
 - `POST /hook` — copyparty event receiver (single JSON object, or a list for

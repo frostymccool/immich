@@ -73,17 +73,22 @@ def sha1_hex(path: str, chunk_size: int = 1024 * 1024) -> str:
 class _MultipartBody:
     """Streams a multipart/form-data upload from disk with a known length, reporting bytes sent."""
 
-    def __init__(self, fields: dict[str, str], filename: str, path: str, progress):
+    def __init__(self, fields: dict[str, str], filename: str, path: str, progress, sidecar: bytes | None = None):
         self.boundary = uuid.uuid4().hex
         head = "".join(
             f'--{self.boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n' for k, v in fields.items()
         )
         quoted = filename.replace("\\", "\\\\").replace('"', "%22").replace("\r", "").replace("\n", "")
-        head += (
+        raw_head = head.encode("utf-8")
+        if sidecar is not None:
+            # a small XMP sidecar (location / time zone chosen on the Fix locations tab) travels with the file
+            raw_head += (f'--{self.boundary}\r\nContent-Disposition: form-data; name="sidecarData"; filename="{quoted}.xmp"\r\n'
+                         "Content-Type: application/xml\r\n\r\n").encode("utf-8") + sidecar + b"\r\n"
+        head = (
             f'--{self.boundary}\r\nContent-Disposition: form-data; name="assetData"; filename="{quoted}"\r\n'
             "Content-Type: application/octet-stream\r\n\r\n"
         )
-        self._head = head.encode("utf-8")
+        self._head = raw_head + head.encode("utf-8")
         self._tail = f"\r\n--{self.boundary}--\r\n".encode()
         self._file_size = os.path.getsize(path)
         self._fh = open(path, "rb")
@@ -183,7 +188,7 @@ class ImmichClient:
             return first.get("assetId") or "present"
         return None
 
-    def upload(self, path: str, sha1_hex_digest: str, progress=None) -> UploadOutcome:
+    def upload(self, path: str, sha1_hex_digest: str, progress=None, sidecar: bytes | None = None) -> UploadOutcome:
         """Uploads one file. Immich replies 201 (created) or 200 (duplicate)."""
         stat = os.stat(path)
         mtime_iso = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
@@ -198,7 +203,7 @@ class ImmichClient:
             "filename": filename,
             "isFavorite": "false",
         }
-        body = _MultipartBody(data, filename, path, progress)
+        body = _MultipartBody(data, filename, path, progress, sidecar)
         try:
             resp = self._session.post(
                 self._base + "/api/assets",
@@ -219,6 +224,36 @@ class ImmichClient:
         asset_id = body.get("id")
         duplicate = resp.status_code == 200 or body.get("status") == "duplicate"
         return UploadOutcome(status="duplicate" if duplicate else "imported", asset_id=asset_id)
+
+    # -- nearby photos (Fix locations tab) --------------------------------------
+
+    def _explain(self, resp, what: str) -> None:
+        if resp.status_code == 401:
+            raise ImmichError("Immich says the API key is not valid")
+        if resp.status_code == 403:
+            raise ImmichError(f"the API key lacks the permission needed to {what}; in Immich create a key with all "
+                              "permissions (Account Settings > API Keys) or add that permission")
+        if resp.status_code != 200:
+            raise ImmichError(f"Immich answered HTTP {resp.status_code}: {resp.text[:200]}")
+
+    def search_metadata(self, body: dict) -> dict:
+        """POST /search/metadata (permission asset.read): the account's assets in a time window, with EXIF."""
+        resp = self._session.post(self._base + "/api/search/metadata", json=body, timeout=self._timeout)
+        self._explain(resp, "look up photos (asset.read)")
+        return resp.json()
+
+    def search_places(self, name: str) -> list[dict]:
+        """GET /search/places (permission asset.read): Immich's own place-name index."""
+        resp = self._session.get(self._base + "/api/search/places", params={"name": name}, timeout=self._timeout)
+        self._explain(resp, "search places (asset.read)")
+        out = resp.json()
+        return out if isinstance(out, list) else []
+
+    def thumbnail(self, asset_id: str) -> tuple[bytes, str]:
+        """GET /assets/{id}/thumbnail (permission asset.view)."""
+        resp = self._session.get(self._base + f"/api/assets/{asset_id}/thumbnail", params={"size": "thumbnail"}, timeout=self._timeout)
+        self._explain(resp, "show photos (asset.view)")
+        return resp.content, resp.headers.get("Content-Type", "image/webp")
 
     # -- albums ---------------------------------------------------------------
 

@@ -19,14 +19,19 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import requests
+
 from bridge import __version__
 from bridge.browse import BrowseError, list_dir
 from bridge.config import Config
+from bridge.geofix import GeoFix, GeoFixError
+from bridge.immich import ImmichError
 from bridge.logbuffer import RingLogHandler
 from bridge.manager import UserManager
 from bridge.scanner import is_within_dirs
@@ -59,6 +64,7 @@ def make_handler(
     logs: RingLogHandler | None = None,
     scan_now: Callable[[], None] | None = None,
     manager: UserManager | None = None,
+    geofix: GeoFix | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         server_version = f"copyparty-immich-bridge/{__version__}"
@@ -257,6 +263,80 @@ def make_handler(
 
         # -- GET -------------------------------------------------------------------
 
+        # -- Fix locations tab -----------------------------------------------------
+
+        def _client_for(self, uid):
+            """The Immich client of the chosen person (their own photos are the evidence)."""
+            uid = uid or MAIN_ID
+            if manager is None:
+                return worker._client if uid == MAIN_ID else None
+            rt = manager.runtime(uid) if isinstance(uid, str) else None
+            return rt.client if rt is not None else None
+
+        def _geofix_get(self, route: str, query: dict) -> None:
+            assert geofix is not None
+            one = lambda k: (query.get(k) or [""])[0]  # noqa: E731
+            try:
+                if route == "/api/geofix":
+                    out = geofix.describe()
+                    folder = out["status"].get("folder") or ""
+                    owner = manager.router.owner(os.path.join(folder, ".x")) if (manager is not None and folder) else None
+                    out["watched_by"] = owner
+                    self._send_json(200, out)
+                elif route == "/api/geofix/thumb":
+                    self._send_bytes(200, geofix.thumbnail(one("path")), "image/jpeg", {"Cache-Control": "private, max-age=3600"})
+                elif route == "/api/geofix/sidecar":
+                    self._send_bytes(200, geofix.preview_sidecar(one("path")), "text/plain; charset=utf-8")
+                elif route in ("/api/geofix/immich-thumb", "/api/geofix/places"):
+                    client = self._client_for(one("user") or geofix.status.get("user"))
+                    if client is None:
+                        self._send_json(404, {"error": "no such user"})
+                    elif route.endswith("places"):
+                        name = " ".join(one("q").split())[:80]
+                        places = client.search_places(name) if len(name) >= 2 else []
+                        self._send_json(200, {"places": [
+                            {"name": str(p.get("name") or ""), "region": ", ".join(str(x) for x in (p.get("admin2name"), p.get("admin1name")) if x),
+                             "lat": p.get("latitude"), "lon": p.get("longitude")} for p in places[:20] if isinstance(p, dict)]})
+                    else:
+                        asset = one("id")
+                        if not re.fullmatch(r"[0-9a-fA-F-]{36}", asset):
+                            self._send_json(400, {"error": "bad id"})
+                            return
+                        data, ctype = client.thumbnail(asset)
+                        self._send_bytes(200, data, ctype if ctype.startswith("image/") else "image/webp", {"Cache-Control": "private, max-age=3600"})
+                else:
+                    self._send_json(404, {"error": "not found"})
+            except GeoFixError as ex:
+                self._send_json(ex.code, {"error": str(ex)})
+            except (ImmichError, requests.RequestException) as ex:
+                self._send_json(502, {"error": str(ex)})
+
+        def _geofix_post(self) -> None:
+            assert geofix is not None
+            body = self._read_json_body_optional()
+            if body is None:
+                return
+            try:
+                if self.path == "/api/geofix/scan":
+                    uid = body.get("user") or MAIN_ID
+                    client = self._client_for(uid)
+                    if client is None:
+                        self._send_json(404, {"error": "no such user"})
+                        return
+                    geofix.start_scan(body.get("folder"), uid, client.search_metadata)
+                elif self.path == "/api/geofix/decide":
+                    geofix.decide(str(body.get("session") or ""), str(body.get("action") or ""), body.get("suggestion"),
+                                  body.get("custom") if isinstance(body.get("custom"), dict) else None)
+                elif self.path == "/api/geofix/accept-confident":
+                    self._send_json(200, {"accepted": geofix.accept_confident()})
+                    return
+                else:
+                    self._send_json(404, {"error": "not found"})
+                    return
+                self._send_json(200, {"ok": True})
+            except GeoFixError as ex:
+                self._send_json(ex.code, {"error": str(ex)})
+
         def do_GET(self) -> None:
             url = urlparse(self.path)
             route = url.path
@@ -293,6 +373,9 @@ def make_handler(
                         self._send_json(200, list_dir(path, settings.browse_roots, worker.allowed_extensions))
                     except BrowseError as ex:
                         self._send_json(ex.code, {"error": str(ex)})
+            elif route.startswith("/api/geofix") and geofix is not None:
+                if self._require_api():
+                    self._geofix_get(route, query)
             elif route == "/api/logs" and logs is not None:
                 if self._require_api():
                     level = (query.get("level") or ["INFO"])[0]
@@ -429,6 +512,10 @@ def make_handler(
                 return
             if manager is not None and self.path.startswith("/api/users"):
                 self._users_post()
+                return
+            if self.path.startswith("/api/geofix") and geofix is not None:
+                if self._require_api():
+                    self._geofix_post()
                 return
             if self.path == "/api/scan" and scan_now is not None:
                 if self._require_api():
@@ -594,8 +681,9 @@ def serve(
     logs: RingLogHandler | None = None,
     scan_now: Callable[[], None] | None = None,
     manager: UserManager | None = None,
+    geofix: GeoFix | None = None,
 ) -> ThreadingHTTPServer:
-    handler = make_handler(cfg, state, worker, settings, logs, scan_now, manager)
+    handler = make_handler(cfg, state, worker, settings, logs, scan_now, manager, geofix)
     httpd = ThreadingHTTPServer((cfg.bind_host, cfg.bind_port), handler)
     log.info("listening on %s:%d", cfg.bind_host, cfg.bind_port)
     return httpd

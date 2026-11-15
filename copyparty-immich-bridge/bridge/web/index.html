@@ -70,6 +70,23 @@
   .logs .WARNING { color: #f0c05a; } .logs .ERROR, .logs .CRITICAL { color: #ff8a8a; } .logs .DEBUG { color: #8b97a8; }
   .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
   .bar select, .bar input { width: auto; max-width: 200px; }
+  .gf-strip { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 8px; }
+  .gf-th { flex: 0 0 auto; width: 112px; height: 76px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); object-fit: cover; cursor: zoom-in; display: block; }
+  .gf-th.sm { width: 54px; height: 54px; cursor: default; }
+  .gf-ph { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 11px; text-align: center; cursor: default; }
+  .gf-more { flex: 0 0 auto; align-self: center; color: var(--muted); padding: 0 8px; white-space: nowrap; }
+  .gf-sug { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-top: 8px; }
+  .gf-sug .txt { flex: 1 1 220px; min-width: 0; } .gf-sug .name { font-weight: 600; } .gf-sug .ev { display: flex; gap: 4px; }
+  .gf-done { border: 1px solid var(--ok); border-radius: 10px; padding: 10px; margin-top: 8px; }
+  .gf-done.skip { border-color: var(--line); }
+  .gf-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; } .gf-head h3 { margin: 0; font-size: 15px; }
+  .gf-bar { height: 8px; border-radius: 99px; background: var(--bg); border: 1px solid var(--line); overflow: hidden; margin-top: 8px; }
+  .gf-bar > div { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+  .gf-places { border: 1px solid var(--line); border-radius: 8px; margin-top: 6px; max-height: 220px; overflow: auto; }
+  .gf-places div { padding: 7px 10px; cursor: pointer; border-bottom: 1px solid var(--line); } .gf-places div:hover { background: var(--bg); }
+  .gf-filter button.on { border-color: var(--accent); font-weight: 600; }
+  .gf-xmp { background: var(--code); color: var(--code-text); padding: 10px; border-radius: 8px; overflow-x: auto; font-size: 12px; white-space: pre; margin-top: 8px; }
+  .gf-zoom img { max-width: 100%; max-height: 80vh; display: block; margin: 0 auto; border-radius: 8px; }
   .modal { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; padding: 14px; z-index: 10; }
   .modal .box { background: var(--panel); border-radius: 12px; width: 100%; max-width: 560px; max-height: 88vh; display: flex; flex-direction: column; border: 1px solid var(--line); }
   .modal .head, .modal .foot { padding: 12px 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -117,6 +134,7 @@
     <nav>
       <button data-tab="status" class="on">Status</button>
       <button data-tab="people">People</button>
+      <button data-tab="locations">Fix locations</button>
       <button data-tab="settings">Folders &amp; settings</button>
       <button data-tab="logs">Logs</button>
     </nav>
@@ -265,6 +283,25 @@
       </div>
     </section>
 
+    <section id="tab-locations" class="hidden">
+      <div class="card">
+        <h2>Fix missing location and time zone before import</h2>
+        <p class="muted">Action cameras (GoPro, Insta360) often record a clock time with no time zone and no GPS, so Immich files them under “missing time zone” and off the map. Scan a folder here: the bridge finds those files, looks at <b>your own Immich photos taken around the same time</b> and suggests where they were taken. You confirm; the place and time zone then travel with each file when it is imported. <b>Your files are never changed</b> and nothing is written next to them.</p>
+        <div class="bar"><span class="p" id="gfFolder">No folder chosen</span><span class="grow"></span><button id="gfPick">Choose folder…</button> <button id="gfScan" class="primary" disabled>Scan</button></div>
+        <div class="muted" id="gfWho"></div>
+        <div id="gfTools" class="errs hidden"></div>
+        <div id="gfErr" class="errs hidden"></div>
+        <div id="gfWatched" class="errs hidden" style="color:var(--warn);border-color:var(--warn)"></div>
+        <div id="gfProg" class="hidden"><div class="muted" id="gfProgText"></div><div class="gf-bar"><div id="gfProgBar"></div></div></div>
+      </div>
+      <div class="card hidden" id="gfSummaryCard">
+        <div id="gfSummary"></div>
+        <p style="margin:10px 0 0"><button id="gfConfident" class="primary hidden"></button>
+          <span class="gf-filter" id="gfFilter"><button data-f="open" class="on">To review</button> <button data-f="accepted">Accepted</button> <button data-f="skipped">Skipped</button> <button data-f="all">All</button></span></p>
+      </div>
+      <div id="gfSessions"></div>
+    </section>
+
     <section id="tab-logs" class="hidden">
       <div class="card">
         <div class="bar">
@@ -281,6 +318,7 @@
   </div>
 </main>
 
+<div class="modal hidden gf-zoom" id="gfZoom"><div class="box" style="max-width:720px;padding:12px"><img id="gfZoomImg" alt=""><p class="muted" id="gfZoomCap" style="margin:8px 0 0;text-align:center"></p></div></div>
 <div class="modal hidden" id="picker">
   <div class="box">
     <div class="head"><button id="pkUp">⬆ Up</button><span class="crumb" id="pkPath"></span></div>
@@ -351,8 +389,8 @@
   // ---- tabs --------------------------------------------------------------------
   // The tab lives in the address: /?t=status | people | settings | logs (also /?t=folders). Clicking a tab updates it,
   // so the page can be bookmarked or shared (a link may also carry the sign-in: /?t=people#token=...).
-  var TABS = ['status', 'people', 'settings', 'logs'];
-  var TAB_ALIASES = { folders: 'settings', folder: 'settings', config: 'settings', log: 'logs', person: 'people', users: 'people' };
+  var TABS = ['status', 'people', 'locations', 'settings', 'logs'];
+  var TAB_ALIASES = { fix: 'locations', location: 'locations', places: 'locations', gps: 'locations', timezone: 'locations', folders: 'settings', folder: 'settings', config: 'settings', log: 'logs', person: 'people', users: 'people' };
   function tabFromUrl() {
     var m = /[?&](?:t|tab)=([^&#]*)/.exec(location.search), v = '';
     try { v = m ? decodeURIComponent(m[1]).toLowerCase() : ''; } catch (e) { v = ''; }
@@ -774,6 +812,218 @@
   };
 
 
+  // ---- fix locations -------------------------------------------------------------
+  // Scan a folder for files without GPS / time zone, show places suggested from the person's own Immich photos taken
+  // around the same time, and remember what is accepted. Nothing here changes a file: the choice is sent with the
+  // file as an XMP sidecar when the bridge imports it.
+  var gfState = null, gfFolder = '', gfFilterBy = 'open', gfSig = '', gfBlobs = {}, gfOpen = {};
+  try { gfFolder = localStorage.getItem('bridgeFixFolder') || ''; } catch (e) { gfFolder = ''; }
+  function gfUser() { return viewUser || ((people && people.users.length > 1) ? '' : 'main'); }
+  function gfImg(url, cls, cap) {
+    // <img> cannot send the token header, so previews are fetched and shown as blobs (cached for the page's life)
+    var img = el('img', { 'class': 'gf-th ' + (cls || ''), alt: '', loading: 'lazy' });
+    if (!gfBlobs[url]) {
+      gfBlobs[url] = fetch(url, { headers: { 'X-Bridge-Token': token } }).then(function (r) { if (!r.ok) { throw new Error('none'); } return r.blob(); }).then(function (b) { return URL.createObjectURL(b); });
+    }
+    gfBlobs[url].then(function (u) {
+      img.src = u;
+      if (cap !== undefined) { img.onclick = function () { $('gfZoomImg').src = u; $('gfZoomCap').textContent = cap; $('gfZoom').classList.remove('hidden'); }; }
+    }).catch(function () {
+      var ph = el('div', { 'class': 'gf-th gf-ph ' + (cls || '') }, cls ? '' : 'no preview'); if (img.parentNode) { img.parentNode.replaceChild(ph, img); }
+    });
+    return img;
+  }
+  $('gfZoom').onclick = function () { $('gfZoom').classList.add('hidden'); };
+  function gfWhen(a, b) {
+    if (!a) { return 'no capture time in these files'; }
+    var d1 = a.slice(0, 10), d2 = (b || a).slice(0, 10), t1 = a.slice(11, 16), t2 = (b || a).slice(11, 16);
+    return d1 + ' ' + t1 + (d1 === d2 ? (t1 === t2 ? '' : ' – ' + t2) : ' – ' + d2 + ' ' + t2) + ' (camera clock)';
+  }
+  function gfGap(sec) {
+    if (sec <= 60) { return 'at the same time'; }
+    if (sec < 5400) { return Math.round(sec / 60) + ' min apart'; }
+    if (sec < 172800) { return Math.round(sec / 3600) + ' h apart'; }
+    return Math.round(sec / 86400) + ' days apart';
+  }
+  function gfOff(min) { var s = min < 0 ? '-' : '+', m = Math.abs(min); return 'UTC' + s + ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); }
+  function gfRel(folder) {
+    var base = (gfState && gfState.status.folder) || '';
+    var r = folder === base ? folder.split('/').pop() : (folder.indexOf(base + '/') === 0 ? folder.slice(base.length + 1) : folder);
+    return maskId(r);
+  }
+  function gfErr(msg) { var b = $('gfErr'); b.textContent = msg || ''; b.classList.toggle('hidden', !msg); }
+  function gfPost(path, body) { return api('POST', path, body).then(function () { gfErr(''); return gfLoad(); }).catch(function (e) { if (e.message !== 'auth') { gfErr(e.message); } }); }
+  function gfLoad() {
+    return api('GET', '/api/geofix').then(function (st) { gfState = st; gfRender(); }).catch(function (e) { if (e.message !== 'auth') { gfErr(e.message); } throw e; });
+  }
+  function gfRender() {
+    var st = gfState, run = st.status.running, who = gfUser();
+    if (!gfFolder && st.status.folder) { gfFolder = st.status.folder; }
+    $('gfFolder').textContent = gfFolder ? maskId(gfFolder) : 'No folder chosen';
+    var t = $('gfTools');
+    t.classList.toggle('hidden', !!st.tools.exiftool);
+    t.textContent = st.tools.exiftool ? '' : 'exiftool is not installed in the bridge container, so files cannot be read. Update the bridge (update-bridge.sh rebuilds it with exiftool) and reload this page.';
+    $('gfWho').textContent = who
+      ? 'Places are suggested from ' + personName(who) + '’s Immich photos' + (st.tools.ffmpeg ? '.' : '. (No previews: ffmpeg is not installed in the container.)')
+      : 'Pick a person at the top first: their Immich photos are used to find the place.';
+    $('gfScan').disabled = run || !gfFolder || !who || !st.tools.exiftool;
+    $('gfScan').textContent = run ? 'Scanning…' : (st.status.folder === gfFolder && st.status.finished_at ? 'Scan again' : 'Scan');
+    $('gfProg').classList.toggle('hidden', !run);
+    if (run) {
+      $('gfProgText').textContent = st.status.phase + (st.status.total ? ' — ' + st.status.done + ' of ' + st.status.total : '…');
+      $('gfProgBar').style.width = (st.status.total ? Math.round(100 * st.status.done / st.status.total) : 3) + '%';
+    }
+    if (!run && st.status.error) { gfErr(st.status.phase === 'failed' ? 'The scan failed: ' + st.status.error : st.status.error); }
+    var w = $('gfWatched');
+    w.classList.toggle('hidden', !st.watched_by);
+    if (st.watched_by) { w.textContent = 'This folder is already being imported for ' + personName(st.watched_by) + '. A place chosen here only reaches files that are not in Immich yet; files already imported are not changed. To be sure, pause ' + personName(st.watched_by) + ' before files arrive, or scan a folder that is not watched.'; }
+    var have = !!st.status.finished_at && !run;
+    $('gfSummaryCard').classList.toggle('hidden', !have);
+    if (!have) { if (run) { return; } $('gfSessions').textContent = ''; gfSig = ''; return; }
+    var s = st.summary, box = $('gfSummary'); box.textContent = '';
+    var strip = el('div', { 'class': 'gf-head' });
+    [[s.files, 'files scanned'], [s.fine, 'already have a location'], [s.open, 'to review'], [s.accepted, 'accepted'], [s.skipped, 'skipped']].forEach(function (p) {
+      var c = el('span'); c.appendChild(el('b', {}, String(p[0]))); c.appendChild(document.createTextNode(' ' + p[1] + '  ·  ')); strip.appendChild(c);
+    });
+    box.appendChild(strip);
+    if (!s.need) { box.appendChild(el('p', { 'class': 'ok' }, s.files ? 'Every file in this folder already has a location. Nothing to fix.' : 'No photos or videos were found in this folder.')); }
+    var cb = $('gfConfident');
+    cb.classList.toggle('hidden', !s.confident);
+    cb.textContent = 'Accept the ' + s.confident + ' confident suggestion' + (s.confident === 1 ? '' : 's');
+    var sig = JSON.stringify([st.sessions, gfFilterBy, st.status.finished_at]);
+    if (sig === gfSig) { return; }
+    gfSig = sig;
+    var list = $('gfSessions'); list.textContent = '';
+    var shown = st.sessions.filter(function (x) {
+      if (gfFilterBy === 'all') { return true; }
+      var state = x.decision ? x.decision.status : 'open';
+      return state === gfFilterBy;
+    });
+    if (!shown.length && s.need) { list.appendChild(el('p', { 'class': 'muted', style: 'padding:0 4px' }, gfFilterBy === 'open' ? 'Nothing left to review.' : 'Nothing here.')); }
+    shown.forEach(function (x) { list.appendChild(gfCard(x)); });
+  }
+  function gfCard(x) {
+    var card = el('div', { 'class': 'card', 'data-session': x.id });
+    var head = el('div', { 'class': 'gf-head' });
+    head.appendChild(el('h3', {}, gfRel(x.folder)));
+    head.appendChild(el('span', { 'class': 'muted' }, gfWhen(x.start, x.end)));
+    var state = x.decision ? x.decision.status : 'open';
+    head.appendChild(badge(state === 'accepted' ? 'ok' : (state === 'skipped' ? '' : 'warn'), state === 'open' ? 'to review' : state));
+    card.appendChild(head);
+    var needs = Object.keys(x.needs).map(function (k) { return x.needs[k] + ' without ' + k; }).join(', ');
+    card.appendChild(el('div', { 'class': 'muted' }, x.need_count + ' file' + (x.need_count === 1 ? '' : 's') + (x.videos ? ' (' + x.videos + ' video' + (x.videos === 1 ? '' : 's') + ')' : '') +
+      (x.cameras.length ? ' · ' + x.cameras.join(', ') : '') + ' · ' + needs));
+    var strip = el('div', { 'class': 'gf-strip' });
+    x.files.slice(0, gfOpen[x.id] ? x.files.length : 8).forEach(function (f) {
+      strip.appendChild(gfImg('/api/geofix/thumb?path=' + encodeURIComponent(f.path), '', f.name + (f.taken ? ' · ' + f.taken.replace('T', ' ').slice(0, 16) : '')));
+    });
+    if (x.need_count > 8 && !gfOpen[x.id]) {
+      var more = el('button', { 'class': 'gf-more' }, '+' + (x.need_count - 8) + ' more');
+      more.onclick = function () { gfOpen[x.id] = true; gfSig = ''; gfRender(); };
+      strip.appendChild(more);
+    } else if (x.need_count > x.files.length) { strip.appendChild(el('span', { 'class': 'gf-more' }, '+' + (x.need_count - x.files.length) + ' not shown')); }
+    card.appendChild(strip);
+    if (x.decision) { card.appendChild(gfDecided(x)); return card; }
+    if (!x.start) { card.appendChild(el('p', { 'class': 'muted' }, 'These files carry no capture time, so nothing can be suggested from your other photos. You can still set the place by hand.')); }
+    else if (!x.suggestions.length) { card.appendChild(el('p', { 'class': 'muted' }, 'None of your Immich photos with a location were taken within ' + Math.round(x.searched_hours / 24) + ' days of these files, so there is nothing to suggest. Set the place by hand, or skip.')); }
+    x.suggestions.forEach(function (g, i) {
+      var row = el('div', { 'class': 'gf-sug' });
+      var ev = el('div', { 'class': 'ev' });
+      g.samples.forEach(function (id) { ev.appendChild(gfImg('/api/geofix/immich-thumb?id=' + encodeURIComponent(id), 'sm')); });
+      row.appendChild(ev);
+      var txt = el('div', { 'class': 'txt' });
+      var nm = el('div', { 'class': 'name' }, g.label + ' '); nm.appendChild(badge(g.confidence === 'high' ? 'ok' : (g.confidence === 'medium' ? 'warn' : ''), g.confidence === 'high' ? 'confident' : (g.confidence === 'medium' ? 'likely' : 'a guess')));
+      txt.appendChild(nm);
+      txt.appendChild(el('div', { 'class': 'muted' }, gfOff(g.offset_min) + (g.zone ? ' · ' + g.zone : '') + ' — ' + g.count + ' of your photos here, nearest ' + gfGap(g.gap_seconds)));
+      row.appendChild(txt);
+      var use = el('button', { 'class': i === 0 ? 'primary' : '' }, 'Use this place');
+      use.onclick = function () { gfPost('/api/geofix/decide', { session: x.id, action: 'accept', suggestion: i }); };
+      row.appendChild(use); card.appendChild(row);
+    });
+    var foot = el('p', { style: 'margin:10px 0 0' });
+    var hand = el('button', {}, 'Search for a place…'), skip = el('button', {}, 'Skip (leave as it is)');
+    foot.appendChild(hand); foot.appendChild(document.createTextNode(' ')); foot.appendChild(skip); card.appendChild(foot);
+    skip.onclick = function () { gfPost('/api/geofix/decide', { session: x.id, action: 'skip' }); };
+    hand.onclick = function () { hand.disabled = true; card.appendChild(gfManual(x)); };
+    return card;
+  }
+  function gfManual(x) {
+    var box = el('div', { style: 'margin-top:10px' });
+    var q = el('input', { type: 'search', placeholder: 'town or city, e.g. Lisbon', id: 'gfQ-' + x.id });
+    var res = el('div', { 'class': 'gf-places hidden' }), pick = null;
+    var zone = el('select', { id: 'gfZ-' + x.id });
+    zone.appendChild(el('option', { value: '' }, 'Time zone: let Immich work it out from the place'));
+    for (var m = -720; m <= 840; m += 30) { zone.appendChild(el('option', { value: String(m) }, 'Time zone: ' + gfOff(m))); }
+    if (x.suggestions.length) { zone.value = String(x.suggestions[0].offset_min); }
+    var chosen = el('div', { 'class': 'muted', style: 'margin:6px 0' }, 'Type at least two letters; the names come from your Immich server.');
+    var go = el('button', { 'class': 'primary' }, 'Use this place'); go.disabled = true;
+    var timer = null;
+    q.oninput = function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        if (q.value.trim().length < 2) { res.classList.add('hidden'); return; }
+        api('GET', '/api/geofix/places?q=' + encodeURIComponent(q.value.trim()) + (gfUser() ? '&user=' + encodeURIComponent(gfUser()) : '')).then(function (r) {
+          res.textContent = ''; res.classList.remove('hidden');
+          if (!r.places.length) { res.appendChild(el('div', {}, 'No place with that name.')); }
+          r.places.forEach(function (p) {
+            var d = el('div', {}, p.name + (p.region ? ' — ' + p.region : ''));
+            d.onclick = function () { pick = p; chosen.textContent = 'Chosen: ' + p.name + (p.region ? ', ' + p.region : '') + ' (' + p.lat.toFixed(4) + ', ' + p.lon.toFixed(4) + ')'; res.classList.add('hidden'); go.disabled = false; };
+            res.appendChild(d);
+          });
+        }).catch(function (e) { if (e.message !== 'auth') { gfErr(e.message); } });
+      }, 300);
+    };
+    go.onclick = function () {
+      gfPost('/api/geofix/decide', { session: x.id, action: 'accept', custom: { lat: pick.lat, lon: pick.lon, offset_min: zone.value === '' ? null : Number(zone.value), label: pick.name + (pick.region ? ', ' + pick.region : '') } });
+    };
+    box.appendChild(q); box.appendChild(res); box.appendChild(chosen); box.appendChild(zone);
+    var p = el('p', { style: 'margin:8px 0 0' }); p.appendChild(go); box.appendChild(p);
+    return box;
+  }
+  function gfDecided(x) {
+    var d = x.decision, box = el('div', { 'class': 'gf-done' + (d.status === 'skipped' ? ' skip' : '') });
+    if (d.status === 'skipped') { box.appendChild(el('div', {}, 'Skipped: these files are imported exactly as they are.')); }
+    else {
+      box.appendChild(el('div', { 'class': 'name', style: 'font-weight:600' }, d.label + (d.offset_min === null ? '' : ' · ' + gfOff(d.offset_min))));
+      box.appendChild(el('div', { 'class': 'muted' }, (d.offset_min === null ? 'The place is sent with each file; Immich works out the time zone from it.' : 'The place and time zone are sent with each file when it is imported.') +
+        (x.example ? ' Example: ' + x.example.name + ' — ' + x.example.local + ' on the camera = ' + x.example.utc + ' UTC.' : '')));
+      var notes = Object.keys(d.notes || {}).map(function (k) { return d.notes[k] + ' ' + k; });
+      if (notes.length) { box.appendChild(el('div', { 'class': 'muted' }, 'So far: ' + notes.join(' · ') + '.')); }
+    }
+    var p = el('p', { style: 'margin:8px 0 0' });
+    var change = el('button', {}, d.applied ? 'Change (for files not imported yet)' : 'Change');
+    change.onclick = function () { gfPost('/api/geofix/decide', { session: x.id, action: 'clear' }); };
+    p.appendChild(change);
+    if (d.status === 'accepted') {
+      var show = el('button', { style: 'margin-left:6px' }, 'Show what is sent');
+      show.onclick = function () {
+        fetch('/api/geofix/sidecar?path=' + encodeURIComponent(x.files[0].path), { headers: { 'X-Bridge-Token': token } }).then(function (r) { return r.text(); }).then(function (txt) {
+          show.disabled = true; box.appendChild(el('div', { 'class': 'muted', style: 'margin-top:8px' }, 'Sent next to ' + x.files[0].name + ' (an XMP sidecar; the file itself is untouched):')); box.appendChild(el('div', { 'class': 'gf-xmp' }, txt));
+        });
+      };
+      p.appendChild(show);
+    }
+    box.appendChild(p);
+    return box;
+  }
+  $('gfPick').onclick = function () {
+    pkLimit = null;
+    pickCb = function (path) { gfFolder = path; try { localStorage.setItem('bridgeFixFolder', path); } catch (e) { /* private mode */ } if (gfState) { gfRender(); } };
+    $('picker').classList.remove('hidden'); pkLoad(gfFolder || null);
+  };
+  $('gfScan').onclick = function () {
+    gfErr(''); gfSig = '';
+    api('POST', '/api/geofix/scan', { folder: gfFolder, user: gfUser() }).then(refresh).catch(function (e) { if (e.message !== 'auth') { gfErr(e.message); } });
+  };
+  $('gfConfident').onclick = function () { gfPost('/api/geofix/accept-confident', {}); };
+  Array.prototype.forEach.call(document.querySelectorAll('#gfFilter button'), function (b) {
+    b.onclick = function () {
+      gfFilterBy = b.getAttribute('data-f');
+      Array.prototype.forEach.call(document.querySelectorAll('#gfFilter button'), function (o) { o.classList.toggle('on', o === b); });
+      if (gfState) { gfRender(); }
+    };
+  });
+
   // ---- people ------------------------------------------------------------------
   function maskId(path) { return path.replace(/([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{8}([0-9a-f]{4})/gi, '…$2'); }
   function pmode() { return !!(people && people.people_root); }
@@ -887,7 +1137,7 @@
     people.users.forEach(function (u) { sel.appendChild(el('option', { value: u.id }, u.name + (u.immich_user && u.immich_user.email ? ' — ' + u.immich_user.email : ''))); });
     sel.value = cur; if (sel.value !== cur) { viewUser = ''; sel.value = ''; }
   }
-  $('userSel').onchange = function () { viewUser = this.value; batchMax = 0; setUrlUser(viewUser); renderScopeNote(); if (cfg) { renderSettings(); } refresh(); };
+  $('userSel').onchange = function () { viewUser = this.value; batchMax = 0; setUrlUser(viewUser); renderScopeNote(); if (cfg) { renderSettings(); } if (gfState) { gfRender(); } refresh(); };
   function renderScopeNote() {
     var n = $('scopeNote'), multi = people && people.users.length > 1;
     if (!multi) { n.classList.add('hidden'); return; }
@@ -1108,6 +1358,11 @@
     if (!token) { return; }
     pollHealth();
     var job;
+    if (tab === 'locations') {
+      job = gfLoad();
+      job.catch(function () { /* shown in the tab */ }).then(function () { if (gfState && gfState.status.running) { pollT = setTimeout(refresh, 1200); } });
+      return;
+    }
     if (tab === 'status') {
       job = statusJson().then(renderStatus).then(function () {
         return api('GET', '/api/config' + uq()).then(function (c) { renderIdentity(c.readonly); });  // account + album links need the token

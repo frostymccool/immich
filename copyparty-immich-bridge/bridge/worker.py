@@ -36,6 +36,8 @@ class ImportWorker:
     from the queue and run the full pipeline per file.
     """
 
+    geofix = None  # set once at start-up (bridge.geofix.GeoFix): sidecars for files fixed on the Fix locations tab
+
     def __init__(
         self,
         cfg: Config,
@@ -294,16 +296,23 @@ class ImportWorker:
             existing = self._client.find_by_checksum(sha1, ref_id=path)
             if existing is not None:
                 outcome = UploadOutcome(status="duplicate", asset_id=None if existing == "present" else existing)
+                if ImportWorker.geofix is not None and ImportWorker.geofix.sidecar_for(path) is not None:
+                    ImportWorker.geofix.mark_applied(path, "already in Immich: not changed")
                 log.info("already in Immich (checksum): %s -> %s", name, existing)
             else:
                 if not self._owned(path):  # ownership changed while hashing (settings/users edited)
                     log.info("skipped before upload, ownership changed: %s", path)
                     return
                 self._phase(path, "uploading", 0, 0)
+                gf = ImportWorker.geofix
+                sidecar = gf.sidecar_for(path) if gf is not None else None
                 outcome = self._client.upload(
-                    path, sha1, progress=lambda sent, total: self._phase(path, "uploading", sent, total)
+                    path, sha1, progress=lambda sent, total: self._phase(path, "uploading", sent, total), sidecar=sidecar
                 )
-                log.info("%s: %s -> asset %s", outcome.status, name, outcome.asset_id)
+                log.info("%s: %s -> asset %s%s", outcome.status, name, outcome.asset_id,
+                         " (with the location chosen on the Fix locations tab)" if sidecar and outcome.status == "imported" else "")
+                if sidecar is not None and gf is not None:
+                    gf.mark_applied(path, "imported with this place" if outcome.status == "imported" else "already in Immich: not changed")
 
             if outcome.asset_id and outcome.asset_id != "present":
                 for album in self._albums_for(path):

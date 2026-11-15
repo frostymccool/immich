@@ -3,6 +3,25 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.3.0 - fix missing location and time zone before import
+
+- New **Fix locations** tab (`?t=locations`, also `?t=fix`). Scan a folder: files without GPS or without a time zone
+  (typical for GoPro and Insta360) are grouped by folder and time, and for each group the bridge suggests a place and
+  time zone from **your own Immich photos taken around the same time**, with those photos shown as evidence and a
+  confidence label. Accept one suggestion, accept all confident ones at once, search a place by name, or skip.
+- **Files are never changed and nothing is written next to them.** The choice is kept in the bridge's own data folder
+  and sent with the file as an XMP sidecar when the bridge imports it. It follows a file that is moved to another
+  folder (matched by name and size). "Show what is sent" displays the sidecar.
+- A camera clock without a zone is matched by local wall-clock time against your photos, so no time-zone database is
+  needed; the neighbour's own zone becomes the suggestion.
+- The container now includes `exiftool` (reads the metadata, the same tool Immich uses) and `ffmpeg` (previews), so
+  the image is larger and the first build after updating takes longer.
+- The API key needs `asset.read` (find nearby photos, search places) and `asset.view` (show them). A key with all
+  permissions has both; the page says which one is missing.
+- Limits: files already in Immich are not changed (the page says so per group); GPS that a camera stores only inside
+  its video data track (GoPro telemetry, Insta360 trailer) is not read, exactly as Immich does not read it.
+- Not yet checked against real exiftool output or real camera files: the tests use a stand-in for exiftool.
+
 ## 0.2.1 - watched folders follow the person
 
 - *Folders & settings → Watched folders* now follows the person chosen at the top (or `?user=`). In folder-per-person
