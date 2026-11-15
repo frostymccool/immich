@@ -348,6 +348,9 @@ def test_the_whole_way_scan_accept_then_the_import_carries_the_sidecar(rig, live
     code, png, headers = call(base, "GET", "/api/geofix/immich-thumb?id=" + st["sessions"][0]["suggestions"][0]["samples"][0], raw=True)
     assert code == 200 and png.startswith(b"\x89PNG") and headers["Content-Type"] == "image/png"
     assert call(base, "GET", "/api/geofix/immich-thumb?id=../../etc/passwd")[0] == 400
+    sample = st["sessions"][0]["suggestions"][0]["samples"][0]
+    assert call(base, "GET", f"/api/geofix/immich-thumb?id={sample}&big=1", raw=True)[0] == 200  # enlarged view
+    assert any("size=preview" in p for p in rig.stub.paths if "/thumbnail" in p)
     rig.stub.places = [{"name": "Lisbon", "latitude": 38.72, "longitude": -9.14, "admin1name": "Lisbon"}]
     assert call(base, "GET", "/api/geofix/places?q=lis")[1]["places"] == [{"name": "Lisbon", "region": "Lisbon", "lat": 38.72, "lon": -9.14}]
 

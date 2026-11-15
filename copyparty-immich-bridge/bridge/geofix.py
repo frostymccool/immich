@@ -632,7 +632,8 @@ class GeoFix:
 
     # -- thumbnails -------------------------------------------------------------------------------------
 
-    def thumbnail(self, path: str) -> bytes:
+    def thumbnail(self, path: str, big: bool = False) -> bytes:
+        """A JPEG frame of a file of the current scan: 320 px wide for the strip, 1280 px (big) for the enlarged view."""
         with self._lock:
             known = any(f["path"] == path for f in self._files)
         if not known:  # only files of the current scan: this is not a general file server
@@ -642,7 +643,7 @@ class GeoFix:
         except OSError as ex:
             raise GeoFixError("file is gone", 404) from ex
         os.makedirs(self._thumbs, mode=0o700, exist_ok=True)
-        cache = os.path.join(self._thumbs, hashlib.sha1(f"{path}|{st.st_size}|{st.st_mtime}".encode()).hexdigest() + ".jpg")
+        cache = os.path.join(self._thumbs, hashlib.sha1(f"{path}|{st.st_size}|{st.st_mtime}".encode()).hexdigest() + ("-big" if big else "") + ".jpg")
         if os.path.isfile(cache) and os.path.getsize(cache) > 0:
             with open(cache, "rb") as fh:
                 return fh.read()
@@ -656,7 +657,7 @@ class GeoFix:
             raise GeoFixError("no preview (ffmpeg is not installed in the bridge container)", 404)
         tmp = cache + f".{threading.get_ident()}.tmp.jpg"
         cmd = [self._ffmpeg, "-nostdin", "-loglevel", "error", "-y"] + (["-ss", "1"] if video else []) + \
-              ["-i", source, "-frames:v", "1", "-vf", "scale=320:-2", "-q:v", "6", tmp]
+              ["-i", source, "-frames:v", "1", "-vf", f"scale='min({1280 if big else 320},iw)':-2", "-q:v", "4" if big else "6", tmp]
         with self._thumb_gate:
             try:
                 proc = subprocess.run(cmd, capture_output=True, timeout=45)

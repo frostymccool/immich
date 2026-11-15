@@ -3,6 +3,13 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.3.3 - click any preview to enlarge it
+
+- On the Fix locations tab, the small "your photos here" pictures next to each suggestion can now be clicked to
+  enlarge them, like the file previews. The enlarged view loads a large picture (a 1280 px frame of the video, or
+  Immich's own large preview) instead of stretching the small one. Esc or a click closes it.
+- A photo Immich has no preview for shows "?" with an explanation, not an empty box.
+
 ## 0.3.2 - rescan reads videos again
 
 - 0.3.1 fixed reading video times, but a rescan still showed "no capture time": the scan keeps what it read per file

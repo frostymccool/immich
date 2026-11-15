@@ -72,7 +72,7 @@
   .bar select, .bar input { width: auto; max-width: 200px; }
   .gf-strip { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 8px; }
   .gf-th { flex: 0 0 auto; width: 112px; height: 76px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); object-fit: cover; cursor: zoom-in; display: block; }
-  .gf-th.sm { width: 54px; height: 54px; cursor: default; }
+  .gf-th.sm { width: 54px; height: 54px; }
   .gf-ph { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 11px; text-align: center; cursor: default; }
   .gf-more { flex: 0 0 auto; align-self: center; color: var(--muted); padding: 0 8px; white-space: nowrap; }
   .gf-sug { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-top: 8px; }
@@ -318,7 +318,7 @@
   </div>
 </main>
 
-<div class="modal hidden gf-zoom" id="gfZoom"><div class="box" style="max-width:720px;padding:12px"><img id="gfZoomImg" alt=""><p class="muted" id="gfZoomCap" style="margin:8px 0 0;text-align:center"></p></div></div>
+<div class="modal hidden gf-zoom" id="gfZoom"><div class="box" style="max-width:min(1100px,96vw);padding:12px"><img id="gfZoomImg" alt=""><p class="muted" id="gfZoomCap" style="margin:8px 0 0;text-align:center"></p></div></div>
 <div class="modal hidden" id="picker">
   <div class="box">
     <div class="head"><button id="pkUp">⬆ Up</button><span class="crumb" id="pkPath"></span></div>
@@ -832,13 +832,23 @@
     }
     gfBlobs[url].then(function (u) {
       img.src = u;
-      if (cap !== undefined) { img.onclick = function () { $('gfZoomImg').src = u; $('gfZoomCap').textContent = cap; $('gfZoom').classList.remove('hidden'); }; }
+      if (cap !== undefined) { img.onclick = function () { gfZoom(u, url + '&big=1', cap); }; }
     }).catch(function () {
-      var ph = el('div', { 'class': 'gf-th gf-ph ' + (cls || '') }, cls ? '' : 'no preview'); if (img.parentNode) { img.parentNode.replaceChild(ph, img); }
+      var ph = el('div', { 'class': 'gf-th gf-ph ' + (cls || ''), title: cls ? 'Immich has no preview for this photo' : 'no preview for this file' }, cls ? '?' : 'no preview'); if (img.parentNode) { img.parentNode.replaceChild(ph, img); }
     });
     return img;
   }
-  $('gfZoom').onclick = function () { $('gfZoom').classList.add('hidden'); };
+  // Enlarged view: the small picture at once, swapped for the large one (1280 px frame / Immich preview) when it arrives
+  var gfZoomWant = '';
+  function gfZoom(small, bigUrl, cap) {
+    gfZoomWant = bigUrl; $('gfZoomImg').src = small; $('gfZoomCap').textContent = cap; $('gfZoom').classList.remove('hidden');
+    if (!gfBlobs[bigUrl]) {
+      gfBlobs[bigUrl] = fetch(bigUrl, { headers: { 'X-Bridge-Token': token } }).then(function (r) { if (!r.ok) { throw new Error('none'); } return r.blob(); }).then(function (b) { return URL.createObjectURL(b); });
+    }
+    gfBlobs[bigUrl].then(function (u) { if (gfZoomWant === bigUrl) { $('gfZoomImg').src = u; } }).catch(function () { delete gfBlobs[bigUrl]; });
+  }
+  $('gfZoom').onclick = function () { gfZoomWant = ''; $('gfZoom').classList.add('hidden'); };
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !$('gfZoom').classList.contains('hidden')) { $('gfZoom').onclick(); } });
   function gfWhen(a, b) {
     if (!a) { return 'no capture time in these files'; }
     var d1 = a.slice(0, 10), d2 = (b || a).slice(0, 10), t1 = a.slice(11, 16), t2 = (b || a).slice(11, 16);
@@ -934,7 +944,7 @@
     x.suggestions.forEach(function (g, i) {
       var row = el('div', { 'class': 'gf-sug' });
       var ev = el('div', { 'class': 'ev' });
-      g.samples.forEach(function (id) { ev.appendChild(gfImg('/api/geofix/immich-thumb?id=' + encodeURIComponent(id), 'sm')); });
+      g.samples.forEach(function (id) { ev.appendChild(gfImg('/api/geofix/immich-thumb?id=' + encodeURIComponent(id), 'sm', 'One of your photos in Immich near ' + g.label)); });
       row.appendChild(ev);
       var txt = el('div', { 'class': 'txt' });
       var nm = el('div', { 'class': 'name' }, g.label + ' '); nm.appendChild(badge(g.confidence === 'high' ? 'ok' : (g.confidence === 'medium' ? 'warn' : ''), g.confidence === 'high' ? 'confident' : (g.confidence === 'medium' ? 'likely' : 'a guess')));

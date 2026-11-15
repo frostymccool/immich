@@ -22,6 +22,7 @@ class StubImmich:
         # Fix locations: the account's existing photos (search), Immich's place index, one tiny PNG as every thumbnail
         self.assets: list[dict] = []
         self.searches: list[dict] = []
+        self.paths: list[str] = []  # every GET path, query included
         self.forbid_search = False
         self.places: list[dict] = []
         self.thumbnail = bytes.fromhex(
@@ -55,6 +56,7 @@ class StubImmich:
                 self.wfile.write(body)
 
             def do_GET(self):
+                stub.paths.append(self.path)
                 if self.path == stub.media_types_route:
                     self._json(200, {"image": [".jpg", ".png", ".heic"], "video": [".mp4"], "sidecar": [".xmp"]})
                 elif self.path == "/api/users/me" and stub.users_me_status != 200:

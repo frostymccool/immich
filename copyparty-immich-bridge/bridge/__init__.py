@@ -5,4 +5,4 @@ uploads (event-hook driven, with a periodic reconciliation sweep) and imports
 Immich-compatible media into Immich via its HTTP API.
 """
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"

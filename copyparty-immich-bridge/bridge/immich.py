@@ -249,9 +249,9 @@ class ImmichClient:
         out = resp.json()
         return out if isinstance(out, list) else []
 
-    def thumbnail(self, asset_id: str) -> tuple[bytes, str]:
-        """GET /assets/{id}/thumbnail (permission asset.view)."""
-        resp = self._session.get(self._base + f"/api/assets/{asset_id}/thumbnail", params={"size": "thumbnail"}, timeout=self._timeout)
+    def thumbnail(self, asset_id: str, size: str = "thumbnail") -> tuple[bytes, str]:
+        """GET /assets/{id}/thumbnail (permission asset.view); size 'thumbnail' (small) or 'preview' (large)."""
+        resp = self._session.get(self._base + f"/api/assets/{asset_id}/thumbnail", params={"size": size}, timeout=self._timeout)
         self._explain(resp, "show photos (asset.view)")
         return resp.content, resp.headers.get("Content-Type", "image/webp")
 

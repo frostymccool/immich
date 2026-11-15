@@ -284,7 +284,7 @@ def make_handler(
                     out["watched_by"] = owner
                     self._send_json(200, out)
                 elif route == "/api/geofix/thumb":
-                    self._send_bytes(200, geofix.thumbnail(one("path")), "image/jpeg", {"Cache-Control": "private, max-age=3600"})
+                    self._send_bytes(200, geofix.thumbnail(one("path"), big=one("big") == "1"), "image/jpeg", {"Cache-Control": "private, max-age=3600"})
                 elif route == "/api/geofix/sidecar":
                     self._send_bytes(200, geofix.preview_sidecar(one("path")), "text/plain; charset=utf-8")
                 elif route in ("/api/geofix/immich-thumb", "/api/geofix/places"):
@@ -302,7 +302,7 @@ def make_handler(
                         if not re.fullmatch(r"[0-9a-fA-F-]{36}", asset):
                             self._send_json(400, {"error": "bad id"})
                             return
-                        data, ctype = client.thumbnail(asset)
+                        data, ctype = client.thumbnail(asset, "preview" if one("big") == "1" else "thumbnail")
                         self._send_bytes(200, data, ctype if ctype.startswith("image/") else "image/webp", {"Cache-Control": "private, max-age=3600"})
                 else:
                     self._send_json(404, {"error": "not found"})
