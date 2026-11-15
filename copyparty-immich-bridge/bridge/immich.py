@@ -203,6 +203,10 @@ class ImmichClient:
             "filename": filename,
             "isFavorite": "false",
         }
+        if sidecar is not None:
+            # Immich checks every part's type against `filename` when it is set, so "x.MP4" would refuse the .xmp;
+            # without it each part is named by its own filename, which carries the same name for the file
+            del data["filename"]
         body = _MultipartBody(data, filename, path, progress, sidecar)
         try:
             resp = self._session.post(

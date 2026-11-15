@@ -111,6 +111,11 @@ class StubImmich:
                     self._json(200, {"results": results})
                 elif self.path == "/api/assets":
                     checksum = self.headers.get("x-immich-checksum", "")
+                    # like Immich: a `filename` field names every part, so a sidecar under "x.MP4" is refused
+                    named = re.search(rb'name="filename"\r\n\r\n([^\r]*)', body)
+                    if b'name="sidecarData"' in body and named and not named.group(1).lower().endswith(b".xmp"):
+                        self._json(400, {"message": f"Unsupported file type {named.group(1).decode()}"})
+                        return
                     existing = stub.known_checksums.get(checksum)
                     if existing:
                         self._json(200, {"id": existing, "status": "duplicate"})

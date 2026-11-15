@@ -3,6 +3,12 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.4.3 - imports with a fixed place work on a real Immich
+
+- An import carrying a place and time (from Fix locations) was refused by Immich with "Unsupported file type": Immich
+  checks every uploaded part against the form's `filename`, so the `.xmp` sidecar was judged as the video. When a
+  sidecar is sent, `filename` is left out and each part is named by its own file name (same name in Immich).
+
 ## 0.4.2 - a sharper exact spot
 
 - The exact spot is now the densest knot of your photos (the photo with most others within 40 m), not the middle of
