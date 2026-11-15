@@ -3,6 +3,12 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.3.2 - rescan reads videos again
+
+- 0.3.1 fixed reading video times, but a rescan still showed "no capture time": the scan keeps what it read per file
+  and reused the empty answers saved by 0.3.0. That saved list is now cleared once after updating, so the next scan
+  reads every file again. Your accept/skip choices are kept.
+
 ## 0.3.1 - Fix locations checked against real camera files
 
 - **Videos were scanned as having no time at all.** GoPro and Insta360 keep the movie header at the end of the file

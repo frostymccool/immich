@@ -56,6 +56,7 @@ VIDEO_EXT = {"mp4", "mov", "insv", "lrv", "360", "m4v", "avi", "mts", "mkv"}
 # not always the zone the camera was really in), so for a zone-less match the name is the trustworthy local clock.
 INSTA360_NAME = re.compile(r"^(?:VID|LRV|IMG)_(\d{8}_\d{6})_\d{2}_\d{3}\.", re.I)
 QUICKTIME_KEYS = ("CreateDate", "MediaCreateDate")
+READER_VERSION = 2  # bump whenever a change to reading metadata must invalidate the cached files table
 
 
 class GeoFixError(Exception):
@@ -258,6 +259,11 @@ class GeoFix:
                 PRIMARY KEY (name, size));
             """
         )
+        # The files table is only a cache of what exiftool said. When the way files are READ changes, drop it so
+        # a rescan reads every file again (0.3.0 cached "no time" for every GoPro/Insta360 video). Decisions stay.
+        if self._db.execute("PRAGMA user_version").fetchone()[0] < READER_VERSION:
+            self._db.execute("DELETE FROM files")
+            self._db.execute(f"PRAGMA user_version = {READER_VERSION}")
         self._db.commit()
         self.status: dict = {"running": False, "phase": "", "done": 0, "total": 0, "error": "", "folder": "", "user": "", "finished_at": 0}
         self._files: list[dict] = []

@@ -7,6 +7,7 @@ the real tool prints for a real GoPro file.
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -170,6 +171,21 @@ def test_real_camera_tag_shapes_insta360_uses_the_clock_in_its_name(rig):
     (only,) = out["sessions"]  # both on the same afternoon: ONE group, not split by the 9 h UTC gap
     assert (only["start"], only["end"]) == ("2026-05-01T14:03:22", "2026-05-01T14:20:00")
     assert only["needs"] == {"place and time zone": 2} and only["suggestions"][0]["label"] == "Kyoto, Japan"
+
+
+def test_metadata_cached_by_an_older_reader_is_read_again(rig):
+    clip = rig.add("Kyoto walk/GX010001.MP4", {"CreateDate": "2026:05:01 14:03:22"})
+    rig.gf.close()
+    db = sqlite3.connect(str(rig.root.parent / "geofix.db"))
+    st = os.stat(clip)  # what 0.3.0 left behind: the right size/mtime but no time, and no reader version
+    db.execute("INSERT INTO files VALUES (?,?,?,?,?,?,?,?,?)", (clip, st.st_size, st.st_mtime, None, None, None, None, "", ""))
+    db.execute("INSERT INTO decisions (name, size, status) VALUES ('kept.MP4', 1, 'skipped')")
+    db.execute("PRAGMA user_version = 0")
+    db.commit()
+    db.close()
+    rig.gf = GeoFix(str(rig.root.parent / "geofix.db"), lambda: [str(rig.root)], lambda: {"jpg", "mp4", "insv"}, exiftool=FAKE)
+    assert rig.gf._read_metadata([clip])[0]["taken"] == datetime(2026, 5, 1, 14, 3, 22)
+    assert rig.gf._db.execute("SELECT status FROM decisions WHERE name='kept.MP4'").fetchone() == ("skipped",)
 
 
 def test_the_search_widens_only_when_nothing_is_near(rig):
