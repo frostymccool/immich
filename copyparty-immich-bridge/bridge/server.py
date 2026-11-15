@@ -285,6 +285,8 @@ def make_handler(
                     self._send_json(200, out)
                 elif route == "/api/geofix/thumb":
                     self._send_bytes(200, geofix.thumbnail(one("path"), big=one("big") == "1"), "image/jpeg", {"Cache-Control": "private, max-age=3600"})
+                elif route == "/api/geofix/saved-places":
+                    self._send_json(200, {"places": geofix.saved_places()})
                 elif route == "/api/geofix/sidecar":
                     self._send_bytes(200, geofix.preview_sidecar(one("path")), "text/plain; charset=utf-8")
                 elif route in ("/api/geofix/immich-thumb", "/api/geofix/places"):
@@ -302,7 +304,7 @@ def make_handler(
                         if not re.fullmatch(r"[0-9a-fA-F-]{36}", asset):
                             self._send_json(400, {"error": "bad id"})
                             return
-                        data, ctype = client.thumbnail(asset, "preview" if one("big") == "1" else "thumbnail")
+                        data, ctype = geofix.immich_preview(client, asset, one("big") == "1")
                         self._send_bytes(200, data, ctype if ctype.startswith("image/") else "image/webp", {"Cache-Control": "private, max-age=3600"})
                 else:
                     self._send_json(404, {"error": "not found"})
@@ -323,10 +325,16 @@ def make_handler(
                     if client is None:
                         self._send_json(404, {"error": "no such user"})
                         return
-                    geofix.start_scan(body.get("folder"), uid, client.search_metadata)
+                    geofix.start_scan(body.get("folder"), uid, client.search_metadata, client.search_places)
                 elif self.path == "/api/geofix/decide":
                     geofix.decide(str(body.get("session") or ""), str(body.get("action") or ""), body.get("suggestion"),
-                                  body.get("custom") if isinstance(body.get("custom"), dict) else None)
+                                  body.get("custom") if isinstance(body.get("custom"), dict) else None, body.get("level"))
+                elif self.path == "/api/geofix/saved-places":
+                    if body.get("delete") is not None:
+                        geofix.delete_place(body.get("delete"))
+                    else:
+                        self._send_json(200, geofix.save_place(body.get("name"), body.get("lat"), body.get("lon"), body.get("radius_m")))
+                        return
                 elif self.path == "/api/geofix/accept-confident":
                     self._send_json(200, {"accepted": geofix.accept_confident()})
                     return

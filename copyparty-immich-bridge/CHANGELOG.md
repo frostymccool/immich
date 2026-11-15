@@ -3,6 +3,23 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.4.0 - exact spot or town, time zone names, before and after
+
+- **How exact:** each suggestion offers the **exact spot** where your nearby photos were taken (within about 150 m,
+  shown with its accuracy) or just the **town**. Confident suggestions default to the exact spot, less certain ones
+  to the town.
+- **Street names:** the exact spot is named by a place you saved yourself ("Name this place…", e.g. Home; used for
+  any spot within 150 m, in later scans too), otherwise by OpenStreetMap's public reverse geocoder, which is sent
+  only that spot's coordinates (cached, at most one request a second). Set `GEOFIX_REVERSE_GEOCODE=off` in the
+  bridge's environment to never ask OpenStreetMap.
+- **Time zone names:** suggestions show the zone, e.g. `America/Los_Angeles (PDT, UTC-07:00)`, looked up offline
+  from the place. Each file gets the offset for its own date, so a group that spans a daylight-saving change is right.
+- **Before and after:** each suggestion shows, for one file, the time Immich shows today (a camera clock without a
+  zone is read as UTC, so it sits hours off on your timeline) and the time it will show after the fix.
+- The photos shown next to a suggestion are labelled as your Immich photos, with when they were taken.
+- When Immich has no preview of one of those photos (seen on real videos), the bridge makes one from the original.
+- The container adds `tzdata` and the `tzfpy` package (time zone lookup, about 3 MB).
+
 ## 0.3.3 - click any preview to enlarge it
 
 - On the Fix locations tab, the small "your photos here" pictures next to each suggestion can now be clicked to

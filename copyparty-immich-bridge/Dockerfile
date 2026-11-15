@@ -1,7 +1,7 @@
 FROM python:3.12-alpine
 
 # exiftool reads capture time/GPS for the Fix locations tab (the same tool Immich uses); ffmpeg makes its previews
-RUN apk add --no-cache exiftool ffmpeg && pip install --no-cache-dir requests==2.32.*
+RUN apk add --no-cache exiftool ffmpeg tzdata && pip install --no-cache-dir requests==2.32.* tzfpy==2.1.*
 
 WORKDIR /app
 COPY bridge/ /app/bridge/

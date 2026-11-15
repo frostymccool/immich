@@ -23,6 +23,8 @@ class StubImmich:
         self.assets: list[dict] = []
         self.searches: list[dict] = []
         self.paths: list[str] = []  # every GET path, query included
+        self.originals: dict[str, tuple[bytes, str]] = {}  # asset id -> (bytes, mime) for /original
+        self.no_preview: set[str] = set()  # asset ids whose /thumbnail answers 404 "Asset media not found" (real Immich)
         self.forbid_search = False
         self.places: list[dict] = []
         self.thumbnail = bytes.fromhex(
@@ -70,6 +72,15 @@ class StubImmich:
                 elif self.path.startswith("/api/search/places"):
                     name = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("name", [""])[0].lower()
                     self._json(200, [p for p in stub.places if name in p["name"].lower()])
+                elif re.fullmatch(r"/api/assets/[^/]+/thumbnail(\?.*)?", self.path) and self.path.split("/")[3] in stub.no_preview:
+                    self._json(404, {"message": "Asset media not found"})
+                elif re.fullmatch(r"/api/assets/[^/]+/original", self.path) and self.path.split("/")[3] in stub.originals:
+                    data, mime = stub.originals[self.path.split("/")[3]]
+                    self.send_response(200)
+                    self.send_header("Content-Type", mime)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
                 elif re.fullmatch(r"/api/assets/[^/]+/thumbnail(\?.*)?", self.path):
                     data = stub.thumbnail
                     self.send_response(200)

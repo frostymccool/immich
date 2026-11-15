@@ -255,6 +255,20 @@ class ImmichClient:
         self._explain(resp, "show photos (asset.view)")
         return resp.content, resp.headers.get("Content-Type", "image/webp")
 
+    def download_original(self, asset_id: str, dest: str, max_bytes: int) -> str:
+        """GET /assets/{id}/original (permission asset.download) streamed into `dest`; returns the asset's mime type.
+        Refuses (ImmichError) a file larger than max_bytes rather than filling the disk."""
+        with self._session.get(self._base + f"/api/assets/{asset_id}/original", stream=True, timeout=self._timeout) as resp:
+            self._explain(resp, "download originals (asset.download)")
+            size = 0
+            with open(dest, "wb") as fh:
+                for chunk in resp.iter_content(1 << 20):
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise ImmichError(f"the original is larger than {max_bytes >> 20} MB")
+                    fh.write(chunk)
+            return resp.headers.get("Content-Type", "")
+
     # -- albums ---------------------------------------------------------------
 
     def album_permission_status(self) -> dict:

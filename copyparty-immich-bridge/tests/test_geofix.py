@@ -103,6 +103,7 @@ class Rig:
         self.tags: dict = {}
         monkeypatch.setenv("FAKE_EXIFTOOL_MANIFEST", str(self.manifest))
         monkeypatch.setenv("FAKE_EXIFTOOL_LOG", str(self.calls))
+        monkeypatch.setattr("bridge.geofix.REVERSE_GEOCODE", False)  # tests never ask OpenStreetMap
         self.client = ImmichClient(stub.url, "key", "dev", timeout=3)
         self.gf = GeoFix(str(tmp_path / "geofix.db"), lambda: [str(self.root)], lambda: {"jpg", "mp4", "insv"}, exiftool=FAKE)
 
@@ -173,11 +174,35 @@ def test_real_camera_tag_shapes_insta360_uses_the_clock_in_its_name(rig):
     assert only["needs"] == {"place and time zone": 2} and only["suggestions"][0]["label"] == "Kyoto, Japan"
 
 
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs real ffmpeg")
+def test_a_photo_immich_has_no_preview_for_is_previewed_from_its_original(rig, tmp_path):
+    """Real Immich answers 404 'Asset media not found' for some videos' previews while the original is there."""
+    clip = tmp_path / "orig.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=s=1920x1080:d=2", str(clip)], check=True)
+    aid = "00000000-0000-4000-8000-000000000042"
+    rig.stub.no_preview.add(aid)
+    rig.stub.originals[aid] = (clip.read_bytes(), "video/mp4")
+    small, ctype = rig.gf.immich_preview(rig.client, aid, big=False)
+    big, _ = rig.gf.immich_preview(rig.client, aid, big=True)
+    assert ctype == "image/jpeg" and small[:2] == big[:2] == b"\xff\xd8" and len(big) > len(small)
+    assert sum("/original" in p for p in rig.stub.paths) == 1  # downloaded once for both sizes, then cached
+    assert not [n for n in os.listdir(rig.gf._thumbs) if n.endswith(".original")]  # the download is not kept
+    gone = "00000000-0000-4000-8000-000000000043"
+    rig.stub.no_preview.add(gone)  # no preview AND no original: a clear error, not a crash
+    with pytest.raises(GeoFixError):
+        rig.gf.immich_preview(rig.client, gone, big=False)
+
+
 def test_metadata_cached_by_an_older_reader_is_read_again(rig):
     clip = rig.add("Kyoto walk/GX010001.MP4", {"CreateDate": "2026:05:01 14:03:22"})
     rig.gf.close()
     db = sqlite3.connect(str(rig.root.parent / "geofix.db"))
-    st = os.stat(clip)  # what 0.3.0 left behind: the right size/mtime but no time, and no reader version
+    st = os.stat(clip)  # what 0.3.0 left behind: its table shape, the right size/mtime but no time, no reader version
+    db.executescript("""DROP TABLE files; CREATE TABLE files (path TEXT PRIMARY KEY, size INTEGER, mtime REAL, taken TEXT,
+        offset_min INTEGER, lat REAL, lon REAL, make TEXT, model TEXT);
+        DROP TABLE decisions; CREATE TABLE decisions (name TEXT, size INTEGER, path TEXT, status TEXT, lat REAL, lon REAL,
+        offset_min INTEGER, taken TEXT, label TEXT, source TEXT, decided_at REAL, applied_at REAL, applied_note TEXT,
+        PRIMARY KEY (name, size));""")
     db.execute("INSERT INTO files VALUES (?,?,?,?,?,?,?,?,?)", (clip, st.st_size, st.st_mtime, None, None, None, None, "", ""))
     db.execute("INSERT INTO decisions (name, size, status) VALUES ('kept.MP4', 1, 'skipped')")
     db.execute("PRAGMA user_version = 0")
@@ -213,10 +238,83 @@ def test_accepting_makes_a_sidecar_and_nothing_is_written_next_to_the_files(rig)
     assert "GPSLatitude" in own_xml and "DateTimeOriginal" not in own_xml
     assert sorted(os.listdir(os.path.dirname(a))) == before
     s = rig.gf.describe()["sessions"][0]
-    assert s["decision"]["status"] == "accepted" and s["decision"]["label"] == "Kyoto, Japan" and s["states"] == {"accepted": 3}
-    assert s["example"] == {"name": "GX010001.MP4", "local": "2026-05-01 14:03", "offset": "+09:00", "utc": "2026-05-01 05:03"}
+    # confident: the exact spot of the photos is the default (no saved place, OpenStreetMap off in tests)
+    assert s["decision"]["status"] == "accepted" and s["decision"]["label"] == "Exact spot of your photos, Kyoto, Japan"
+    assert s["states"] == {"accepted": 3} and s["decision"]["zone"] == "Asia/Tokyo"
+    ex = s["example"]
+    assert (ex["name"], ex["local"], ex["offset"], ex["utc"]) == ("GX010001.MP4", "2026-05-01 14:03", "+09:00", "2026-05-01 05:03")
+    # before: Immich reads the zone-less camera clock as UTC; after: the same wall clock in Tokyo = 9 h earlier
+    assert ex["before"] == {"local": "2026-05-01 14:03", "zone": "UTC"} and ex["shift_minutes"] == -540
+    assert ex["after"] == {"local": "2026-05-01 14:03", "offset": "+09:00", "abbr": "JST", "zone": "Asia/Tokyo"}
     rig.gf.decide(sid, "clear")
     assert rig.gf.sidecar_for(a) is None and rig.gf.describe()["sessions"][0]["decision"] is None
+
+
+def test_a_suggestion_offers_the_exact_spot_and_the_town_each_with_its_zone_name(rig, monkeypatch):
+    gopro_day(rig)
+    town = [{"name": "Kyoto", "latitude": 35.02, "longitude": 135.75, "admin1name": "Kyoto"},
+            {"name": "Kyoto", "latitude": 10.0, "longitude": 10.0}]  # a namesake far away is never used
+    rig.gf.start_scan(str(rig.root), "main", rig.client.search_metadata, lambda name: town)
+    end = time.time() + 10
+    while rig.gf.status["running"] and time.time() < end:
+        time.sleep(0.02)
+    s = rig.gf.describe()["sessions"][0]
+    top = s["suggestions"][0]
+    spot, area = top["levels"]
+    assert top["default_level"] == 0 and spot["kind"] == "spot" and area["kind"] == "town"
+    assert (spot["lat"], spot["lon"]) == KYOTO and spot["photos"] == 5 and spot["radius_m"] == 25
+    assert spot["label"] == "Exact spot of your photos" and not spot["saved"]
+    assert (area["lat"], area["lon"], area["label"]) == (35.02, 135.75, "Kyoto, Japan")
+    assert spot["zone"] == area["zone"] == "Asia/Tokyo" and spot["abbr"] == "JST" and spot["offset_min"] == 540
+    assert spot["example"]["after"]["zone"] == "Asia/Tokyo" and s["before"] == {"local": "2026-05-01 14:03", "zone": "UTC"}
+    assert [e["place"] for e in top["evidence"]] == ["Kyoto"] * 3  # the Immich photos shown as evidence, with their time
+    # a saved place names the spot (and a far one does not)
+    rig.gf.save_place("Hotel", KYOTO[0] + 0.0005, KYOTO[1], 150)
+    rig.gf.save_place("Elsewhere", 0.0, 0.0)
+    assert rig.gf.describe()["sessions"][0]["suggestions"][0]["levels"][0]["label"] == "Hotel"
+    rig.gf.decide(s["id"], "accept", 0, level=1)  # the less exact choice
+    d = rig.gf.describe()["sessions"][0]["decision"]
+    assert d["label"] == "Kyoto, Japan" and (d["lat"], d["lon"]) == (35.02, 135.75)
+    with pytest.raises(GeoFixError):
+        rig.gf.decide(s["id"], "accept", 0, level=5)
+    with pytest.raises(GeoFixError):
+        rig.gf.save_place("  ", 1, 1)
+    rig.gf.delete_place(rig.gf.saved_places()[0]["id"])
+    assert [p["name"] for p in rig.gf.saved_places()] == ["Hotel"]
+
+
+def test_each_file_gets_its_own_daylight_saving_offset():
+    """A group that spans the start of daylight saving: each file gets the zone's offset at its own time."""
+    from bridge.geofix import zone_at, zone_offset
+    zone = zone_at(37.66, -121.87)
+    assert zone == "America/Los_Angeles"
+    assert zone_offset(zone, datetime(2025, 3, 9, 1, 30)) == (-480, "PST")
+    assert zone_offset(zone, datetime(2025, 3, 9, 4, 0)) == (-420, "PDT")
+    assert zone_at(0.0, -160.0) in ("Etc/GMT+11", "")  # open sea: an Etc zone or nothing, never a crash
+
+
+def test_street_name_comes_from_openstreetmap_once_and_is_cached(rig, monkeypatch):
+    import bridge.geofix as gfm
+    monkeypatch.setattr(gfm, "REVERSE_GEOCODE", True)
+    asked = []
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"address": {"house_number": "12", "road": "Example Road", "city": "Sometown"}, "display_name": "12, Example Road, Sometown"}
+
+    def fake_get(url, params, timeout, headers):
+        asked.append((url, params["lat"], params["lon"], headers["User-Agent"]))
+        return Resp()
+
+    monkeypatch.setattr(gfm.requests, "get", fake_get)
+    monkeypatch.setattr(gfm.time, "sleep", lambda s: None)
+    assert rig.gf._street_name(35.0116, 135.7681) == "12 Example Road"
+    assert rig.gf._street_name(35.01161, 135.76811) == "12 Example Road"  # same ~10 m cell: from the cache
+    assert len(asked) == 1 and asked[0][0] == gfm.NOMINATIM_URL and asked[0][3].startswith("copyparty-immich-bridge/")
+    monkeypatch.setattr(gfm, "REVERSE_GEOCODE", False)
+    assert rig.gf._street_name(1.0, 1.0) == "" and len(asked) == 1  # switched off: never asked
 
 
 def test_the_choice_follows_a_file_that_is_moved_to_another_folder(rig):

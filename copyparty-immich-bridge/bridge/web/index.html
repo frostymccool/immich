@@ -77,6 +77,12 @@
   .gf-more { flex: 0 0 auto; align-self: center; color: var(--muted); padding: 0 8px; white-space: nowrap; }
   .gf-sug { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-top: 8px; }
   .gf-sug .txt { flex: 1 1 220px; min-width: 0; } .gf-sug .name { font-weight: 600; } .gf-sug .ev { display: flex; gap: 4px; }
+  .gf-sug .evbox { flex: 0 0 auto; } .gf-sug .evcap { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+  .gf-lv { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; cursor: pointer; } .gf-lv input { margin-top: 3px; }
+  .gf-lv .d { font-size: 12px; color: var(--muted); } .gf-name { display: flex; gap: 6px; margin: 4px 0 0 24px; flex-wrap: wrap; }
+  .gf-ba { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 13px; margin-top: 6px; padding: 6px 8px; border-radius: 8px; background: var(--bg); }
+  .gf-ba .k { color: var(--muted); } .gf-ba .warn { color: var(--warn); }
+  button.link { background: none; border: none; color: var(--accent); padding: 2px 0; cursor: pointer; }
   .gf-done { border: 1px solid var(--ok); border-radius: 10px; padding: 10px; margin-top: 8px; }
   .gf-done.skip { border-color: var(--line); }
   .gf-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; } .gf-head h3 { margin: 0; font-size: 15px; }
@@ -834,7 +840,7 @@
       img.src = u;
       if (cap !== undefined) { img.onclick = function () { gfZoom(u, url + '&big=1', cap); }; }
     }).catch(function () {
-      var ph = el('div', { 'class': 'gf-th gf-ph ' + (cls || ''), title: cls ? 'Immich has no preview for this photo' : 'no preview for this file' }, cls ? '?' : 'no preview'); if (img.parentNode) { img.parentNode.replaceChild(ph, img); }
+      var ph = el('div', { 'class': 'gf-th gf-ph ' + (cls || ''), title: 'no preview could be made for this file' }, cls ? '?' : 'no preview'); if (img.parentNode) { img.parentNode.replaceChild(ph, img); }
     });
     return img;
   }
@@ -859,6 +865,29 @@
     if (sec < 5400) { return Math.round(sec / 60) + ' min apart'; }
     if (sec < 172800) { return Math.round(sec / 3600) + ' h apart'; }
     return Math.round(sec / 86400) + ' days apart';
+  }
+  function gfHours(min) { var h = Math.abs(min) / 60; return (h === Math.round(h) ? String(h) : h.toFixed(1)) + ' h'; }
+  function gfZoneText(z, abbr, off) {  // 'America/Los_Angeles (PDT, UTC-07:00)'
+    if (off === null || off === undefined) { return z || 'worked out by Immich from the place'; }
+    return z ? z + ' (' + (abbr ? abbr + ', ' : '') + gfOff(off) + ')' : gfOff(off);
+  }
+  // Before / after for the first file of the group: what Immich shows today and after the fix
+  function gfBeforeAfter(ex) {
+    var box = el('div', { 'class': 'gf-ba' });
+    if (!ex || (!ex.before && !ex.after)) { return box; }
+    box.appendChild(el('div', { 'class': 'k', style: 'grid-column:1/-1' }, 'Example: ' + ex.name));
+    if (ex.before) {
+      box.appendChild(el('div', { 'class': 'k' }, 'In Immich now'));
+      var b = el('div', {}, ex.before.local + ' ' + ex.before.zone);
+      if (ex.shift_minutes) { b.appendChild(el('span', { 'class': 'warn' }, ' · ' + gfHours(ex.shift_minutes) + ' too ' + (ex.shift_minutes > 0 ? 'early' : 'late') + ' on your timeline')); }
+      box.appendChild(b);
+    }
+    if (ex.after) {
+      box.appendChild(el('div', { 'class': 'k' }, 'After the fix'));
+      // e.g. '2024-05-26 05:38 PDT · America/Los_Angeles (UTC-07:00)'
+      box.appendChild(el('div', {}, ex.after.local + (ex.after.abbr ? ' ' + ex.after.abbr : '') + ' · ' + (ex.after.zone ? ex.after.zone + ' ' : '') + '(UTC' + ex.after.offset + ')'));
+    }
+    return box;
   }
   function gfOff(min) { var s = min < 0 ? '-' : '+', m = Math.abs(min); return 'UTC' + s + ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); }
   function gfRel(folder) {
@@ -943,16 +972,52 @@
     else if (!x.suggestions.length) { card.appendChild(el('p', { 'class': 'muted' }, 'None of your Immich photos with a location were taken within ' + Math.round(x.searched_hours / 24) + ' days of these files, so there is nothing to suggest. Set the place by hand, or skip.')); }
     x.suggestions.forEach(function (g, i) {
       var row = el('div', { 'class': 'gf-sug' });
-      var ev = el('div', { 'class': 'ev' });
-      g.samples.forEach(function (id) { ev.appendChild(gfImg('/api/geofix/immich-thumb?id=' + encodeURIComponent(id), 'sm', 'One of your photos in Immich near ' + g.label)); });
-      row.appendChild(ev);
+      var evbox = el('div', { 'class': 'evbox' }), ev = el('div', { 'class': 'ev' });
+      evbox.appendChild(el('div', { 'class': 'evcap' }, 'Your Immich photos from then'));
+      (g.evidence || g.samples.map(function (id) { return { id: id }; })).forEach(function (e) {
+        var im = gfImg('/api/geofix/immich-thumb?id=' + encodeURIComponent(e.id), 'sm', 'Your photo in Immich' + (e.local ? ' · taken ' + e.local : '') + (e.place ? ' · ' + e.place : ''));
+        im.title = 'From your Immich library' + (e.local ? ', taken ' + e.local : ''); ev.appendChild(im);
+      });
+      evbox.appendChild(ev); row.appendChild(evbox);
       var txt = el('div', { 'class': 'txt' });
       var nm = el('div', { 'class': 'name' }, g.label + ' '); nm.appendChild(badge(g.confidence === 'high' ? 'ok' : (g.confidence === 'medium' ? 'warn' : ''), g.confidence === 'high' ? 'confident' : (g.confidence === 'medium' ? 'likely' : 'a guess')));
       txt.appendChild(nm);
-      txt.appendChild(el('div', { 'class': 'muted' }, gfOff(g.offset_min) + (g.zone ? ' · ' + g.zone : '') + ' — ' + g.count + ' of your photos here, nearest ' + gfGap(g.gap_seconds)));
+      txt.appendChild(el('div', { 'class': 'muted' }, g.count + ' of your Immich photos were taken here, the nearest ' + gfGap(g.gap_seconds) + ' from these files'));
+      var levels = g.levels || [], pick = levels.length ? g.default_level : null;
+      var zoneLine = el('div', { style: 'margin-top:6px' }), ba = el('div');
+      function showLevel() {
+        var lv = levels.length ? levels[pick] : null;
+        zoneLine.textContent = 'Time zone: ' + (lv ? gfZoneText(lv.zone, lv.abbr, lv.offset_min) : gfOff(g.offset_min) + (g.zone ? ' · ' + g.zone : ''));
+        ba.textContent = ''; if (lv) { ba.appendChild(gfBeforeAfter(lv.example)); }
+      }
+      if (levels.length) {
+        var lvBox = el('div', { style: 'margin-top:6px' }); lvBox.appendChild(el('div', { 'class': 'muted' }, 'How exact:'));
+        levels.forEach(function (lv, k) {
+          var lab = el('label', { 'class': 'gf-lv' });
+          var r = el('input', { type: 'radio', name: 'gfLv-' + x.id + '-' + i }); r.checked = k === pick;
+          r.onchange = function () { pick = k; showLevel(); };
+          lab.appendChild(r);
+          var t = el('div'); t.appendChild(el('div', {}, (lv.kind === 'spot' ? '📍 ' : '🏙 ') + lv.label));
+          t.appendChild(el('div', { 'class': 'd' }, lv.kind === 'spot' ? lv.detail : 'the town only, less exact'));
+          lab.appendChild(t); lvBox.appendChild(lab);
+          if (lv.kind === 'spot' && !lv.saved) {
+            var nameIt = el('button', { 'class': 'link', style: 'margin-left:24px;font-size:12px' }, 'Name this place…');
+            nameIt.onclick = function () {
+              nameIt.classList.add('hidden');
+              var f = el('div', { 'class': 'gf-name' }), inp = el('input', { type: 'text', placeholder: 'e.g. Home', maxlength: '80' }), ok = el('button', {}, 'Save');
+              ok.onclick = function () { if (inp.value.trim()) { api('POST', '/api/geofix/saved-places', { name: inp.value.trim(), lat: lv.lat, lon: lv.lon }).then(function () { gfSig = ''; return gfLoad(); }).catch(function (e) { if (e.message !== 'auth') { gfErr(e.message); } }); } };
+              f.appendChild(inp); f.appendChild(ok); f.appendChild(el('span', { 'class': 'muted', style: 'font-size:12px' }, 'used for any spot within 150 m, in later scans too'));
+              nameIt.parentNode.insertBefore(f, nameIt.nextSibling); inp.focus();
+            };
+            lvBox.appendChild(nameIt);
+          }
+        });
+        txt.appendChild(lvBox);
+      }
+      txt.appendChild(zoneLine); txt.appendChild(ba); showLevel();
       row.appendChild(txt);
       var use = el('button', { 'class': i === 0 ? 'primary' : '' }, 'Use this place');
-      use.onclick = function () { gfPost('/api/geofix/decide', { session: x.id, action: 'accept', suggestion: i }); };
+      use.onclick = function () { gfPost('/api/geofix/decide', { session: x.id, action: 'accept', suggestion: i, level: pick }); };
       row.appendChild(use); card.appendChild(row);
     });
     var foot = el('p', { style: 'margin:10px 0 0' });
@@ -999,9 +1064,10 @@
     var d = x.decision, box = el('div', { 'class': 'gf-done' + (d.status === 'skipped' ? ' skip' : '') });
     if (d.status === 'skipped') { box.appendChild(el('div', {}, 'Skipped: these files are imported exactly as they are.')); }
     else {
-      box.appendChild(el('div', { 'class': 'name', style: 'font-weight:600' }, d.label + (d.offset_min === null ? '' : ' · ' + gfOff(d.offset_min))));
-      box.appendChild(el('div', { 'class': 'muted' }, (d.offset_min === null ? 'The place is sent with each file; Immich works out the time zone from it.' : 'The place and time zone are sent with each file when it is imported.') +
-        (x.example ? ' Example: ' + x.example.name + ' — ' + x.example.local + ' on the camera = ' + x.example.utc + ' UTC.' : '')));
+      box.appendChild(el('div', { 'class': 'name', style: 'font-weight:600' }, d.label));
+      box.appendChild(el('div', {}, 'Time zone: ' + gfZoneText(d.zone, x.example && x.example.after ? x.example.after.abbr : '', d.offset_min)));
+      box.appendChild(el('div', { 'class': 'muted' }, d.offset_min === null ? 'The place is sent with each file; Immich works out the time zone from it.' : 'The place and time zone are sent with each file when it is imported (each file gets the offset for its own date, so daylight saving is right).'));
+      if (x.example) { box.appendChild(gfBeforeAfter(x.example)); }
       var notes = Object.keys(d.notes || {}).map(function (k) { return d.notes[k] + ' ' + k; });
       if (notes.length) { box.appendChild(el('div', { 'class': 'muted' }, 'So far: ' + notes.join(' · ') + '.')); }
     }
