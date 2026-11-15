@@ -3,6 +3,21 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.3.1 - Fix locations checked against real camera files
+
+- **Videos were scanned as having no time at all.** GoPro and Insta360 keep the movie header at the end of the file
+  and the scan's `-fast2` option made exiftool stop before it. Checked with real exiftool on real HERO9 and Insta360
+  files; the option is gone (reading the header costs well under a second even on a 900 MB clip).
+- **Insta360 videos now use the clock in their file name** (`VID_20260501_142000_00_001.insv`). Their recorded
+  date is that clock already turned into UTC with the zone set in the camera, which was hours off on real files (and
+  not always the zone the trip was in), so matching against your photos used the wrong time of day. GoPro videos
+  record the wall clock itself and are unchanged.
+- The folder picker on the Fix locations tab opens in the chosen person's own folder instead of the top folder;
+  **Up** still goes all the way to the top.
+- `update-bridge.sh` and `move-copyparty-root.sh` could not replace themselves with a newer copy on a Mac (they used
+  a Linux-only `chmod` option); now portable.
+- Still not checked: a real Immich reading the sidecar that the bridge sends.
+
 ## 0.3.0 - fix missing location and time zone before import
 
 - New **Fix locations** tab (`?t=locations`, also `?t=fix`). Scan a folder: files without GPS or without a time zone
@@ -20,7 +35,7 @@ Versions are shown in the page header, `GET /healthz`, the start-up log line and
   permissions has both; the page says which one is missing.
 - Limits: files already in Immich are not changed (the page says so per group); GPS that a camera stores only inside
   its video data track (GoPro telemetry, Insta360 trailer) is not read, exactly as Immich does not read it.
-- Not yet checked against real exiftool output or real camera files: the tests use a stand-in for exiftool.
+- Not yet checked against real exiftool output or real camera files: the tests use a stand-in for exiftool (done in 0.3.1).
 
 ## 0.2.1 - watched folders follow the person
 

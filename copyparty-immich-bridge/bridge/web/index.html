@@ -818,6 +818,11 @@
   // file as an XMP sidecar when the bridge imports it.
   var gfState = null, gfFolder = '', gfFilterBy = 'open', gfSig = '', gfBlobs = {}, gfOpen = {};
   try { gfFolder = localStorage.getItem('bridgeFixFolder') || ''; } catch (e) { gfFolder = ''; }
+  // Start the picker in the chosen person's own folder, not the root; "Up" still climbs to the root (no limit).
+  function gfOwnFolder() {
+    var id = gfUser(), u = people && id ? people.users.filter(function (x) { return x.id === id; })[0] : null;
+    return u ? personBase(u) : '';
+  }
   function gfUser() { return viewUser || ((people && people.users.length > 1) ? '' : 'main'); }
   function gfImg(url, cls, cap) {
     // <img> cannot send the token header, so previews are fetched and shown as blobs (cached for the page's life)
@@ -1009,7 +1014,7 @@
   $('gfPick').onclick = function () {
     pkLimit = null;
     pickCb = function (path) { gfFolder = path; try { localStorage.setItem('bridgeFixFolder', path); } catch (e) { /* private mode */ } if (gfState) { gfRender(); } };
-    $('picker').classList.remove('hidden'); pkLoad(gfFolder || null);
+    $('picker').classList.remove('hidden'); pkLoad(gfFolder || gfOwnFolder() || null);
   };
   $('gfScan').onclick = function () {
     gfErr(''); gfSig = '';

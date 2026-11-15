@@ -25,6 +25,7 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -50,6 +51,11 @@ MARK = "copyparty-immich-bridge location fix"
 EXIF_TAGS = ["-DateTimeOriginal", "-CreateDate", "-MediaCreateDate", "-OffsetTimeOriginal", "-OffsetTime",
              "-Composite:GPSLatitude", "-Composite:GPSLongitude", "-Make", "-Model"]
 VIDEO_EXT = {"mp4", "mov", "insv", "lrv", "360", "m4v", "avi", "mts", "mkv"}
+# Insta360 names carry the camera's wall clock: VID_20260501_142000_00_001.insv (LRV_/IMG_ too; _LL_ = lens/type).
+# Its QuickTime CreateDate is that clock turned into UTC with the zone set IN THE CAMERA (seen on real files: hours off,
+# not always the zone the camera was really in), so for a zone-less match the name is the trustworthy local clock.
+INSTA360_NAME = re.compile(r"^(?:VID|LRV|IMG)_(\d{8}_\d{6})_\d{2}_\d{3}\.", re.I)
+QUICKTIME_KEYS = ("CreateDate", "MediaCreateDate")
 
 
 class GeoFixError(Exception):
@@ -73,6 +79,17 @@ def parse_exif_time(value) -> tuple[datetime | None, int | None]:
         return None, None
     rest = value[19:].lstrip(".0123456789")  # sub-seconds
     return local, parse_offset(rest)
+
+
+def insta360_clock(path: str) -> datetime | None:
+    """The camera's wall clock from an Insta360 file name, or None for any other name."""
+    m = INSTA360_NAME.match(os.path.basename(path))
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%Y%m%d_%H%M%S")
+    except ValueError:
+        return None
 
 
 def parse_offset(value) -> int | None:
@@ -358,11 +375,13 @@ class GeoFix:
             rows = []
             for p, size, mtime in chunk:
                 t = tags.get(p) or {}
-                taken, offset = None, None
-                for key in ("DateTimeOriginal", "CreateDate", "MediaCreateDate"):
+                taken, offset, key = None, None, None
+                for key in ("DateTimeOriginal", *QUICKTIME_KEYS):
                     taken, offset = parse_exif_time(t.get(key))
                     if taken is not None:
                         break
+                if key in QUICKTIME_KEYS and offset is None:
+                    taken = insta360_clock(p) or taken
                 if offset is None:
                     offset = parse_offset(t.get("OffsetTimeOriginal"))
                 if offset is None:
@@ -390,7 +409,7 @@ class GeoFix:
                 "need": "" if lat is not None else ("place" if offset is not None else "place and time zone")}
 
     def _exiftool_json(self, paths: list[str]) -> dict[str, dict]:
-        cmd = [self._exiftool, "-json", "-n", "-fast2", "-charset", "filename=utf8", *EXIF_TAGS, "--", *paths]
+        cmd = [self._exiftool, "-json", "-n", "-charset", "filename=utf8", *EXIF_TAGS, "--", *paths]
         try:
             proc = subprocess.run(cmd, capture_output=True, timeout=600)
         except subprocess.TimeoutExpired as ex:

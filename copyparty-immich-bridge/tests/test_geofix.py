@@ -6,6 +6,8 @@ the real tool prints for a real GoPro file.
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -154,6 +156,20 @@ def test_scan_groups_files_and_suggests_the_place(rig):
     # the question to Immich covers every possible zone of the camera (UTC-12..+14) around the group
     q = rig.stub.searches[0]
     assert q["takenAfter"][:19] == "2026-04-30T12:03:22" and q["takenBefore"][:19] == "2026-05-02T14:40:00" and q["withExif"] is True
+
+
+def test_real_camera_tag_shapes_insta360_uses_the_clock_in_its_name(rig):
+    """Tags exactly as real exiftool -json -n printed them for a HERO9 and an Insta360 video (no Make on either, no
+    zone, no GPS). Insta360's CreateDate is the camera clock already turned into UTC (here 9 h behind the name), so
+    the wall clock comes from the name; GoPro's CreateDate IS the wall clock."""
+    rig.add("Kyoto walk/GX013948.MP4", {"CreateDate": "2026:05:01 14:03:22", "MediaCreateDate": "2026:05:01 14:03:22",
+                                        "Model": "HERO9 Black"})
+    rig.add("Kyoto walk/VID_20260501_142000_00_001.insv", {"CreateDate": "2026:05:01 05:20:00",
+                                                           "MediaCreateDate": "2026:05:01 05:20:00"})
+    out = rig.scan()
+    (only,) = out["sessions"]  # both on the same afternoon: ONE group, not split by the 9 h UTC gap
+    assert (only["start"], only["end"]) == ("2026-05-01T14:03:22", "2026-05-01T14:20:00")
+    assert only["needs"] == {"place and time zone": 2} and only["suggestions"][0]["label"] == "Kyoto, Japan"
 
 
 def test_the_search_widens_only_when_nothing_is_near(rig):
@@ -341,3 +357,24 @@ def test_a_file_already_in_immich_is_reported_as_not_changed(rig, live):
     worker.enqueue(a, "test")
     assert wait_for(lambda: (call(base, "GET", "/api/geofix")[1]["sessions"][0]["decision"] or {}).get("notes") == {"already in Immich: not changed": 1})
     assert len(rig.stub.uploads) == 1 and sid
+
+
+@pytest.mark.skipif(not (shutil.which("exiftool") and shutil.which("ffmpeg")), reason="needs real exiftool and ffmpeg")
+def test_real_exiftool_reads_the_clock_of_a_video_whose_header_is_at_the_end(tmp_path):
+    """GoPro/Insta360 videos keep their movie header (moov) at the END of the file, like ffmpeg's default mp4.
+
+    With -fast2 exiftool stops before it and prints no dates at all (seen on real HERO9 / Insta360 files), so every
+    video was scanned as having no time. This runs the REAL tool on such a file with the exact scan command.
+    """
+    clip = tmp_path / "GX010001.MP4"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=64x64:d=1", "-metadata",
+                    "creation_time=2026-05-01T14:03:22Z", "-metadata", "model=HERO9 Black", str(clip)], check=True)
+    gf = GeoFix(str(tmp_path / "geofix.db"), lambda: [str(tmp_path)], lambda: {"mp4"})
+    try:
+        tags = gf._exiftool_json([str(clip)])[str(clip)]
+        assert tags.get("CreateDate") == "2026:05:01 14:03:22" and tags.get("MediaCreateDate") == "2026:05:01 14:03:22"
+        assert not any(k in tags for k in ("GPSLatitude", "OffsetTimeOriginal"))  # video: no zone, no place -> both needed
+        files = gf._read_metadata([str(clip)])
+        assert files[0]["taken"] == datetime(2026, 5, 1, 14, 3, 22) and files[0]["need"] == "place and time zone"
+    finally:
+        gf.close()

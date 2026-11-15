@@ -34,7 +34,8 @@ self_update() {
   if cmp -s "$tmp" "$self"; then rm -f "$tmp"; return 0; fi
   echo "Updating update-bridge.sh to the latest version..."
   # write a new file and move it over the old one, so this running copy is never edited while bash reads it
-  if cp "$tmp" "$self.new" 2>/dev/null && chmod --reference="$self" "$self.new" 2>/dev/null && mv "$self.new" "$self" 2>/dev/null; then
+  # cp -p of the old copy keeps its mode (chmod --reference is GNU-only; macOS has none)
+  if cp -p "$self" "$self.new" 2>/dev/null && cat "$tmp" > "$self.new" 2>/dev/null && mv "$self.new" "$self" 2>/dev/null; then
     rm -f "$tmp"
     UPDATE_BRIDGE_UPDATED=1 exec bash "$self" "$@"
   fi
