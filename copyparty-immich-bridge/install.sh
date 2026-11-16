@@ -38,6 +38,10 @@ EXTRA_COPYPARTY="${EXTRA_COPYPARTY:-}"
 # detects such folders in the mounted data folder by itself. PEOPLE_ROOT=off disables it, PEOPLE_ROOT=none forgets
 # a remembered folder (back to automatic). (Also on the bridge page: People tab.)
 PEOPLE_ROOT="${PEOPLE_ROOT:-}"
+# Fix locations joins groups that look like the same place using Immich's own image recognition (its
+# machine-learning container). Found by itself; IMMICH_ML=<container name> picks one, IMMICH_ML=off turns it off.
+# The bridge is then also attached to that container's Docker network (nothing about Immich is changed).
+IMMICH_ML="${IMMICH_ML:-}"
 
 MARKER="# managed by the immich-bridge installer"
 SWEEP_NOTE="15 minutes"
@@ -108,6 +112,29 @@ echo "copyparty data: $MOUNT_SRC -> $MOUNT_DEST (mounted into the bridge; read-o
 HOST_IP="${HOST_IP:-$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}')}"
 [ -n "$HOST_IP" ] || HOST_IP="$(hostname -I | awk '{print $1}')"
 IMMICH_URL="${IMMICH_URL:-http://$HOST_IP:2283}"
+
+ML_NAME="" ML_NET=""
+if [ "$IMMICH_ML" != "off" ]; then
+  ML_NAME="${IMMICH_ML:-$(docker ps --format '{{.Names}} {{.Image}}' | awk '$2 ~ /immich-machine-learning/ {print $1; exit}')}"
+  if [ -n "$ML_NAME" ]; then
+    ML_NET="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$ML_NAME" 2>/dev/null | awk '{print $1}')"
+    [[ "$ML_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ && "$ML_NET" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { ML_NAME="" ML_NET=""; }
+  fi
+  if [ -n "$ML_NAME" ]; then echo "Immich image recognition: $ML_NAME (network $ML_NET) - used to join look-alike groups in Fix locations"
+  else echo "No Immich machine-learning container found: Fix locations groups by time only (IMMICH_ML=<name> to point at one)"; fi
+fi
+if [ -n "$ML_NAME" ]; then
+  ML_ENV_LINE="      IMMICH_ML_URL: http://$ML_NAME:3003"
+  ML_NETS_LINE="    networks: [default, immich-ml]"
+  ML_TOP="networks:
+  immich-ml:
+    external: true
+    name: $ML_NET
+"
+else
+  ML_ENV_LINE="      # IMMICH_ML_URL: not set (no Immich machine-learning container; Fix locations groups by time only)"
+  ML_NETS_LINE="" ML_TOP=""
+fi
 
 if [ "$HOOK" = "1" ] && grep -qE '^[[:space:]]+command:' "$COPYPARTY_DIR/docker-compose.yml"; then
   echo "Your copyparty compose already sets 'command:' - skipping the instant hook (the 15-minute sweep still works)."
@@ -358,12 +385,15 @@ $PRIORITY_LINE
       BROWSE_ROOTS: $EXTRA_ROOTS
 $EXTRA_MAPS_LINE
 $PEOPLE_LINE
+$ML_ENV_LINE
       BRIDGE_BUILD: "$BUILD_ID"
     volumes:
       - $MOUNT_SRC:$MOUNT_DEST:$MOUNT_MODE
 ${EXTRA_VOLUMES}      - bridge-state:/data
-volumes:
+${ML_NETS_LINE:+$ML_NETS_LINE
+}volumes:
   bridge-state:
+${ML_TOP}
 EOF
   } > "$OVERRIDE"
 }

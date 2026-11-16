@@ -526,3 +526,192 @@ def test_real_exiftool_reads_the_clock_of_a_video_whose_header_is_at_the_end(tmp
         assert files[0]["taken"] == datetime(2026, 5, 1, 14, 3, 22) and files[0]["need"] == "place and time zone"
     finally:
         gf.close()
+
+
+# -- A: a recording ends when its last chapter closed ------------------------------------------------------------
+
+def chapters(rig, folder, number, start, plays, closes, model="HERO9 Black"):
+    """GoPro chapters GH01nnnn, GH02nnnn... of one recording: same CreateDate, playback lengths `plays` (s),
+    file close times `closes` (epoch s; the camera stamps each chapter when it closes it)."""
+    out = []
+    for i, (play, closed) in enumerate(zip(plays, closes), start=1):
+        p = rig.add(f"{folder}/GH{i:02d}{number}.MP4", {"CreateDate": start, "Duration": play, "Model": model})
+        os.utime(p, (closed, closed))
+        out.append(p)
+    return out
+
+
+def test_a_time_lapse_recording_ends_when_its_last_chapter_closed_not_after_its_playback(rig):
+    """Real HERO9 TimeWarp: 318 s + 126 s of video closed 31 min apart = ~15x, so the recording
+    from 06:32 ran to ~08:22. A clip at 09:40 is then 1 h 18 min after it ended: same group (by playback alone the
+    gap was 3 h 08 min and it was split)."""
+    t0 = 1_800_000_000
+    chapters(rig, "Deck", "3980", "2026:03:22 06:32:04", [318.336, 125.9258], [t0 + 4778, t0 + 4778 + 1881])
+    chapters(rig, "Deck", "3982", "2026:03:22 09:40:00", [60.0], [t0 + 20000])
+    (only,) = rig.scan(search=False)["sessions"]
+    assert only["need_count"] == 3 and only["start"] == "2026-03-22T06:32:04"
+    assert only["end"].startswith("2026-03-22T09:41")  # the later clip's own end
+
+
+def test_without_kept_close_times_the_playback_length_is_used(rig):
+    t0 = 1_800_000_000
+    chapters(rig, "Deck", "3980", "2026:03:22 06:32:04", [318.0, 126.0], [t0, t0])  # copied without times
+    chapters(rig, "Deck", "3982", "2026:03:22 09:40:00", [60.0], [t0])
+    first, second = rig.scan(search=False)["sessions"]
+    assert first["end"] == "2026-03-22T06:39:28" and second["start"] == "2026-03-22T09:40:00"
+
+
+# -- C: an unset clock is no date; the file counter estimates one ---------------------------------------------------
+
+def nikon(rig, name, when=None, **extra):
+    tags = {"Make": "NIKON CORPORATION", "Model": "NIKON D3100", **extra}
+    if when:
+        tags["DateTimeOriginal"] = when
+    return rig.add(f"Eye-Fi/{name}", tags)
+
+
+def test_an_unset_clock_is_no_date_and_the_file_counter_estimates_one(rig):
+    nikon(rig, "DSC_0038.JPG", "2012:01:01 00:00:00")        # never set: exactly the default
+    nikon(rig, "DSC_0039.JPG", "2012:01:01 00:14:09")        # never set, ticking on from it
+    nikon(rig, "DSC_0040.JPG", "2026:05:01 14:00:00")        # clock set from here
+    nikon(rig, "DSC_0042.JPG", "2026:05:01 14:20:00")
+    nikon(rig, "DSC_0041.JPG")                               # blank
+    nikon(rig, "DSC_0090.JPG")                               # blank and 48 shots from any date: no guess
+    out = rig.scan()
+    dated, undated = out["sessions"]
+    est = {f["name"]: f for f in dated["files"]}
+    assert est["DSC_0041.JPG"]["taken"] == "2026-05-01T14:10:00" and est["DSC_0041.JPG"]["estimated"]["confidence"] == "high"
+    assert est["DSC_0039.JPG"]["taken"] == "2026-05-01T13:58:30" and est["DSC_0039.JPG"]["estimated"]["confidence"] == "medium"
+    assert est["DSC_0038.JPG"]["taken"] == "2026-05-01T13:57:00"
+    assert "1 shot before DSC_0040.JPG" in est["DSC_0039.JPG"]["estimated"]["how"]
+    assert dated["estimated"] == 3 and dated["needs"]["date, place and time zone"] == 3
+    assert [f["name"] for f in undated["files"]] == ["DSC_0090.JPG"] and undated["start"] is None
+    # accepting sends the estimate WITH its zone and says how it was made
+    rig.gf.decide(dated["id"], "accept", 0)
+    xml = rig.gf.sidecar_for(str(rig.root / "Eye-Fi/DSC_0039.JPG")).decode()
+    assert "<exif:DateTimeOriginal>2026-05-01T13:58:30+09:00</exif:DateTimeOriginal>" in xml
+    assert "Date estimated by copyparty-immich-bridge: 1 shot before DSC_0040.JPG" in xml and "<tiff:ImageDescription>" in xml
+    ET.fromstring(xml.split("?>", 1)[1].rsplit("<?xpacket", 1)[0])  # still well-formed XML
+    real = rig.gf.sidecar_for(str(rig.root / "Eye-Fi/DSC_0040.JPG")).decode()
+    assert "estimated" not in real and "+09:00" in real
+
+
+def test_a_new_year_photo_is_kept_and_a_shot_with_gps_keeps_its_own_place(rig):
+    nikon(rig, "DSC_0001.JPG", "2026:01:01 00:00:30")                     # a real New Year photo
+    nikon(rig, "DSC_0002.JPG", "2026:01:01 00:05:00")
+    nikon(rig, "DSC_0003.JPG", "2012:01:01 00:00:00", GPSLatitude=KYOTO[0], GPSLongitude=KYOTO[1])  # GPS, no date
+    out = rig.scan(search=False)
+    files = {f["name"]: f for s in out["sessions"] for f in s["files"]}
+    assert "DSC_0001.JPG" in files and files["DSC_0001.JPG"]["estimated"] is None  # needs a place, its date stands
+    assert files["DSC_0003.JPG"]["estimated"]["how"].startswith("1 shot after DSC_0002.JPG")
+    s = next(s for s in out["sessions"] if any(f["name"] == "DSC_0003.JPG" for f in s["files"]))
+    rig.gf.decide(s["id"], "accept", custom={"lat": LISBON[0], "lon": LISBON[1], "offset_min": 0, "label": "Lisbon"})
+    xml = rig.gf.sidecar_for(str(rig.root / "Eye-Fi/DSC_0003.JPG")).decode()
+    assert "35,0.696000N" in xml and "+09:00" in xml  # its own GPS and the zone there, not the place chosen for the rest
+
+
+def test_a_shot_without_gps_borrows_it_from_the_next_numbered_one(rig):
+    nikon(rig, "DSC_0050.JPG", "2026:05:01 14:00:00", GPSLatitude=LISBON[0], GPSLongitude=LISBON[1])
+    nikon(rig, "DSC_0052.JPG", "2026:05:01 14:03:00")
+    out = rig.scan()
+    (s,) = out["sessions"]
+    top = s["suggestions"][0]
+    assert top["sibling"] == {"path": str(rig.root / "Eye-Fi/DSC_0050.JPG"), "name": "DSC_0050.JPG", "shots": 2}
+    assert (top["lat"], top["lon"], top["confidence"]) == (LISBON[0], LISBON[1], "high")
+    assert top["levels"][0]["detail"].startswith("The GPS of DSC_0050.JPG, 2 files away")
+    assert top["levels"][0]["zone"] == "Europe/Lisbon" and top["levels"][0]["offset_min"] == 60
+    assert s["suggestions"][1]["label"] == "Kyoto, Japan"  # the Immich suggestions still follow
+    rig.gf.decide(s["id"], "accept", 0)
+    assert rig.gf.describe()["sessions"][0]["decision"]["source"].startswith("same camera (high)")
+
+
+# -- B: groups that look like the same place are one card --------------------------------------------------------
+
+LOOKS = {"deck": [1.0, 0.1, 0.0], "deck2": [0.95, 0.2, 0.05], "workshop": [0.1, 1.0, 0.2]}
+
+
+def look_alike_rig(rig, monkeypatch, embed):
+    rig.gf._embed, rig.gf._embed_model = embed, "test-model"
+    monkeypatch.setattr(rig.gf, "_thumb_bytes", lambda path, big: open(path, "rb").read())
+    t0 = 1_800_000_000
+    for number, start, look in (("3980", "2026:03:22 06:32:04", "deck"), ("3982", "2026:03:22 13:10:04", "deck2"),
+                                ("3990", "2026:03:22 21:00:00", "workshop")):
+        p = rig.add(f"Deck/GH01{number}.MP4", {"CreateDate": start, "Duration": 300.0, "Model": "HERO9 Black"}, content=look.encode())
+        os.utime(p, (t0, t0))
+
+
+def test_groups_that_look_alike_are_one_card_and_can_be_split_into_linked_cards(rig, monkeypatch):
+    calls = []
+
+    def embed(jpeg):
+        calls.append(jpeg)
+        return LOOKS[jpeg.decode()]
+
+    look_alike_rig(rig, monkeypatch, embed)
+    out = rig.scan()
+    joined, workshop = out["sessions"]  # 06:32 and 13:10 (4 h 33 min apart) look alike; the workshop does not
+    assert [p["start"] for p in joined["parts"]] == ["2026-03-22T06:32:04", "2026-03-22T13:10:04"]
+    assert joined["parts"][1]["similarity"] > 0.85 and joined["need_count"] == 2 and workshop["parts"] == []
+    assert out["look_alike"] == {"state": "on", "error": "", "compared": 2, "joined": 1}
+    rig.scan()
+    assert len(calls) == 3  # one frame per file, cached across scans
+    # Split: two cards, each linked to the other; remembered for later scans
+    rig.gf.split(joined["id"])
+    out = wait_scan(rig)
+    a, b, _ = out["sessions"]
+    assert a["parts"] == [] and [ln["id"] for ln in a["links"]] == [b["id"]] and [ln["id"] for ln in b["links"]] == [a["id"]]
+    # "Use for both": the same place for the linked card's files too
+    home = {"lat": LISBON[0], "lon": LISBON[1], "offset_min": 0, "label": "Home"}
+    rig.gf.decide(a["id"], "accept", custom=home, also=[b["id"]])
+    out = rig.gf.describe()
+    assert out["sessions"][0]["decision"]["label"] == out["sessions"][1]["decision"]["label"] == "Home"
+    assert out["sessions"][2]["decision"] is None
+    with pytest.raises(GeoFixError):  # only a linked look-alike can share a place
+        rig.gf.decide(a["id"], "accept", custom=home, also=[out["sessions"][2]["id"]])
+    rig.gf.join(a["id"], b["id"])
+    assert len(wait_scan(rig)["sessions"][0]["parts"]) == 2
+
+
+def test_without_the_image_service_groups_are_split_by_time_only_and_the_page_says_why(rig, monkeypatch):
+    def broken(jpeg):
+        raise GeoFixError("Immich machine learning answered HTTP 500: model not found", 502)
+
+    look_alike_rig(rig, monkeypatch, broken)
+    out = rig.scan()
+    assert len(out["sessions"]) == 3 and out["look_alike"]["state"] == "failed" and "model not found" in out["look_alike"]["error"]
+    rig.gf._embed = None
+    assert rig.scan()["look_alike"]["state"] == "off"
+
+
+def wait_scan(rig):
+    end = time.time() + 10
+    while (rig.gf.status["running"] or not rig.gf.status["finished_at"]) and time.time() < end:
+        time.sleep(0.02)
+    return rig.gf.describe()
+
+
+def test_clip_embedder_sends_what_the_immich_server_sends():
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from bridge.geofix import clip_embedder
+    seen = {}
+
+    class ML(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            seen["path"], seen["body"] = self.path, body
+            out = json.dumps({"clip": "[0.5, -0.25]", "imageHeight": 1, "imageWidth": 1}).encode()
+            self.send_response(200); self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out)
+
+        def log_message(self, *a):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), ML)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        embed = clip_embedder(f"http://127.0.0.1:{srv.server_port}/", "ViT-B-32__openai")
+        assert embed(b"\xff\xd8jpeg") == [0.5, -0.25]
+        assert seen["path"] == "/predict" and b'{"clip": {"visual": {"modelName": "ViT-B-32__openai"}}}' in seen["body"]
+        assert b'name="image"' in seen["body"] and b"\xff\xd8jpeg" in seen["body"]
+        assert clip_embedder("", "x") is None
+    finally:
+        srv.shutdown()

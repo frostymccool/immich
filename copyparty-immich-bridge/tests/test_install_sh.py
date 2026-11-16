@@ -28,6 +28,8 @@ case "$*" in
     printf 'bind|%s/copyparty/cfg|/cfg\\nbind|%s/hook/immich_bridge_hook.py|/hooks/immich_bridge_hook.py\\nbind|%s/data|/w\\n' "$FAKE_HOME" "$FAKE_HOME" "$FAKE_HOME"
     exit 0;;
   inspect\\ -f*State.Status*) echo running; exit 0;;
+  ps\\ --format*) [ -n "${FAKE_ML:-}" ] && printf 'immich_server ghcr.io/immich-app/immich-server:release\\n%s ghcr.io/immich-app/immich-machine-learning:release\\n' "$FAKE_ML"; exit 0;;
+  inspect\\ -f*Networks*) echo "immich_default "; exit 0;;
   compose*) echo "docker $*" >> "$FAKE_LOG"; exit 0;;
 esac
 exit 0
@@ -371,3 +373,18 @@ def test_default_install_leaves_folder_per_person_automatic(box):
     r = box.run(env={"APP_FOLDER": "Work"})
     assert r.returncode == 0, r.stdout + r.stderr
     assert "switches on by itself" in box.override.read_text() and "PEOPLE_ROOT: /w" not in box.override.read_text()
+
+
+def test_immichs_image_recognition_is_found_and_the_bridge_joins_its_network(box):
+    r = box.run(env={"APP_FOLDER": "Trips/Summer2026", "FAKE_ML": "immich_machine_learning"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = box.override.read_text()
+    assert "IMMICH_ML_URL: http://immich_machine_learning:3003" in text and "    networks: [default, immich-ml]" in text
+    assert "networks:\n  immich-ml:\n    external: true\n    name: immich_default\n" in text
+    assert "Immich image recognition: immich_machine_learning (network immich_default)" in r.stdout
+    # off: no network, no URL; and without such a container the same
+    for env in ({"IMMICH_ML": "off", "FAKE_ML": "immich_machine_learning"}, {}):
+        r = box.run(env={"APP_FOLDER": "Trips/Summer2026", **env})
+        assert r.returncode == 0, r.stdout + r.stderr
+        text = box.override.read_text()
+        assert "IMMICH_ML_URL: http" not in text and "immich-ml" not in text

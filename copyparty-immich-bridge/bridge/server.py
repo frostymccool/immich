@@ -328,7 +328,12 @@ def make_handler(
                     geofix.start_scan(body.get("folder"), uid, client.search_metadata, client.search_places)
                 elif self.path == "/api/geofix/decide":
                     geofix.decide(str(body.get("session") or ""), str(body.get("action") or ""), body.get("suggestion"),
-                                  body.get("custom") if isinstance(body.get("custom"), dict) else None, body.get("level"))
+                                  body.get("custom") if isinstance(body.get("custom"), dict) else None, body.get("level"),
+                                  body.get("also") if isinstance(body.get("also"), list) else None)
+                elif self.path == "/api/geofix/split":
+                    geofix.split(str(body.get("session") or ""))
+                elif self.path == "/api/geofix/join":
+                    geofix.join(str(body.get("session") or ""), str(body.get("with") or ""))
                 elif self.path == "/api/geofix/saved-places":
                     if body.get("delete") is not None:
                         geofix.delete_place(body.get("delete"))

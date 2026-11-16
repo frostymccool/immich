@@ -70,14 +70,37 @@ NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
 REVERSE_GEOCODE = os.environ.get("GEOFIX_REVERSE_GEOCODE", "osm").strip().lower() not in ("off", "0", "no", "false", "none")
 MARK = "copyparty-immich-bridge location fix"
 EXIF_TAGS = ["-DateTimeOriginal", "-CreateDate", "-MediaCreateDate", "-OffsetTimeOriginal", "-OffsetTime",
-             "-Composite:GPSLatitude", "-Composite:GPSLongitude", "-Make", "-Model"]
+             "-Composite:GPSLatitude", "-Composite:GPSLongitude", "-Make", "-Model", "-Duration"]
+# A clock that was never set: cameras start at a round New Year midnight (2012-01-01 00:00:00 on an Olympus, a
+# Nikon or GoPro default year on others), so ANY Jan 1 00:00:00 is read as "no date"; so is a date before the model
+# existed, or one in the future. (Not "suspicious": a real shot at exactly that second is vanishingly rare.)
+MODEL_RELEASED = {"E-M5": "2012-02-01", "NIKON D3100": "2010-08-19", "HERO9 Black": "2020-09-16", "HERO10 Black": "2021-09-16",
+                  "HERO11 Black": "2022-09-14", "HERO12 Black": "2023-09-13"}
+# Undated shots are dated from the camera's own file counter (DSC_0042 -> 42), only ever within one camera + folder:
+# between two dated shots by position, else this many seconds a shot from the nearest one, and never further than
+# ESTIMATE_MAX_SHOTS away. (The 90 s is a guess from one real card; GEOFIX_SHOT_INTERVAL_S changes it.)
+SHOT_INTERVAL_S = int(os.environ.get("GEOFIX_SHOT_INTERVAL_S", "90") or 90)
+ESTIMATE_MAX_SHOTS = 40
+INTERPOLATE_MAX = timedelta(days=30)
+SIBLING_SHOTS = 10  # a shot without GPS may borrow the GPS of one this close (same camera, same folder)
+COUNTER = re.compile(r"(\d{4})\.[A-Za-z0-9]+$")
+# GoPro: GH01 2345.MP4, GH02 2345.MP4 ... are chapters of ONE recording 2345 (GX = HEVC; GOPR2345 + GP01 2345 on old
+# models). The chapters' close times (file mtime) tell the real span: a TimeWarp/time-lapse chapter plays 5 min
+# but took 80 min to record, so playback length alone says nothing about when the recording ended.
+GOPRO_NAME = re.compile(r"^(?:G([HXL])(\d\d)(\d{4})|GOPR(\d{4})|GP(\d\d)(\d{4}))\.", re.I)
+# Look-alike groups (same folder, within LOOK_ALIKE_SPAN of each other) are one card when frames of them look like
+# the same place to Immich's own CLIP model (its machine-learning service; IMMICH_ML_URL). Measured on real files:
+# two time-lapses of the same deck hours apart, same camera moved - see tests.
+LOOK_ALIKE_SPAN = timedelta(hours=12)
+LOOK_ALIKE = float(os.environ.get("GEOFIX_LOOK_ALIKE", "0.85") or 0.85)
+FRAMES_PER_GROUP = 3
 VIDEO_EXT = {"mp4", "mov", "insv", "lrv", "360", "m4v", "avi", "mts", "mkv"}
 # Insta360 names carry the camera's wall clock: VID_20260501_142000_00_001.insv (LRV_/IMG_ too; _LL_ = lens/type).
 # Its QuickTime CreateDate is that clock turned into UTC with the zone set IN THE CAMERA (seen on real files: hours off,
 # not always the zone the camera was really in), so for a zone-less match the name is the trustworthy local clock.
 INSTA360_NAME = re.compile(r"^(?:VID|LRV|IMG)_(\d{8}_\d{6})_\d{2}_\d{3}\.", re.I)
 QUICKTIME_KEYS = ("CreateDate", "MediaCreateDate")
-READER_VERSION = 3  # bump whenever a change to reading metadata must invalidate the cached files table
+READER_VERSION = 4  # bump whenever a change to reading metadata must invalidate the cached files table
 
 
 class GeoFixError(Exception):
@@ -112,6 +135,68 @@ def insta360_clock(path: str) -> datetime | None:
         return datetime.strptime(m.group(1), "%Y%m%d_%H%M%S")
     except ValueError:
         return None
+
+
+def bad_date(taken: datetime | None, model: str, now: datetime | None = None) -> str:
+    """Why a camera date cannot be trusted ('' when it can)."""
+    if taken is None:
+        return ""
+    if taken.month == 1 and taken.day == 1 and taken.hour == taken.minute == taken.second == 0:
+        return "the camera's clock was never set"
+    released = MODEL_RELEASED.get(model.strip())
+    if released and taken.strftime("%Y-%m-%d") < released:
+        return f"before the {model.strip()} existed"
+    if taken > (now or datetime.now()) + timedelta(days=2):
+        return "in the future"
+    return ""
+
+
+def recording_of(name: str) -> tuple[str, int] | None:
+    """(GoPro recording key, chapter number) for a GoPro file name, else None."""
+    m = GOPRO_NAME.match(name)
+    if not m:
+        return None
+    if m.group(1):
+        return f"G{m.group(1).upper()}{m.group(3)}", int(m.group(2))
+    if m.group(4):
+        return f"GP{m.group(4)}", 0
+    return f"GP{m.group(6)}", int(m.group(5))
+
+
+def counter_of(name: str) -> int | None:
+    """The camera's own file counter (DSC_0042.JPG -> 42; GoPro: the recording number, the same for all chapters)."""
+    rec = recording_of(name)
+    if rec is not None:
+        return int(rec[0][-4:])
+    if insta360_clock(name) is not None:  # Insta360 names hold a clock, not a counter
+        return None
+    m = COUNTER.search(name)
+    return int(m.group(1)) if m else None
+
+
+def cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na, nb = math.sqrt(sum(x * x for x in a)), math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def clip_embedder(ml_url: str, model: str, timeout: float = 60) -> Callable[[bytes], list[float]] | None:
+    """A function JPEG bytes -> CLIP image embedding from Immich's machine-learning service (the same request the
+    Immich server sends: server/src/repositories/machine-learning.repository.ts::encodeImage), or None when no
+    service is configured. Only a small preview frame is sent, and only to that service."""
+    url = (ml_url or "").strip().rstrip("/")
+    if not url:
+        return None
+    entries = json.dumps({"clip": {"visual": {"modelName": model}}})
+
+    def embed(jpeg: bytes) -> list[float]:
+        resp = requests.post(url + "/predict", data={"entries": entries}, files={"image": ("frame.jpg", jpeg, "image/jpeg")}, timeout=timeout)
+        if resp.status_code != 200:
+            raise GeoFixError(f"Immich machine learning answered HTTP {resp.status_code}: {resp.text[:200]}", 502)
+        vec = resp.json().get("clip")
+        return json.loads(vec) if isinstance(vec, str) else list(vec)
+
+    return embed
 
 
 def parse_offset(value) -> int | None:
@@ -176,17 +261,26 @@ def _xmp_coord(value: float, pos: str, neg: str) -> str:
     return f"{deg},{(v - deg) * 60:.6f}{ref}"
 
 
-def build_sidecar(taken: datetime | None, offset_min: int | None, lat: float | None, lon: float | None) -> bytes:
+def build_sidecar(taken: datetime | None, offset_min: int | None, lat: float | None, lon: float | None, note: str = "",
+                  estimated: bool = False) -> bytes:
     """The XMP sidecar uploaded with a file. Same tags Immich writes itself when a location/date is edited
-    (metadata.service.ts::handleSidecarWrite): DateTimeOriginal with its zone, GPSLatitude, GPSLongitude."""
+    (metadata.service.ts::handleSidecarWrite): DateTimeOriginal with its zone, GPSLatitude, GPSLongitude.
+    An ESTIMATED date is sent even without a zone (else the file lands on the camera's fake date), and `note`
+    (how it was estimated) goes in as the description, so Immich keeps the provenance next to the photo."""
     lines = []
-    if taken is not None and offset_min is not None:
-        stamp = taken.strftime("%Y-%m-%dT%H:%M:%S") + fmt_offset(offset_min)
+    if taken is not None and (offset_min is not None or estimated):
+        stamp = taken.strftime("%Y-%m-%dT%H:%M:%S") + (fmt_offset(offset_min) if offset_min is not None else "")
         lines.append(f"   <exif:DateTimeOriginal>{stamp}</exif:DateTimeOriginal>")
         lines.append(f"   <photoshop:DateCreated>{stamp}</photoshop:DateCreated>")
     if lat is not None and lon is not None:
         lines.append(f"   <exif:GPSLatitude>{_xmp_coord(lat, 'N', 'S')}</exif:GPSLatitude>")
         lines.append(f"   <exif:GPSLongitude>{_xmp_coord(lon, 'E', 'W')}</exif:GPSLongitude>")
+    if note:
+        # both names: Immich reads ImageDescription before Description, and cameras fill ImageDescription with
+        # their own name ("OLYMPUS DIGITAL CAMERA"); the sidecar's value wins over the file's
+        alt = f"<rdf:Alt><rdf:li xml:lang='x-default'>{escape(note)}</rdf:li></rdf:Alt>"
+        lines.append(f"   <dc:description>{alt}</dc:description>")
+        lines.append(f"   <tiff:ImageDescription>{alt}</tiff:ImageDescription>")
     body = "\n".join(lines)
     return (
         "<?xpacket begin='﻿' id='W5M0MpCehiHzreSzNTczkc9d'?>\n"
@@ -194,7 +288,9 @@ def build_sidecar(taken: datetime | None, offset_min: int | None, lat: float | N
         " <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\n"
         "  <rdf:Description rdf:about=''\n"
         "    xmlns:exif='http://ns.adobe.com/exif/1.0/'\n"
-        "    xmlns:photoshop='http://ns.adobe.com/photoshop/1.0/'>\n"
+        "    xmlns:photoshop='http://ns.adobe.com/photoshop/1.0/'\n"
+        "    xmlns:dc='http://purl.org/dc/elements/1.1/'\n"
+        "    xmlns:tiff='http://ns.adobe.com/tiff/1.0/'>\n"
         f"{body}\n"
         "  </rdf:Description>\n"
         " </rdf:RDF>\n"
@@ -299,10 +395,102 @@ def rank_suggestions(start: datetime, end: datetime, known_offset: int | None, n
 # -- the store + scanner -------------------------------------------------------------------------------------
 
 
+def iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
+def need_of(lat, offset, why: str = "", estimated: bool = False) -> str:
+    """What a file is missing, in the words the page shows ('' = nothing)."""
+    if why or estimated:
+        return "date" if lat is not None else "date, place and time zone"
+    if lat is not None:
+        return ""
+    return "place" if offset is not None else "place and time zone"
+
+
+def estimate_dates(files: list[dict]) -> None:
+    """Dates undated files from the camera's file counter (see SHOT_INTERVAL_S), in place: sets `taken`, `estimated`
+    ({how, confidence}) and `need`. Only within one folder + camera, and only from files with a real date."""
+    by_cam: dict[tuple[str, str], list[dict]] = {}
+    for f in files:
+        if f["counter"] is not None:
+            by_cam.setdefault((f["folder"], f["camera"]), []).append(f)
+    for items in by_cam.values():
+        # an unset clock ticks on from its default: DSC_0012 at 2012-01-01 01:13 followed by DSC_0013 in 2026 is
+        # not a New Year photo. Jan 1-2 dates are cleared when the next numbered shot is 300+ days later.
+        items.sort(key=lambda f: f["counter"])
+        for i, f in enumerate(items):
+            t = f["taken"]
+            if t is None or not (t.month == 1 and t.day <= 2):
+                continue
+            nxt = next((g["taken"] for g in items[i + 1:] if g["taken"] is not None and not (g["taken"].month == 1 and g["taken"].day <= 2)), None)
+            if nxt is not None and nxt - t > timedelta(days=300):
+                f["taken"], f["offset_min"], f["date_why"] = None, None, "the camera's clock was not set"
+                f["need"] = need_of(f["lat"], None, f["date_why"])
+        dated = sorted((f for f in items if f["taken"] is not None), key=lambda f: f["counter"])
+        if not dated:
+            continue
+        for f in items:
+            if f["taken"] is not None:
+                continue
+            c = f["counter"]
+            same = [d for d in dated if d["counter"] == c]
+            before = [d for d in dated if d["counter"] < c][-1:]
+            after = [d for d in dated if d["counter"] > c][:1]
+            if same:  # another chapter of the same recording knows the time
+                when, how, conf = same[0]["taken"], f"same recording as {same[0]['name']}", "high"
+            elif before and after and timedelta(0) <= after[0]["taken"] - before[0]["taken"] <= INTERPOLATE_MAX:
+                a, b = before[0], after[0]
+                when = a["taken"] + (b["taken"] - a["taken"]) * ((c - a["counter"]) / (b["counter"] - a["counter"]))
+                how, conf = f"between {a['name']} and {b['name']} by file number", "high"
+            else:
+                near = min(before + after, key=lambda d: abs(d["counter"] - c))
+                shots = abs(near["counter"] - c)
+                if shots > ESTIMATE_MAX_SHOTS:
+                    continue
+                step = timedelta(seconds=SHOT_INTERVAL_S * shots)
+                when = near["taken"] + step if near["counter"] < c else near["taken"] - step
+                how = f"{shots} shot{'s' if shots != 1 else ''} {'after' if near['counter'] < c else 'before'} {near['name']}, about {SHOT_INTERVAL_S} s a shot"
+                conf = "medium" if shots <= 10 else "low"
+            f["taken"] = when.replace(microsecond=0)
+            f["estimated"] = {"how": how, "confidence": conf}
+            f["need"] = need_of(f["lat"], None, estimated=True)
+
+
+def recording_ends(items: list[dict]) -> None:
+    """Sets `end` (camera clock) on every dated file: a photo ends when taken; a video when its RECORDING ended.
+    GoPro chapters of one recording share its start; the real span is playback length times the chapters' measured
+    speed-up (time between consecutive chapters' close times / that chapter's playback), so a time-lapse that plays
+    5 min but took 80 min ends 80 min later. Without a usable measure the playback length is used."""
+    chapters: dict[str, list[dict]] = {}
+    for f in items:
+        if f["taken"] is None:
+            continue
+        f["end"] = f["taken"] + timedelta(seconds=f["duration"] or 0)
+        if f["recording"] is not None:
+            chapters.setdefault(f["recording"][0], []).append(f)
+    for parts in chapters.values():
+        parts.sort(key=lambda f: f["recording"][1])
+        played = sum(f["duration"] or 0 for f in parts)
+        speed = 1.0
+        if len(parts) >= 2 and all(f["duration"] for f in parts[1:]):
+            ratios = [(parts[i]["mtime"] - parts[i - 1]["mtime"]) / parts[i]["duration"] for i in range(1, len(parts))]
+            r = median(ratios)
+            if 0.9 <= r <= 300:  # else the close times were not kept (copied without them): trust playback only
+                speed = max(1.0, r)
+        start = min(f["taken"] for f in parts)
+        end = start + timedelta(seconds=played * speed)
+        for f in parts:
+            f["end"] = max(f["end"], end)
+
+
 class GeoFix:
     def __init__(self, db_path: str, browse_roots: Callable[[], list[str]], extensions: Callable[[], set[str]],
-                 thumbs_dir: str | None = None, exiftool: str = "exiftool", ffmpeg: str = "ffmpeg"):
+                 thumbs_dir: str | None = None, exiftool: str = "exiftool", ffmpeg: str = "ffmpeg",
+                 embed: Callable[[bytes], list[float]] | None = None, embed_model: str = ""):
+        """`embed(jpeg) -> vector` = Immich's CLIP model (clip_embedder); None switches the look-alike check off."""
         self._lock = threading.RLock()
+        self._embed, self._embed_model = embed, embed_model
         self._roots = browse_roots
         self._extensions = extensions
         self._exiftool, self._ffmpeg = exiftool, ffmpeg
@@ -317,7 +505,9 @@ class GeoFix:
         self._db.executescript(
             """
             CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, size INTEGER, mtime REAL, taken TEXT, offset_min INTEGER,
-                lat REAL, lon REAL, make TEXT, model TEXT, clock_raw TEXT);
+                lat REAL, lon REAL, make TEXT, model TEXT, clock_raw TEXT, duration REAL);
+            CREATE TABLE IF NOT EXISTS frames (key TEXT PRIMARY KEY, vec TEXT);
+            CREATE TABLE IF NOT EXISTS splits (folder TEXT, start TEXT, PRIMARY KEY (folder, start));
             CREATE TABLE IF NOT EXISTS places (id INTEGER PRIMARY KEY, name TEXT, lat REAL, lon REAL, radius_m INTEGER);
             CREATE TABLE IF NOT EXISTS street_names (key TEXT PRIMARY KEY, label TEXT, at REAL);
             CREATE TABLE IF NOT EXISTS decisions (name TEXT, size INTEGER, path TEXT, status TEXT, lat REAL, lon REAL,
@@ -325,8 +515,12 @@ class GeoFix:
                 PRIMARY KEY (name, size));
             """
         )
-        if "zone" not in [r[1] for r in self._db.execute("PRAGMA table_info(decisions)")]:
-            self._db.execute("ALTER TABLE decisions ADD COLUMN zone TEXT")
+        have = [r[1] for r in self._db.execute("PRAGMA table_info(decisions)")]
+        for col in ("zone", "note"):
+            if col not in have:
+                self._db.execute(f"ALTER TABLE decisions ADD COLUMN {col} TEXT")
+        if "estimated" not in have:
+            self._db.execute("ALTER TABLE decisions ADD COLUMN estimated INTEGER")
         if stale:
             self._db.execute(f"PRAGMA user_version = {READER_VERSION}")
         self._db.commit()
@@ -335,6 +529,8 @@ class GeoFix:
         self._files: list[dict] = []
         self._sessions: list[dict] = []
         self._tool_cache: tuple[float, dict] | None = None
+        self._last_scan: tuple | None = None  # (folder, user, search, places): Split / Join re-run the scan
+        self.look_alike: dict = {"state": "off" if embed is None else "ready", "error": ""}
 
     def close(self) -> None:
         with self._lock:
@@ -380,6 +576,7 @@ class GeoFix:
                 raise GeoFixError("a scan is already running", 409)
             self.status = {"running": True, "phase": "listing files", "done": 0, "total": 0, "error": "", "folder": folder,
                            "user": user, "finished_at": 0}
+            self._last_scan = (folder, user, search, places)
         threading.Thread(target=self._scan, args=(folder, search, places), name="geofix-scan", daemon=True).start()
 
     def _scan(self, folder: str, search, places=None) -> None:
@@ -387,7 +584,9 @@ class GeoFix:
             paths = self._list_media(folder)
             self._set(phase="reading capture time and GPS", total=len(paths), done=0)
             files = self._read_metadata(paths)
+            estimate_dates(files)
             sessions = self._make_sessions(files)
+            sessions = self._join_look_alikes(sessions)
             todo = [s for s in sessions if s["need"]]
             self._set(phase="looking for nearby photos in Immich", total=len(todo), done=0)
             problem = ""
@@ -400,6 +599,9 @@ class GeoFix:
                     except Exception as ex:  # Immich down / key without asset.read: keep the scan, say why
                         problem = f"could not ask Immich for nearby photos: {ex}"
                         log.warning(problem)
+                sib = self._sibling_suggestion(s, files) if s["start"] is not None else None
+                if sib is not None:
+                    s["suggestions"].insert(0, sib)
                 self._set(done=i + 1)
             with self._lock:
                 self._files, self._sessions = files, sessions
@@ -433,7 +635,7 @@ class GeoFix:
         files: list[dict] = []
         pending: list[tuple[str, int, float]] = []
         with self._lock:
-            cached = {r[0]: r for r in self._db.execute("SELECT path,size,mtime,taken,offset_min,lat,lon,make,model,clock_raw FROM files")}
+            cached = {r[0]: r for r in self._db.execute("SELECT path,size,mtime,taken,offset_min,lat,lon,make,model,clock_raw,duration FROM files")}
         for p in paths:
             try:
                 st = os.stat(p)
@@ -441,7 +643,7 @@ class GeoFix:
                 continue
             row = cached.get(p)
             if row and row[1] == st.st_size and abs(row[2] - st.st_mtime) < 1:
-                files.append(self._file(p, st.st_size, st.st_mtime, *row[3:10]))
+                files.append(self._file(p, st.st_size, st.st_mtime, *row[3:11]))
             else:
                 pending.append((p, st.st_size, st.st_mtime))
         self._set(done=len(files))
@@ -467,23 +669,31 @@ class GeoFix:
                 if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)) or (lat == 0 and lon == 0):
                     lat = lon = None
                 taken_s = taken.isoformat() if taken else None
-                rows.append((p, size, mtime, taken_s, offset, lat, lon, str(t.get("Make") or ""), str(t.get("Model") or ""), raw))
+                dur = t.get("Duration")
+                dur = float(dur) if isinstance(dur, (int, float)) and dur >= 0 else None
+                rows.append((p, size, mtime, taken_s, offset, lat, lon, str(t.get("Make") or ""), str(t.get("Model") or ""), raw, dur))
                 files.append(self._file(*rows[-1]))
             with self._lock:
-                self._db.executemany("INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
+                self._db.executemany("INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
                 self._db.commit()
             self._set(done=len(files))
         files.sort(key=lambda f: f["path"])
         return files
 
     @staticmethod
-    def _file(path, size, mtime, taken, offset, lat, lon, make, model, raw="") -> dict:
-        return {"path": path, "clock_raw": raw or "", "name": os.path.basename(path), "folder": os.path.dirname(path), "size": size, "mtime": mtime,
-                "taken": datetime.fromisoformat(taken) if taken else None, "offset_min": offset, "lat": lat, "lon": lon,
+    def _file(path, size, mtime, taken, offset, lat, lon, make, model, raw="", duration=None) -> dict:
+        when = datetime.fromisoformat(taken) if taken else None
+        why = bad_date(when, model or "")
+        if why:  # an unset clock is no date at all (Immich would file it under that fake day)
+            when, offset = None, None
+        name = os.path.basename(path)
+        return {"path": path, "clock_raw": raw or "", "name": name, "folder": os.path.dirname(path), "size": size, "mtime": mtime,
+                "taken": when, "offset_min": offset, "lat": lat, "lon": lon, "duration": duration, "date_why": why,
+                "estimated": None, "counter": counter_of(name), "recording": recording_of(name),
                 "camera": " ".join(x for x in (make, model) if x).strip(),
                 "video": path.rsplit(".", 1)[-1].lower() in VIDEO_EXT,
                 # GPS present = Immich works the zone out itself; a zone but no GPS = only the place is missing
-                "need": "" if lat is not None else ("place" if offset is not None else "place and time zone")}
+                "need": need_of(lat, offset, why)}
 
     def _exiftool_json(self, paths: list[str]) -> dict[str, dict]:
         cmd = [self._exiftool, "-json", "-n", "-charset", "filename=utf8", *EXIF_TAGS, "--", *paths]
@@ -503,30 +713,165 @@ class GeoFix:
             by_folder.setdefault(f["folder"], []).append(f)
         sessions = []
         for folder, items in sorted(by_folder.items()):
-            dated = sorted((f for f in items if f["taken"]), key=lambda f: f["taken"])
+            recording_ends(items)
+            dated = sorted((f for f in items if f["taken"]), key=lambda f: (f["taken"], f["counter"] or 0, f["name"]))
             groups: list[list[dict]] = []
-            for f in dated:
-                if groups and f["taken"] - groups[-1][-1]["taken"] <= SESSION_GAP:
+            last_end = None
+            for f in dated:  # a new group only after a gap from where the previous RECORDING ended
+                if groups and f["taken"] - last_end <= SESSION_GAP:
                     groups[-1].append(f)
+                    last_end = max(last_end, f["end"])
                 else:
                     groups.append([f])
+                    last_end = f["end"]
             undated = [f for f in items if not f["taken"]]
             if undated:
                 groups.append(undated)
             for g in groups:
-                need = [f for f in g if f["need"]]
-                offsets = {f["offset_min"] for f in need}
-                start = g[0]["taken"]
-                key = f"{folder}|{start.isoformat() if start else 'undated'}"
-                sessions.append({"id": hashlib.sha1(key.encode()).hexdigest()[:12], "folder": folder, "files": g,
-                                 "start": start, "end": g[-1]["taken"], "need": need,
-                                 "known_offset": offsets.pop() if len(offsets) == 1 and None not in offsets else None,
-                                 "suggestions": [], "searched_hours": 0})
+                sessions.append(self._session_of(folder, g))
         return sessions
+
+    @staticmethod
+    def _session_of(folder: str, g: list[dict], parts: list[dict] | None = None) -> dict:
+        need = [f for f in g if f["need"]]
+        offsets = {f["offset_min"] for f in need}
+        start = g[0]["taken"]
+        end = max((f.get("end") or f["taken"] for f in g if f["taken"]), default=None)
+        key = f"{folder}|{start.isoformat() if start else 'undated'}"
+        sid = hashlib.sha1(key.encode()).hexdigest()[:12]
+        return {"id": sid, "folder": folder, "files": g, "start": start, "end": end, "need": need,
+                "known_offset": offsets.pop() if len(offsets) == 1 and None not in offsets else None,
+                "suggestions": [], "searched_hours": 0, "links": [],
+                "parts": parts or [{"id": sid, "start": start, "end": end, "count": len(need)}]}
+
+    # -- look-alike groups (Immich's CLIP model) --------------------------------------------------------
+
+    def _vectors(self, s: dict) -> list[list[float]]:
+        """CLIP vectors of up to FRAMES_PER_GROUP preview frames of a group (first, middle, last), cached per file."""
+        need = s["need"]
+        picks = [need[i] for i in sorted({0, len(need) // 2, len(need) - 1})][:FRAMES_PER_GROUP]
+        out = []
+        for f in picks:
+            key = f"{f['path']}|{f['size']}|{f['mtime']}|{self._embed_model}"
+            with self._lock:
+                row = self._db.execute("SELECT vec FROM frames WHERE key=?", (key,)).fetchone()
+            if row is not None:
+                out.append(json.loads(row[0]))
+                continue
+            try:
+                jpeg = self._thumb_bytes(f["path"], False)
+            except GeoFixError:
+                continue  # no frame from this file (e.g. ffmpeg missing): compare on the others
+            vec = self._embed(jpeg)
+            with self._lock:
+                self._db.execute("INSERT OR REPLACE INTO frames VALUES (?,?)", (key, json.dumps(vec)))
+                self._db.commit()
+            out.append(vec)
+        return out
+
+    def _join_look_alikes(self, sessions: list[dict]) -> list[dict]:
+        """Groups of one folder close in time whose frames look like the same place become ONE group (its `parts`
+        say which), unless the person split them: then each keeps a `link` to the other."""
+        if self._embed is None:
+            self.look_alike = {"state": "off", "error": ""}
+            return sessions
+        with self._lock:
+            split = {(r[0], r[1]) for r in self._db.execute("SELECT folder,start FROM splits")}
+        self._set(phase="comparing groups that look alike")
+        vecs: dict[str, list] = {}
+        out: list[dict] = []
+        compared = joined = 0
+        try:
+            for s in sessions:
+                prev = out[-1] if out else None
+                if (prev is None or not s["need"] or not prev["need"] or s["start"] is None or prev["start"] is None
+                        or prev["folder"] != s["folder"] or s["start"] - prev["end"] > LOOK_ALIKE_SPAN):
+                    out.append(s)
+                    continue
+                for x in (prev, s):
+                    if x["id"] not in vecs:
+                        vecs[x["id"]] = self._vectors(x)
+                compared += 1
+                sim = max((cosine(a, b) for a in vecs[prev["id"]] for b in vecs[s["id"]]), default=0.0)
+                if sim < LOOK_ALIKE:
+                    out.append(s)
+                elif (s["folder"], s["start"].isoformat()) in split:
+                    link = {"similarity": round(sim, 3)}
+                    prev["links"].append({"id": s["id"], "start": s["start"], "end": s["end"], **link})
+                    s["links"].append({"id": prev["id"], "start": prev["start"], "end": prev["end"], **link})
+                    out.append(s)
+                else:
+                    s["parts"][0]["similarity"] = round(sim, 3)
+                    merged = self._session_of(prev["folder"], prev["files"] + s["files"], prev["parts"] + s["parts"])
+                    merged["links"] = prev["links"]
+                    vecs[merged["id"]] = vecs[prev["id"]] + vecs[s["id"]]
+                    out[-1] = merged
+                    joined += 1
+        except Exception as ex:  # the service is down or the model is missing: groups stay as they are, say why
+            log.warning("look-alike check failed: %s", ex)
+            self.look_alike = {"state": "failed", "error": str(ex)[:300]}
+            return sessions
+        self.look_alike = {"state": "on", "error": "", "compared": compared, "joined": joined}
+        return out
+
+    def split(self, sid: str) -> None:
+        """Turns a joined group back into its parts (shown as linked cards), remembered for later scans."""
+        s = self._session(sid)
+        if len(s["parts"]) < 2:
+            raise GeoFixError("this group is not made of look-alike parts")
+        with self._lock:
+            self._db.executemany("INSERT OR IGNORE INTO splits VALUES (?,?)", [(s["folder"], p["start"].isoformat()) for p in s["parts"][1:]])
+            self._db.commit()
+        self._rescan()
+
+    def join(self, sid: str, other: str) -> None:
+        """Undoes a split between two linked groups."""
+        a, b = self._session(sid), self._session(other)
+        later = max(a, b, key=lambda x: x["start"])
+        with self._lock:
+            self._db.execute("DELETE FROM splits WHERE folder=? AND start=?", (later["folder"], later["start"].isoformat()))
+            self._db.commit()
+        self._rescan()
+
+    def _rescan(self) -> None:
+        if self._last_scan is None:
+            raise GeoFixError("scan the folder again first", 409)
+        folder, user, search, places = self._last_scan
+        self.start_scan(folder, user, search, places)
+
+    # -- a geotagged shot next to an untagged one ---------------------------------------------------------
+
+    def _sibling_suggestion(self, s: dict, files: list[dict]) -> dict | None:
+        """A shot from the same camera and folder at most SIBLING_SHOTS file numbers away that HAS GPS: its place is
+        the first suggestion (a phone or camera that lost its fix for a few shots)."""
+        want = [f for f in s["need"] if f["lat"] is None and f["counter"] is not None]
+        if not want:
+            return None
+        best = None
+        for f in want:
+            for g in files:
+                if (g["lat"] is None or g["folder"] != f["folder"] or g["camera"] != f["camera"] or g["counter"] is None or g is f):
+                    continue
+                shots = abs(g["counter"] - f["counter"])
+                gap = abs((g["taken"] - f["taken"]).total_seconds()) if g["taken"] and f["taken"] else 0.0
+                if shots <= SIBLING_SHOTS and gap <= SESSION_GAP.total_seconds() and (best is None or (shots, gap) < best[:2]):
+                    best = (shots, gap, g)
+        if best is None:
+            return None
+        shots, gap, g = best
+        zone = zone_at(g["lat"], g["lon"])
+        start = s["need"][0]["taken"]
+        off, abbr = zone_offset(zone, start) if start and zone else (g["offset_min"], "")
+        level = {"kind": "spot", "lat": g["lat"], "lon": g["lon"], "radius_m": 0, "photos": 1, "street": self._street_name(g["lat"], g["lon"]),
+                 "zone": zone, "offset_min": off, "abbr": abbr, "from_file": g["name"], "shots": shots}
+        return {"lat": g["lat"], "lon": g["lon"], "offset_min": off, "zone": zone, "label": f"Where {g['name']} was taken",
+                "count": 1, "gap_seconds": gap, "confidence": "high" if shots <= 3 else "medium", "samples": [], "evidence": [],
+                "sibling": {"path": g["path"], "name": g["name"], "shots": shots}, "levels": [level], "default_level": 0}
 
     def _suggest(self, session: dict, search) -> tuple[list[dict], int]:
         need = session["need"]
-        start, end = need[0]["taken"], need[-1]["taken"]
+        start = min(f["taken"] for f in need)
+        end = max(f.get("end") or f["taken"] for f in need)  # to the end of the last recording
         known = session["known_offset"]
         for hours in TIERS_HOURS:
             reach = timedelta(hours=hours)
@@ -655,15 +1000,25 @@ class GeoFix:
         if lv["kind"] == "spot":
             hit = self._saved_place(saved, lv["lat"], lv["lon"])
             out["saved"] = bool(hit)
-            photos = f"{lv['photos']} of your photo{'s' if lv['photos'] != 1 else ''}"
-            if hit:
+            photos = f"{lv['photos']} of your photos"  # "1 of your photos" reads right too
+            if lv.get("from_file"):
+                photos = f"the GPS of {lv['from_file']}, {lv['shots']} file{'s' if lv['shots'] != 1 else ''} away on the same camera"
+            if hit and lv.get("from_file"):
+                place, away = hit
+                out["lat"], out["lon"], out["label"] = place["lat"], place["lon"], place["name"]
+                out["detail"] = f"your saved place · {photos}, {away} m from it"
+            elif lv.get("from_file"):
+                out["label"] = lv.get("street") or f"Where {lv['from_file']} was taken"
+                out["detail"] = photos[0].upper() + photos[1:] + (" · street name from OpenStreetMap" if lv.get("street") else "")
+            elif hit:
                 # the person said where this is: use their point, not the photos' (phone GPS drifts 100 m+ indoors)
                 place, away = hit
                 out["lat"], out["lon"], out["label"] = place["lat"], place["lon"], place["name"]
                 out["detail"] = f"your saved place · {photos} taken {away} m from it"
             else:
                 out["label"] = lv.get("street") or "Exact spot of your photos"
-                out["detail"] = f"±{lv['radius_m']} m · where {photos} were taken" + (" · street name from OpenStreetMap" if lv.get("street") else "")
+                out["detail"] = (f"±{lv['radius_m']} m · where {photos} {'was' if lv['photos'] == 1 else 'were'} taken"
+                                 + (" · street name from OpenStreetMap" if lv.get("street") else ""))
         return out
 
     # -- decisions --------------------------------------------------------------------------------------
@@ -680,8 +1035,13 @@ class GeoFix:
             raise GeoFixError("that group is not in the current scan any more - scan again", 404)
         return s
 
-    def decide(self, sid: str, action: str, suggestion: int | None = None, custom: dict | None = None, level: int | None = None) -> None:
+    def decide(self, sid: str, action: str, suggestion: int | None = None, custom: dict | None = None, level: int | None = None,
+               also: list | None = None) -> None:
+        """`also` = ids of linked look-alike groups that get the same place (each file still gets its own offset)."""
         s = self._session(sid)
+        others = [self._session(str(o)) for o in (also or []) if str(o) != sid]
+        if any(o["id"] not in {x["id"] for x in s["links"]} for o in others):
+            raise GeoFixError("only a group shown as looking like this one can share its place")
         now = time.time()
         if action == "clear":
             with self._lock:
@@ -689,7 +1049,8 @@ class GeoFix:
                 self._db.commit()
             return
         if action == "skip":
-            rows = [(f["name"], f["size"], f["path"], "skipped", None, None, None, None, "", "", now, None, None, "") for f in s["need"]]
+            rows = [(f["name"], f["size"], f["path"], "skipped", None, None, None, None, "", "", now, None, None, "", "", 0)
+                    for x in [s, *others] for f in x["need"]]
         elif action == "accept":
             zone = ""
             if custom is not None:
@@ -699,7 +1060,8 @@ class GeoFix:
                 if not isinstance(suggestion, int) or isinstance(suggestion, bool) or not 0 <= suggestion < len(s["suggestions"]):
                     raise GeoFixError("pick one of the suggested places")
                 pick = s["suggestions"][suggestion]
-                lat, lon, offset, label, source = pick["lat"], pick["lon"], pick["offset_min"], pick["label"], f"immich neighbours ({pick['confidence']})"
+                origin = "same camera" if pick.get("sibling") else "immich neighbours"
+                lat, lon, offset, label, source = pick["lat"], pick["lon"], pick["offset_min"], pick["label"], f"{origin} ({pick['confidence']})"
                 levels = pick.get("levels") or []
                 if levels:
                     li = pick.get("default_level", 0) if level is None else level
@@ -709,22 +1071,30 @@ class GeoFix:
                     lat, lon, zone = lv["lat"], lv["lon"], lv["zone"]
                     label = lv["label"] + ("" if lv["kind"] == "town" else f", {levels[1]['label']}" if len(levels) > 1 else "")
                     source += f", {'exact spot' if lv['kind'] == 'spot' else 'town'}"
-            rows = []
-            for f in s["need"]:
-                if f["offset_min"] is not None:  # the file knows its zone: only the place is added
-                    rows.append((f["name"], f["size"], f["path"], "accepted", lat, lon, None, None, label, source, now, None, None, zone))
-                elif f["taken"] is None or (offset is None and not zone):  # no clock to correct (or 'let Immich work it out')
-                    rows.append((f["name"], f["size"], f["path"], "accepted", lat, lon, None, None, label, source, now, None, None, zone))
-                else:  # the zone's own offset at THIS file's time (daylight saving), else the neighbours' offset
-                    off = zone_offset(zone, f["taken"])[0] if zone else None
-                    off = off if off is not None else offset
-                    rows.append((f["name"], f["size"], f["path"], "accepted", lat, lon, off, f["taken"].isoformat(), label, source, now, None, None, zone))
+            rows = [self._row(f, lat, lon, offset, label, source, zone, now) for x in [s, *others] for f in x["need"]]
         else:
             raise GeoFixError("unknown action")
         with self._lock:
             self._db.executemany("INSERT OR REPLACE INTO decisions (name,size,path,status,lat,lon,offset_min,taken,label,source,"
-                                 "decided_at,applied_at,applied_note,zone) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+                                 "decided_at,applied_at,applied_note,zone,note,estimated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
             self._db.commit()
+
+    @staticmethod
+    def _row(f: dict, lat, lon, offset, label: str, source: str, zone: str, now: float) -> tuple:
+        """One accepted file. A file with its own GPS keeps it (only its date was missing) and takes its zone from it."""
+        est = f["estimated"]
+        note = f"Date estimated by copyparty-immich-bridge: {est['how']} ({est['confidence']} confidence)" if est else ""
+        if f["lat"] is not None:
+            lat, lon, zone = f["lat"], f["lon"], zone_at(f["lat"], f["lon"])
+        head = (f["name"], f["size"], f["path"], "accepted", lat, lon)
+        tail = (label, source, now, None, None, zone, note, 1 if est else 0)
+        if (f["offset_min"] is not None and not est) or f["taken"] is None:  # the file knows its zone / no clock to correct
+            return head + (None, None) + tail
+        off = zone_offset(zone, f["taken"])[0] if zone else None  # the zone's offset at THIS file's time (daylight saving)
+        off = off if off is not None else offset
+        if off is None and not est:  # 'let Immich work it out from the place'
+            return head + (None, None) + tail
+        return head + (off, f["taken"].isoformat()) + tail
 
     @staticmethod
     def _check_custom(c: dict) -> tuple[float, float, int | None, str, str]:
@@ -761,12 +1131,12 @@ class GeoFix:
         except OSError:
             return None
         with self._lock:
-            row = self._db.execute("SELECT lat,lon,offset_min,taken FROM decisions WHERE name=? AND size=? AND status='accepted'",
+            row = self._db.execute("SELECT lat,lon,offset_min,taken,note,estimated FROM decisions WHERE name=? AND size=? AND status='accepted'",
                                    (os.path.basename(path), size)).fetchone()
         if row is None or row[0] is None:
             return None
         taken = datetime.fromisoformat(row[3]) if row[3] else None
-        return build_sidecar(taken, row[2], row[0], row[1])
+        return build_sidecar(taken, row[2], row[0], row[1], row[4] or "", bool(row[5]))
 
     def mark_applied(self, path: str, note: str) -> None:
         try:
@@ -835,8 +1205,13 @@ class GeoFix:
                 "end": s["end"].isoformat() if s["end"] else None, "count": len(s["files"]), "need_count": len(s["need"]),
                 "needs": dict(Counter(f["need"] for f in s["need"])), "cameras": sorted({f["camera"] for f in s["need"] if f["camera"]}),
                 "videos": sum(1 for f in s["need"] if f["video"]),
-                "files": [{"path": f["path"], "name": f["name"], "video": f["video"], "taken": f["taken"].isoformat() if f["taken"] else None}
+                "files": [{"path": f["path"], "name": f["name"], "video": f["video"], "taken": f["taken"].isoformat() if f["taken"] else None,
+                           "estimated": f["estimated"], "date_why": f["date_why"]}
                           for f in s["need"][:FILES_IN_PAYLOAD]],
+                "estimated": sum(1 for f in s["need"] if f["estimated"]),
+                "no_date": sorted({f["date_why"] for f in s["need"] if f["date_why"] and not f["estimated"]}),
+                "parts": [{**pt, "start": iso(pt["start"]), "end": iso(pt["end"])} for pt in s["parts"]] if len(s["parts"]) > 1 else [],
+                "links": [{**ln, "start": iso(ln["start"]), "end": iso(ln["end"])} for ln in s["links"]],
                 "suggestions": suggestions, "searched_hours": s["searched_hours"], "states": dict(states),
                 "before": self.before_after(f0, None, "").get("before"),
                 "decision": decision, "example": example,
@@ -847,7 +1222,7 @@ class GeoFix:
                    "skipped": sum(s["states"].get("skipped", 0) for s in out),
                    "open": sum(s["states"].get("open", 0) for s in out),
                    "confident": sum(1 for s in out if s["states"].get("open") == s["need_count"] and s["suggestions"] and s["suggestions"][0]["confidence"] == "high")}
-        return {"tools": self.tools(), "status": status, "summary": summary, "sessions": out}
+        return {"tools": self.tools(), "status": status, "summary": summary, "sessions": out, "look_alike": dict(self.look_alike)}
 
     def preview_sidecar(self, path: str) -> bytes:
         data = self.sidecar_for(path)
@@ -863,6 +1238,9 @@ class GeoFix:
             known = any(f["path"] == path for f in self._files)
         if not known:  # only files of the current scan: this is not a general file server
             raise GeoFixError("not a file of the current scan", 404)
+        return self._thumb_bytes(path, big)
+
+    def _thumb_bytes(self, path: str, big: bool) -> bytes:
         try:
             st = os.stat(path)
         except OSError as ex:

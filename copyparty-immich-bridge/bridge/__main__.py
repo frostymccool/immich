@@ -11,7 +11,7 @@ import time
 
 from bridge import __version__
 from bridge.config import Config, ConfigError
-from bridge.geofix import GeoFix
+from bridge.geofix import GeoFix, clip_embedder
 from bridge.immich import DEFAULT_EXTENSIONS, ImmichClient, ImmichError
 from bridge.logbuffer import RingLogHandler
 from bridge.manager import UserManager
@@ -118,7 +118,10 @@ def main() -> int:
     if cfg.paused:
         log.warning("imports are PAUSED (saved setting) - press Resume on the web page to continue")
     # "Fix locations": places/time zones accepted on the page travel with the file as an XMP sidecar at import
-    geofix = GeoFix(os.path.join(data_dir, "geofix.db"), lambda: settings.browse_roots, lambda: worker.allowed_extensions)
+    # look-alike groups: Immich's own CLIP model through its machine-learning service (off when IMMICH_ML_URL is empty)
+    clip_model = os.environ.get("IMMICH_CLIP_MODEL", "").strip() or "ViT-B-32__openai"
+    geofix = GeoFix(os.path.join(data_dir, "geofix.db"), lambda: settings.browse_roots, lambda: worker.allowed_extensions,
+                    embed=clip_embedder(os.environ.get("IMMICH_ML_URL", ""), clip_model), embed_model=clip_model)
     ImportWorker.geofix = geofix
     httpd = serve(cfg, state, worker, settings, logs, scan_now=wake_sweep.set, manager=manager, geofix=geofix)
 

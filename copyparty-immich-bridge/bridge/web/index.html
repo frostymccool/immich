@@ -78,6 +78,7 @@
   .gf-sug { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-top: 8px; }
   .gf-sug .txt { flex: 1 1 220px; min-width: 0; } .gf-sug .name { font-weight: 600; } .gf-sug .ev { display: flex; gap: 4px; }
   .gf-sug .evbox { flex: 0 0 auto; } .gf-sug .evcap { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+  .gf-btns { display: flex; flex-direction: column; gap: 6px; } .gf-note { margin-top: 6px; font-size: 13px; }
   .gf-lv { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; cursor: pointer; } .gf-lv input { width: auto; flex: 0 0 auto; padding: 0; margin-top: 4px; } .gf-lv > div { flex: 1 1 auto; min-width: 0; }
   .gf-lv .d { font-size: 12px; color: var(--muted); } .gf-name { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; align-items: center; } .gf-name input { max-width: 200px; padding: 4px 8px; }
   .gf-ba { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 13px; margin-top: 6px; padding: 6px 8px; border-radius: 8px; background: var(--bg); }
@@ -860,6 +861,11 @@
     var d1 = a.slice(0, 10), d2 = (b || a).slice(0, 10), t1 = a.slice(11, 16), t2 = (b || a).slice(11, 16);
     return d1 + ' ' + t1 + (d1 === d2 ? (t1 === t2 ? '' : ' – ' + t2) : ' – ' + d2 + ' ' + t2) + ' (camera clock)';
   }
+  function gfSpan(a, b) {  // '2026-05-01 14:03–15:20'
+    if (!a) { return 'undated'; }
+    var d = a.slice(0, 10), t1 = a.slice(11, 16), t2 = b ? b.slice(11, 16) : t1;
+    return d + ' ' + t1 + (t2 !== t1 ? '–' + t2 : '') + (b && b.slice(0, 10) !== d ? ' (+' + b.slice(0, 10) + ')' : '');
+  }
   function gfGap(sec) {
     if (sec <= 60) { return 'at the same time'; }
     if (sec < 5400) { return Math.round(sec / 60) + ' min apart'; }
@@ -930,6 +936,10 @@
       var c = el('span'); c.appendChild(el('b', {}, String(p[0]))); c.appendChild(document.createTextNode(' ' + p[1] + '  ·  ')); strip.appendChild(c);
     });
     box.appendChild(strip);
+    var la = st.look_alike || {};
+    if (la.state === 'failed') { box.appendChild(el('p', { 'class': 'muted' }, 'Look-alike check could not run, so groups were not joined: ' + la.error)); }
+    else if (la.state === 'off') { box.appendChild(el('p', { 'class': 'muted' }, 'Look-alike check is off (the bridge has no IMMICH_ML_URL), so groups are split by time only.')); }
+    else if (la.joined) { box.appendChild(el('p', { 'class': 'muted' }, la.joined + ' look-alike group' + (la.joined === 1 ? ' was' : 's were') + ' joined to the one before, by Immich’s image recognition.')); }
     if (!s.need) { box.appendChild(el('p', { 'class': 'ok' }, s.files ? 'Every file in this folder already has a location. Nothing to fix.' : 'No photos or videos were found in this folder.')); }
     var cb = $('gfConfident');
     cb.classList.toggle('hidden', !s.confident);
@@ -959,7 +969,7 @@
       (x.cameras.length ? ' · ' + x.cameras.join(', ') : '') + ' · ' + needs));
     var strip = el('div', { 'class': 'gf-strip' });
     x.files.slice(0, gfOpen[x.id] ? x.files.length : 8).forEach(function (f) {
-      strip.appendChild(gfImg('/api/geofix/thumb?path=' + encodeURIComponent(f.path), '', f.name + (f.taken ? ' · ' + f.taken.replace('T', ' ').slice(0, 16) : '')));
+      strip.appendChild(gfImg('/api/geofix/thumb?path=' + encodeURIComponent(f.path), '', f.name + (f.taken ? ' · ' + (f.estimated ? '≈ ' : '') + f.taken.replace('T', ' ').slice(0, 16) + (f.estimated ? ' (estimated: ' + f.estimated.how + ')' : '') : '')));
     });
     if (x.need_count > 8 && !gfOpen[x.id]) {
       var more = el('button', { 'class': 'gf-more' }, '+' + (x.need_count - 8) + ' more');
@@ -967,13 +977,34 @@
       strip.appendChild(more);
     } else if (x.need_count > x.files.length) { strip.appendChild(el('span', { 'class': 'gf-more' }, '+' + (x.need_count - x.files.length) + ' not shown')); }
     card.appendChild(strip);
+    if (x.parts.length) {  // look-alike groups joined into this card
+      var jn = el('div', { 'class': 'gf-note' });
+      jn.appendChild(document.createTextNode('🔗 Joined: ' + x.parts.map(function (pt) { return gfSpan(pt.start, pt.end); }).join(' and ') +
+        ' look like the same place (Immich’s image recognition), so one choice covers all of them. '));
+      if (!x.decision) {
+        var sp = el('button', { 'class': 'link' }, 'Split into separate cards');
+        sp.onclick = function () { gfPost('/api/geofix/split', { session: x.id }); };
+        jn.appendChild(sp);
+      }
+      card.appendChild(jn);
+    }
+    x.links.forEach(function (ln) {
+      var lk = el('div', { 'class': 'gf-note' });
+      lk.appendChild(document.createTextNode('🔗 Looks like the same place as the group at ' + gfSpan(ln.start, ln.end) + ' (you split them). '));
+      var jb = el('button', { 'class': 'link' }, 'Join again');
+      jb.onclick = function () { gfPost('/api/geofix/join', { session: x.id, 'with': ln.id }); };
+      lk.appendChild(jb); card.appendChild(lk);
+    });
+    if (x.estimated) { card.appendChild(el('div', { 'class': 'gf-note' }, '≈ ' + x.estimated + ' date' + (x.estimated === 1 ? ' is' : 's are') + ' estimated from the camera’s file numbers (its clock was not set). Immich gets the estimate, with a note saying how it was made.')); }
+    if (x.no_date.length) { card.appendChild(el('div', { 'class': 'gf-note' }, 'No usable date: ' + x.no_date.join(', ') + ', and no dated shot from the same camera close enough to estimate from.')); }
     if (x.decision) { card.appendChild(gfDecided(x)); return card; }
     if (!x.start) { card.appendChild(el('p', { 'class': 'muted' }, 'These files carry no capture time, so nothing can be suggested from your other photos. You can still set the place by hand.')); }
     else if (!x.suggestions.length) { card.appendChild(el('p', { 'class': 'muted' }, 'None of your Immich photos with a location were taken within ' + Math.round(x.searched_hours / 24) + ' days of these files, so there is nothing to suggest. Set the place by hand, or skip.')); }
     x.suggestions.forEach(function (g, i) {
       var row = el('div', { 'class': 'gf-sug' });
       var evbox = el('div', { 'class': 'evbox' }), ev = el('div', { 'class': 'ev' });
-      evbox.appendChild(el('div', { 'class': 'evcap' }, 'Your Immich photos from then'));
+      evbox.appendChild(el('div', { 'class': 'evcap' }, g.sibling ? 'Same camera, same folder' : 'Your Immich photos from then'));
+      if (g.sibling) { ev.appendChild(gfImg('/api/geofix/thumb?path=' + encodeURIComponent(g.sibling.path), 'sm', g.sibling.name + ' · has GPS')); }
       (g.evidence || g.samples.map(function (id) { return { id: id }; })).forEach(function (e) {
         var im = gfImg('/api/geofix/immich-thumb?id=' + encodeURIComponent(e.id), 'sm', 'Your photo in Immich' + (e.local ? ' · taken ' + e.local : '') + (e.place ? ' · ' + e.place : ''));
         im.title = 'From your Immich library' + (e.local ? ', taken ' + e.local : ''); ev.appendChild(im);
@@ -982,7 +1013,9 @@
       var txt = el('div', { 'class': 'txt' });
       var nm = el('div', { 'class': 'name' }, g.label + ' '); nm.appendChild(badge(g.confidence === 'high' ? 'ok' : (g.confidence === 'medium' ? 'warn' : ''), g.confidence === 'high' ? 'confident' : (g.confidence === 'medium' ? 'likely' : 'a guess')));
       txt.appendChild(nm);
-      txt.appendChild(el('div', { 'class': 'muted' }, g.count + ' of your Immich photos were taken here, the nearest ' + gfGap(g.gap_seconds) + ' from these files'));
+      txt.appendChild(el('div', { 'class': 'muted' }, g.sibling
+        ? g.sibling.name + ' has GPS and was shot ' + g.sibling.shots + ' file' + (g.sibling.shots === 1 ? '' : 's') + ' away on the same camera, ' + gfGap(g.gap_seconds)
+        : g.count + ' of your Immich photos were taken here, the nearest ' + gfGap(g.gap_seconds) + ' from these files'));
       var levels = g.levels || [], pick = levels.length ? g.default_level : null;
       var zoneLine = el('div', { style: 'margin-top:6px' }), ba = el('div');
       function showLevel() {
@@ -1018,7 +1051,14 @@
       row.appendChild(txt);
       var use = el('button', { 'class': i === 0 ? 'primary' : '' }, 'Use this place');
       use.onclick = function () { gfPost('/api/geofix/decide', { session: x.id, action: 'accept', suggestion: i, level: pick }); };
-      row.appendChild(use); card.appendChild(row);
+      var btns = el('div', { 'class': 'gf-btns' }); btns.appendChild(use);
+      if (x.links.length) {
+        var both = el('button', {}, 'Use for both');
+        both.title = 'Also for the look-alike group at ' + x.links.map(function (ln) { return gfSpan(ln.start, ln.end); }).join(', ');
+        both.onclick = function () { gfPost('/api/geofix/decide', { session: x.id, action: 'accept', suggestion: i, level: pick, also: x.links.map(function (ln) { return ln.id; }) }); };
+        btns.appendChild(both);
+      }
+      row.appendChild(btns); card.appendChild(row);
     });
     var foot = el('p', { style: 'margin:10px 0 0' });
     var hand = el('button', {}, 'Search for a place…'), skip = el('button', {}, 'Skip (leave as it is)');

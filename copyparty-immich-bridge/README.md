@@ -92,6 +92,10 @@ starts the bridge, asks only for the Immich API key). The manual steps below are
 | `SETTINGS_FILE` | `/data/settings.json` | Where settings saved from the web page are kept (on the state volume) |
 | `USERS_FILE` | `/data/users.json` | The other people (Immich key, folders, copyparty logins), written by the People tab. Holds API keys: mode 600. Unreadable = the bridge refuses to start |
 | `PEOPLE_ROOT` | *(empty)* | Folder-per-person mode: a folder whose subfolders are named `<firstname>-<immich user id>`. The main account then imports only its own folder; a folder nobody is set up for is imported by nobody (also editable on the page: People tab) |
+| `IMMICH_ML_URL` | *(empty)* | Immich's machine-learning service (e.g. `http://immich_machine_learning:3003`), used by Fix locations to join look-alike groups. The installer finds it and attaches the bridge to its Docker network (`IMMICH_ML=<container>` picks one, `IMMICH_ML=off` disables). Empty = groups by time only |
+| `IMMICH_CLIP_MODEL` | `ViT-B-32__openai` | The image-recognition model asked for; set it to the one in Immich's Administration > Machine Learning, or the service loads a second model |
+| `GEOFIX_LOOK_ALIKE` | `0.85` | How alike (CLIP cosine similarity, 0-1) two groups' frames must be to be joined |
+| `GEOFIX_SHOT_INTERVAL_S` | `90` | Seconds a shot assumed when dating an undated file from its file number and only one dated neighbour |
 | `SOURCE_MAPS` | *(empty)* | Several copyparty containers: `name\|/their/path=/bridge/path[,…]` — how to translate hook paths from the container whose hook sets `IMMICH_BRIDGE_SOURCE=name` (the installer writes this for `EXTRA_COPYPARTY`) |
 
 ## Web page (settings, folder picker, status, logs)
@@ -134,6 +138,23 @@ for the limits. Example of what is sent next to `GX010011.MP4` (made-up data):
 <exif:GPSLatitude>41,9.096000N</exif:GPSLatitude>
 <exif:GPSLongitude>8,36.654000W</exif:GPSLongitude>
 ```
+
+How files are grouped and dated (0.5.0):
+
+- **Groups follow real recording time.** A new group starts after a 3-hour gap from where the previous *recording*
+  ended. GoPro chapters (`GH01nnnn`, `GH02nnnn`, …) are one recording; its end comes from the chapters' close times,
+  so a time-lapse that plays for 5 minutes but took 80 minutes ends 80 minutes later.
+- **Look-alike groups are one card.** Groups of one folder within 12 hours of each other whose frames look like the
+  same place are joined, using Immich's own image recognition (its machine-learning container, `IMMICH_ML_URL`; only
+  small preview frames are sent to it). **Split into separate cards** keeps them apart (remembered) as linked cards
+  with **Use for both**; **Join again** undoes it. Without the service, groups are split by time only.
+- **An unset camera clock is no date.** Jan 1 00:00:00 of any year, a Jan 1–2 date followed by a shot from the same
+  camera 300+ days later, a date before the camera model existed, or a future date. Such files (and files with no
+  date) are dated from the camera's own file number (`DSC_0042`): between two dated shots of the same camera and
+  folder, else about 90 s a shot (`GEOFIX_SHOT_INTERVAL_S`) from the nearest, at most 40 shots away. The estimate goes
+  to Immich with a description saying how it was made (`Date estimated by copyparty-immich-bridge: …`).
+- **A geotagged shot next to an untagged one** (same camera and folder, at most 10 file numbers away) is the first
+  suggestion for its place.
 
 ![Fix locations tab](docs/ui-fix-locations.png)
 

@@ -3,6 +3,22 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.5.0 - groups by real recording time, look-alike cards, dates for unset clocks
+
+- **Groups follow when recordings really ended.** Video length is now read, and GoPro chapters (GH01/GH02… of one
+  number) are one recording whose end comes from the chapters' close times. A time-lapse that plays 5 min but took
+  80 min no longer leaves a fake 3-hour gap after it.
+- **Look-alike groups become one card** (same folder, within 12 h, frames that Immich's own image recognition finds
+  alike). **Split into separate cards** turns them into linked cards with **Use for both**; **Join again** undoes it.
+  The installer finds Immich's machine-learning container and attaches the bridge to its network (`IMMICH_ML=off`
+  to skip). Without it, groups are split by time only and the page says so.
+- **An unset camera clock is no date** (Jan 1 00:00:00, a Jan 1-2 date followed by a much later shot, a date before
+  the camera existed, a future date). Undated shots are dated from the camera's file number within one camera and
+  folder, and the estimate is sent with a description saying how it was made.
+- **A geotagged shot of the same camera, at most 10 file numbers away,** is the first suggestion for a shot without GPS.
+- A shot with its own GPS but no usable date keeps its GPS and gets the zone from it.
+- "1 of your photo" wording fixed.
+
 ## 0.4.4 - a saved place gives its own GPS
 
 - When the exact spot falls inside a place you named, the place's own point is used, not the photos' average:
