@@ -94,7 +94,7 @@ starts the bridge, asks only for the Immich API key). The manual steps below are
 | `PEOPLE_ROOT` | *(empty)* | Folder-per-person mode: a folder whose subfolders are named `<firstname>-<immich user id>`. The main account then imports only its own folder; a folder nobody is set up for is imported by nobody (also editable on the page: People tab) |
 | `IMMICH_ML_URL` | *(empty)* | Immich's machine-learning service (e.g. `http://immich_machine_learning:3003`), used by Fix locations to join look-alike groups. The installer finds it and attaches the bridge to its Docker network (`IMMICH_ML=<container>` picks one, `IMMICH_ML=off` disables). Empty = groups by time only |
 | `IMMICH_CLIP_MODEL` | `ViT-B-32__openai` | The image-recognition model asked for; set it to the one in Immich's Administration > Machine Learning, or the service loads a second model |
-| `GEOFIX_LOOK_ALIKE` | `0.85` | How alike (CLIP cosine similarity, 0-1) two groups' frames must be to be joined |
+| `GEOFIX_LOOK_ALIKE` | `0.80` | How alike (CLIP cosine similarity, 0-1) two groups' frames must be to be joined |
 | `GEOFIX_SHOT_INTERVAL_S` | `90` | Seconds a shot assumed when dating an undated file from its file number and only one dated neighbour |
 | `SOURCE_MAPS` | *(empty)* | Several copyparty containers: `name\|/their/path=/bridge/path[,…]` — how to translate hook paths from the container whose hook sets `IMMICH_BRIDGE_SOURCE=name` (the installer writes this for `EXTRA_COPYPARTY`) |
 

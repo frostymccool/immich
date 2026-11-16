@@ -89,10 +89,11 @@ COUNTER = re.compile(r"(\d{4})\.[A-Za-z0-9]+$")
 # but took 80 min to record, so playback length alone says nothing about when the recording ended.
 GOPRO_NAME = re.compile(r"^(?:G([HXL])(\d\d)(\d{4})|GOPR(\d{4})|GP(\d\d)(\d{4}))\.", re.I)
 # Look-alike groups (same folder, within LOOK_ALIKE_SPAN of each other) are one card when frames of them look like
-# the same place to Immich's own CLIP model (its machine-learning service; IMMICH_ML_URL). Measured on real files:
-# two time-lapses of the same deck hours apart, same camera moved - see tests.
+# the same place to Immich's own CLIP model (its machine-learning service; IMMICH_ML_URL). Measured with ViT-B-32 on
+# real GoPro frames: the same deck 6 h apart (camera moved) 0.86; different scenes of one house (deck / workshop /
+# kitchen / garage) 0.54-0.74; the same deck on other days 0.65-0.81. 0.80 sits between, with room either side.
 LOOK_ALIKE_SPAN = timedelta(hours=12)
-LOOK_ALIKE = float(os.environ.get("GEOFIX_LOOK_ALIKE", "0.85") or 0.85)
+LOOK_ALIKE = float(os.environ.get("GEOFIX_LOOK_ALIKE", "0.80") or 0.80)
 FRAMES_PER_GROUP = 3
 VIDEO_EXT = {"mp4", "mov", "insv", "lrv", "360", "m4v", "avi", "mts", "mkv"}
 # Insta360 names carry the camera's wall clock: VID_20260501_142000_00_001.insv (LRV_/IMG_ too; _LL_ = lens/type).

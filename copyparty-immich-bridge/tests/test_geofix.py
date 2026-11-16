@@ -651,7 +651,7 @@ def test_groups_that_look_alike_are_one_card_and_can_be_split_into_linked_cards(
     out = rig.scan()
     joined, workshop = out["sessions"]  # 06:32 and 13:10 (4 h 33 min apart) look alike; the workshop does not
     assert [p["start"] for p in joined["parts"]] == ["2026-03-22T06:32:04", "2026-03-22T13:10:04"]
-    assert joined["parts"][1]["similarity"] > 0.85 and joined["need_count"] == 2 and workshop["parts"] == []
+    assert joined["parts"][1]["similarity"] > 0.80 and joined["need_count"] == 2 and workshop["parts"] == []
     assert out["look_alike"] == {"state": "on", "error": "", "compared": 2, "joined": 1}
     rig.scan()
     assert len(calls) == 3  # one frame per file, cached across scans

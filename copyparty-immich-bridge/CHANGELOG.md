@@ -3,6 +3,11 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.5.1 - look-alike threshold measured on real footage
+
+- Groups are joined at a CLIP similarity of 0.80 (was 0.85). Measured on real GoPro frames: the same deck six hours
+  apart scored 0.86; different scenes of one house scored at most 0.74.
+
 ## 0.5.0 - groups by real recording time, look-alike cards, dates for unset clocks
 
 - **Groups follow when recordings really ended.** Video length is now read, and GoPro chapters (GH01/GH02… of one
