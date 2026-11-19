@@ -3,6 +3,11 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.5.2 - the token can be saved by the browser
+
+- The sign-in box is now a real sign-in form (user name `immich-bridge`, the token as password), so Chrome and other
+  password managers offer to save it, and the page signs in with a saved one when this browser has forgotten it.
+
 ## 0.5.1 - look-alike threshold measured on real footage
 
 - Groups are joined at a CLIP similarity of 0.80 (was 0.85). Measured on real GoPro frames: the same deck six hours

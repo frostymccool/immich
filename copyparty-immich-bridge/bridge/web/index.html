@@ -132,9 +132,13 @@
   <div id="gate" class="card gate hidden">
     <h2>Enter the bridge token</h2>
     <p class="muted">The installer printed it (and a link that signs you in automatically). It is stored only in this browser.</p>
-    <input id="tokenIn" type="password" placeholder="token" autocomplete="off">
-    <p id="gateErr" class="errs hidden"></p>
-    <p><button id="tokenGo" class="primary">Sign in</button></p>
+    <!-- a real sign-in form (fixed user name + the token as password) so the browser's password manager offers to save it -->
+    <form id="gateForm" method="post" action="#" autocomplete="on">
+      <input name="username" type="text" autocomplete="username" value="immich-bridge" readonly tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px">
+      <input id="tokenIn" name="password" type="password" placeholder="token" autocomplete="current-password">
+      <p id="gateErr" class="errs hidden"></p>
+      <p><button id="tokenGo" type="submit" class="primary">Sign in</button></p>
+    </form>
   </div>
 
   <div id="app" class="hidden">
@@ -390,8 +394,20 @@
   var m = /[#&]token=([^&]+)/.exec(location.hash);
   if (m) { token = decodeURIComponent(m[1]); storeToken(token); history.replaceState(null, '', location.pathname + location.search); }   // keep ?t=
   else { token = loadToken(); }
-  $('tokenGo').onclick = function () { token = $('tokenIn').value.trim(); storeToken(token); $('gateErr').classList.add('hidden'); start(); };
-  $('tokenIn').onkeydown = function (e) { if (e.key === 'Enter') { $('tokenGo').click(); } };
+  // Chrome's password manager: offer to save the token once the bridge accepted it, and sign in with a saved one
+  function saveCredential(t) {
+    if (!window.PasswordCredential || !navigator.credentials) { return; }
+    try { navigator.credentials.store(new window.PasswordCredential({ id: 'immich-bridge', password: t, name: 'Immich bridge' })).catch(function () { /* declined */ }); } catch (e) { /* not supported */ }
+  }
+  function savedCredential() {
+    if (!window.PasswordCredential || !navigator.credentials) { return Promise.resolve(''); }
+    return navigator.credentials.get({ password: true, mediation: 'optional' }).then(function (c) { return (c && c.password) || ''; }).catch(function () { return ''; });
+  }
+  $('gateForm').onsubmit = function (e) {
+    e.preventDefault();
+    token = $('tokenIn').value.trim(); storeToken(token); $('gateErr').classList.add('hidden');
+    api('GET', '/api/config').then(function () { saveCredential(token); start(); }).catch(function (err) { if (err.message !== 'auth') { start(); } });
+  };
 
   // ---- tabs --------------------------------------------------------------------
   // The tab lives in the address: /?t=status | people | settings | logs (also /?t=folders). Clicking a tab updates it,
@@ -1498,7 +1514,11 @@
     });
   }
 
-  if (token) { start(); } else { $('gate').classList.remove('hidden'); pollHealth(); }
+  if (token) { start(); }
+  else {
+    $('gate').classList.remove('hidden'); pollHealth();
+    savedCredential().then(function (t) { if (t && !token) { token = t; storeToken(t); start(); } });
+  }
 })();
 </script>
 </body>

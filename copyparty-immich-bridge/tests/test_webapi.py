@@ -89,6 +89,9 @@ def test_page_is_served_without_a_token(app):
     assert status == 200
     assert b"<html" in body.lower()
     assert "text/html" in headers["Content-Type"]
+    # a real sign-in form, so a phone's password manager offers to save the token
+    assert b'<form id="gateForm"' in body and b'autocomplete="username"' in body
+    assert b'type="password" placeholder="token" autocomplete="current-password"' in body and b"PasswordCredential" in body
 
 
 def test_api_needs_the_token(app):
