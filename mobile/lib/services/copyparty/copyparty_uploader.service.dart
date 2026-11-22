@@ -25,6 +25,15 @@ class StrayPartialCleanup {
   bool get nothingToDo => removed.isEmpty && failed.isEmpty && skipped == null;
 }
 
+/// Outcome of [CopypartyUploaderService.testConnection].
+class ConnectionTestResult {
+  final bool ok;
+  final String message;
+
+  const ConnectionTestResult.success(this.message) : ok = true;
+  const ConnectionTestResult.failure(this.message) : ok = false;
+}
+
 /// Implements the copyparty up2k upload protocol.
 ///
 /// Three-step flow per file:
@@ -104,28 +113,100 @@ class CopypartyUploaderService {
   // Connection test
   // ---------------------------------------------------------------------------
 
-  /// Returns null on success, or an error string on failure.
-  Future<String?> testConnection(String hostUrl, String password) async {
+  /// Checks that the SAVED credentials really work for [uploadPath], not just that the server answers
+  /// (an anonymous `GET /` succeeds on a locked-down server, which proves nothing).
+  ///
+  /// 1. refuses to run with a username but no password (copyparty accounts need both);
+  /// 2. an authenticated folder listing — 401/403 means wrong credentials or no access to the path;
+  /// 3. proves WRITE access with a real up2k upload of a tiny unique temp file, then deletes it again
+  ///    (the delete needs the delete permission; if it is missing the file is reported, never hidden).
+  ///
+  /// The password is only ever sent as credentials — it is never put into a message or the log.
+  Future<ConnectionTestResult> testConnection(
+    String hostUrl,
+    String uploadPath,
+    String password, {
+    Directory? tempDir,
+  }) async {
+    final base = hostUrl.replaceAll(RegExp(r'/+$'), '');
+    if (base.isEmpty) {
+      return const ConnectionTestResult.failure('Host URL is not configured');
+    }
+    if (_basicAuth && password.isEmpty) {
+      return ConnectionTestResult.failure(
+        'No password is set for "$_username". copyparty needs both a username and a password — '
+        'enter the password above and test again.',
+      );
+    }
+    final shownPath = uploadPath.isEmpty ? '/' : uploadPath;
+
     try {
-      final base = hostUrl.replaceAll(RegExp(r'/+$'), '');
-      if (base.isEmpty) {
-        return 'Host URL is not configured';
+      // Step 1: authenticated read of the upload folder.
+      final listUri = _buildUri(
+        hostUrl,
+        uploadPath,
+        password,
+      ).replace(queryParameters: {'ls': '', if (password.isNotEmpty && !_basicAuth) 'pw': password});
+      final list = await _client.get(listUri, headers: _authHeaders(password)).timeout(const Duration(seconds: 10));
+      if (list.statusCode == 401 || list.statusCode == 403) {
+        return ConnectionTestResult.failure(
+          'Wrong username/password, or no access to $shownPath (HTTP ${list.statusCode}).',
+        );
       }
-      final uri = Uri.parse(base);
-      final headers = _basicAuth
-          ? _authHeaders(password)
-          : (password.isNotEmpty ? {'X-Password': password} : <String, String>{});
-      final response = await _client.get(uri, headers: headers).timeout(const Duration(seconds: 10));
-      if (response.statusCode < 400) {
-        return null;
+      // 404 is fine here: a not-yet-created folder under a writable volume is made by the first upload,
+      // and the write probe below is what decides.
+      if (list.statusCode >= 400 && list.statusCode != 404) {
+        return ConnectionTestResult.failure('Server returned HTTP ${list.statusCode} for $shownPath.');
       }
-      return 'Server returned HTTP ${response.statusCode}';
+
+      // Step 2: prove write access with a tiny real upload, then clean it up.
+      final dir = tempDir ?? Directory.systemTemp;
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      final name = 'immich-connection-test-$stamp.tmp';
+      final local = File('${dir.path}/$name');
+      await local.writeAsString('immich copyparty connection test $stamp\n');
+      try {
+        final hashed = await hashFile(local.path);
+        await uploadHashedFile(
+          hashed,
+          hostUrl,
+          uploadPath,
+          password,
+          parallelism: 1,
+        ).timeout(const Duration(seconds: 60));
+        try {
+          await deleteFile(hostUrl, uploadPath, name, password);
+        } catch (_) {
+          return ConnectionTestResult.success(
+            'Write access to $shownPath works, but the test file "$name" could not be deleted '
+            '(this account may lack delete permission) — remove it on the server.',
+          );
+        }
+      } finally {
+        try {
+          await local.delete();
+        } catch (_) {}
+      }
+      return ConnectionTestResult.success('Connected — write access to $shownPath confirmed');
+    } on CopypartyUploadException catch (e) {
+      final code = RegExp(r'HTTP (\d{3})').firstMatch(e.message)?.group(1);
+      if (code == '401' || code == '403') {
+        return ConnectionTestResult.failure(
+          'Logged in, but the server refused the write: no write access to $shownPath (HTTP $code).',
+        );
+      }
+      if (code == '404') {
+        return ConnectionTestResult.failure('Path not found on the server: $shownPath (HTTP 404).');
+      }
+      return ConnectionTestResult.failure('Write test failed: ${e.message}');
     } on SocketException catch (e) {
-      return 'Cannot reach server: ${e.message}';
+      return ConnectionTestResult.failure('Cannot reach server: ${e.message}');
     } on TimeoutException {
-      return 'Connection timed out after 10 s';
+      return const ConnectionTestResult.failure('Connection timed out');
+    } on HandshakeException catch (e) {
+      return ConnectionTestResult.failure('TLS error: ${e.message}. Is "Allow self-signed certificate" needed?');
     } catch (e) {
-      return 'Error: $e';
+      return ConnectionTestResult.failure('Error: $e');
     }
   }
 

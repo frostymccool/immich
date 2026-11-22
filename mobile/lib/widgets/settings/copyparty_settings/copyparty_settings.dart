@@ -16,6 +16,7 @@ import 'package:immich_mobile/services/copyparty/immich_bridge_status.service.da
 import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:immich_mobile/utils/disk_space.dart';
 import 'package:immich_ui/immich_ui.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart' show LaunchMode, launchUrl;
 
@@ -896,6 +897,7 @@ class _ConnectTestButton extends HookConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final testing = useState(false);
     final hostUrl = ref.watch(appConfigProvider.select((c) => c.copyparty.hostUrl));
+    final uploadPath = ref.watch(appConfigProvider.select((c) => c.copyparty.uploadPath));
 
     Future<void> runTest() async {
       if (testing.value || hostUrl.isEmpty) {
@@ -905,16 +907,20 @@ class _ConnectTestButton extends HookConsumerWidget {
       try {
         final password = await ref.read(copypartyPasswordProvider.future);
         final uploader = ref.read(copypartyUploaderProvider);
-        final error = await uploader.testConnection(hostUrl, password);
+        final result = await uploader.testConnection(
+          hostUrl,
+          uploadPath,
+          password,
+          tempDir: await getTemporaryDirectory(),
+        );
         if (!context.mounted) {
           return;
         }
-        final ok = error == null;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(ok ? 'Connected successfully' : error),
-            backgroundColor: ok ? Colors.green : context.colorScheme.error,
-            duration: const Duration(seconds: 4),
+            content: Text(result.message),
+            backgroundColor: result.ok ? Colors.green : context.colorScheme.error,
+            duration: const Duration(seconds: 8),
           ),
         );
       } finally {
