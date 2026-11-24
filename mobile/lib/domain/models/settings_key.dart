@@ -89,6 +89,7 @@ enum SettingsKey<T> {
   copypartyCacheSizeMb<int>(),
   copypartyDefaultDestination<String>(),
   copypartyBridgeUrl<String>(),
+  copypartyUsername<String>(),
 
   // Slideshow
   slideshowRepeat<bool>(),

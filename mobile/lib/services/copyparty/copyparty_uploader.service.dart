@@ -25,6 +25,15 @@ class StrayPartialCleanup {
   bool get nothingToDo => removed.isEmpty && failed.isEmpty && skipped == null;
 }
 
+/// Outcome of [CopypartyUploaderService.testConnection].
+class ConnectionTestResult {
+  final bool ok;
+  final String message;
+
+  const ConnectionTestResult.success(this.message) : ok = true;
+  const ConnectionTestResult.failure(this.message) : ok = false;
+}
+
 /// Implements the copyparty up2k upload protocol.
 ///
 /// Three-step flow per file:
@@ -40,11 +49,33 @@ class CopypartyUploaderService {
   // is a no-op in that case.
   final bool _ownsClient;
 
-  CopypartyUploaderService({http.Client? client, CopypartyLogger? logger, bool acceptSelfSignedCert = true})
-    : _client = client ?? _createClient(acceptSelfSignedCert),
-      _log = logger,
-      _acceptSelfSignedCert = acceptSelfSignedCert,
-      _ownsClient = client == null;
+  /// Copyparty account name; empty = password-only login (the original behaviour, `?pw=` query parameter).
+  final String _username;
+
+  CopypartyUploaderService({
+    http.Client? client,
+    CopypartyLogger? logger,
+    bool acceptSelfSignedCert = true,
+    String username = '',
+  }) : _client = client ?? _createClient(acceptSelfSignedCert),
+       _log = logger,
+       _acceptSelfSignedCert = acceptSelfSignedCert,
+       _ownsClient = client == null,
+       _username = username.trim();
+
+  /// With a username, credentials travel as HTTP Basic `username:password` and NOT in the `pw` query parameter.
+  /// copyparty (httpcli.py) tries the whole decoded string, then `password`, then `username`, so this works whether
+  /// or not the server was started with `--usernames` (which would need `?pw=username:password`, wrong without it).
+  bool get _basicAuth => _username.isNotEmpty;
+
+  /// Extra request headers that carry the credentials; empty without a username.
+  Map<String, String> _authHeaders(String password) {
+    if (!_basicAuth) {
+      return const {};
+    }
+    final token = base64.encode(utf8.encode('$_username:$password'));
+    return {'Authorization': 'Basic $token'};
+  }
 
   // Build an HTTP client, optionally accepting self-signed certs (common for
   // home servers).
@@ -82,26 +113,100 @@ class CopypartyUploaderService {
   // Connection test
   // ---------------------------------------------------------------------------
 
-  /// Returns null on success, or an error string on failure.
-  Future<String?> testConnection(String hostUrl, String password) async {
+  /// Checks that the SAVED credentials really work for [uploadPath], not just that the server answers
+  /// (an anonymous `GET /` succeeds on a locked-down server, which proves nothing).
+  ///
+  /// 1. refuses to run with a username but no password (copyparty accounts need both);
+  /// 2. an authenticated folder listing — 401/403 means wrong credentials or no access to the path;
+  /// 3. proves WRITE access with a real up2k upload of a tiny unique temp file, then deletes it again
+  ///    (the delete needs the delete permission; if it is missing the file is reported, never hidden).
+  ///
+  /// The password is only ever sent as credentials — it is never put into a message or the log.
+  Future<ConnectionTestResult> testConnection(
+    String hostUrl,
+    String uploadPath,
+    String password, {
+    Directory? tempDir,
+  }) async {
+    final base = hostUrl.replaceAll(RegExp(r'/+$'), '');
+    if (base.isEmpty) {
+      return const ConnectionTestResult.failure('Host URL is not configured');
+    }
+    if (_basicAuth && password.isEmpty) {
+      return ConnectionTestResult.failure(
+        'No password is set for "$_username". copyparty needs both a username and a password — '
+        'enter the password above and test again.',
+      );
+    }
+    final shownPath = uploadPath.isEmpty ? '/' : uploadPath;
+
     try {
-      final base = hostUrl.replaceAll(RegExp(r'/+$'), '');
-      if (base.isEmpty) {
-        return 'Host URL is not configured';
+      // Step 1: authenticated read of the upload folder.
+      final listUri = _buildUri(
+        hostUrl,
+        uploadPath,
+        password,
+      ).replace(queryParameters: {'ls': '', if (password.isNotEmpty && !_basicAuth) 'pw': password});
+      final list = await _client.get(listUri, headers: _authHeaders(password)).timeout(const Duration(seconds: 10));
+      if (list.statusCode == 401 || list.statusCode == 403) {
+        return ConnectionTestResult.failure(
+          'Wrong username/password, or no access to $shownPath (HTTP ${list.statusCode}).',
+        );
       }
-      final uri = Uri.parse(base);
-      final headers = password.isNotEmpty ? {'X-Password': password} : <String, String>{};
-      final response = await _client.get(uri, headers: headers).timeout(const Duration(seconds: 10));
-      if (response.statusCode < 400) {
-        return null;
+      // 404 is fine here: a not-yet-created folder under a writable volume is made by the first upload,
+      // and the write probe below is what decides.
+      if (list.statusCode >= 400 && list.statusCode != 404) {
+        return ConnectionTestResult.failure('Server returned HTTP ${list.statusCode} for $shownPath.');
       }
-      return 'Server returned HTTP ${response.statusCode}';
+
+      // Step 2: prove write access with a tiny real upload, then clean it up.
+      final dir = tempDir ?? Directory.systemTemp;
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      final name = 'immich-connection-test-$stamp.tmp';
+      final local = File('${dir.path}/$name');
+      await local.writeAsString('immich copyparty connection test $stamp\n');
+      try {
+        final hashed = await hashFile(local.path);
+        await uploadHashedFile(
+          hashed,
+          hostUrl,
+          uploadPath,
+          password,
+          parallelism: 1,
+        ).timeout(const Duration(seconds: 60));
+        try {
+          await deleteFile(hostUrl, uploadPath, name, password);
+        } catch (_) {
+          return ConnectionTestResult.success(
+            'Write access to $shownPath works, but the test file "$name" could not be deleted '
+            '(this account may lack delete permission) — remove it on the server.',
+          );
+        }
+      } finally {
+        try {
+          await local.delete();
+        } catch (_) {}
+      }
+      return ConnectionTestResult.success('Connected — write access to $shownPath confirmed');
+    } on CopypartyUploadException catch (e) {
+      final code = RegExp(r'HTTP (\d{3})').firstMatch(e.message)?.group(1);
+      if (code == '401' || code == '403') {
+        return ConnectionTestResult.failure(
+          'Logged in, but the server refused the write: no write access to $shownPath (HTTP $code).',
+        );
+      }
+      if (code == '404') {
+        return ConnectionTestResult.failure('Path not found on the server: $shownPath (HTTP 404).');
+      }
+      return ConnectionTestResult.failure('Write test failed: ${e.message}');
     } on SocketException catch (e) {
-      return 'Cannot reach server: ${e.message}';
+      return ConnectionTestResult.failure('Cannot reach server: ${e.message}');
     } on TimeoutException {
-      return 'Connection timed out after 10 s';
+      return const ConnectionTestResult.failure('Connection timed out');
+    } on HandshakeException catch (e) {
+      return ConnectionTestResult.failure('TLS error: ${e.message}. Is "Allow self-signed certificate" needed?');
     } catch (e) {
-      return 'Error: $e';
+      return ConnectionTestResult.failure('Error: $e');
     }
   }
 
@@ -277,7 +382,7 @@ class CopypartyUploaderService {
     // Stop+Resume cleared). Bound it with a stall timeout AND race it against the
     // cancel token so Stop is immediate. Mirrors _uploadChunk.
     final postFuture = _client
-        .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
+        .post(uri, headers: {'Content-Type': 'application/json', ..._authHeaders(password)}, body: body)
         .timeout(
           const Duration(seconds: 60),
           onTimeout: () => throw CopypartyUploadException('$label stalled (no response in 60s)'),
@@ -386,7 +491,7 @@ class CopypartyUploaderService {
   /// [folderUri] must point at the folder (path ending in `/`).
   Future<Map<String, int>> listFolderSizes(Uri folderUri, String password) async {
     final params = <String, String>{'ls': ''};
-    if (password.isNotEmpty) {
+    if (password.isNotEmpty && !_basicAuth) {
       params['pw'] = password;
     }
     final uri = folderUri.replace(queryParameters: params);
@@ -399,7 +504,7 @@ class CopypartyUploaderService {
     // called it just sat there with no feedback. Same 60s stall guard as the
     // handshake POST.
     final resp = await _client
-        .get(uri, headers: {'Accept': 'application/json'})
+        .get(uri, headers: {'Accept': 'application/json', ..._authHeaders(password)})
         .timeout(
           const Duration(seconds: 60),
           onTimeout: () => throw const CopypartyUploadException('Folder listing stalled (no response in 60s)'),
@@ -475,11 +580,13 @@ class CopypartyUploaderService {
           host: fileUri.host,
           port: fileUri.hasPort ? fileUri.port : null,
           pathSegments: [...segs, name],
-          queryParameters: password.isNotEmpty ? {'pw': password} : null,
+          queryParameters: password.isNotEmpty && !_basicAuth ? {'pw': password} : null,
         );
         try {
           _log?.request('DELETE', target, const {});
-          final resp = await _client.delete(target).timeout(const Duration(seconds: 30));
+          final resp = await _client
+              .delete(target, headers: _authHeaders(password))
+              .timeout(const Duration(seconds: 30));
           _log?.response(resp.statusCode, headers: resp.headers, body: resp.body);
           if (resp.statusCode < 300) {
             removed.add(name);
@@ -508,7 +615,7 @@ class CopypartyUploaderService {
     final folderUri = _buildUri(hostUrl, uploadPath, password);
     final fileUri = folderUri.replace(pathSegments: [...folderUri.pathSegments.where((s) => s.isNotEmpty), filename]);
     _log?.request('DELETE', fileUri, const {});
-    final response = await _client.delete(fileUri);
+    final response = await _client.delete(fileUri, headers: _authHeaders(password));
     _log?.response(response.statusCode, headers: response.headers, body: response.body);
     if (response.statusCode >= 300) {
       throw CopypartyUploadException('DELETE $filename failed: HTTP ${response.statusCode}');
@@ -634,13 +741,15 @@ class CopypartyUploaderService {
   // Chunk upload (step 2)
   // ---------------------------------------------------------------------------
 
-  /// Uploads a single chunk to the server.
+  /// Uploads a single chunk to the server. [password] only matters with a username (Basic auth header);
+  /// without one it already rides in [chunkUri]'s `pw` parameter.
   Future<void> _uploadChunk(
     Uri chunkUri,
     String wark,
     String chunkHash,
     Uint8List chunkBytes,
-    int chunkIdx, {
+    int chunkIdx,
+    String password, {
     Completer<void>? cancelToken,
   }) async {
     // X-Up2k-Stat is optional progress telemetry (u2c.py only sends it "if
@@ -657,6 +766,7 @@ class CopypartyUploaderService {
 
     final request = http.Request('POST', chunkUri);
     request.headers.addAll(headers);
+    request.headers.addAll(_authHeaders(password));
     request.bodyBytes = chunkBytes;
 
     // A stuck socket (bad hotel/airport wifi) can hang a chunk POST forever.
@@ -790,6 +900,7 @@ class CopypartyUploaderService {
               file.chunkHashes[chunkIdx],
               chunkBytes,
               chunkIdx,
+              password,
               cancelToken: cancelToken,
             );
             break;
@@ -1421,7 +1532,7 @@ class CopypartyUploaderService {
       '',
     ];
     var uri = baseUri.replace(pathSegments: segments);
-    if (password.isNotEmpty) {
+    if (password.isNotEmpty && !_basicAuth) {
       uri = uri.replace(queryParameters: {'pw': password});
     }
     return uri;
@@ -1442,7 +1553,7 @@ class CopypartyUploaderService {
       // Fallback: use the same base URL as the handshake
       return _buildUri(hostUrl, '', password).replace(path: Uri.parse(hostUrl.trimRight()).path);
     }
-    if (password.isEmpty) {
+    if (password.isEmpty || _basicAuth) {
       return base;
     }
     final params = Map<String, String>.from(base.queryParameters);

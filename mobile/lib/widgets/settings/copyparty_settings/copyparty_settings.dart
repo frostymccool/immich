@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/domain/models/config/copyparty_config.dart';
 import 'package:immich_mobile/domain/models/settings_key.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/pages/copyparty/copyparty_cache.page.dart';
@@ -15,6 +16,7 @@ import 'package:immich_mobile/services/copyparty/immich_bridge_status.service.da
 import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:immich_mobile/utils/disk_space.dart';
 import 'package:immich_ui/immich_ui.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart' show LaunchMode, launchUrl;
 
@@ -35,6 +37,7 @@ class CopypartySettings extends ConsumerWidget {
           if (showServerConfig) ...const [
             SettingGroupTitle(title: 'Copyparty Server', icon: Icons.cloud_upload_outlined),
             _HostUrlTile(),
+            _UsernameTile(),
             _PasswordTile(),
             _UploadPathTile(),
             _SelfSignedCertTile(),
@@ -310,6 +313,75 @@ class _HostUrlTile extends ConsumerWidget {
         ),
       ),
     );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Username
+// ---------------------------------------------------------------------------
+
+class _UsernameTile extends ConsumerWidget {
+  const _UsernameTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final username = ref.watch(appConfigProvider.select((c) => c.copyparty.username));
+    return Padding(
+      padding: const EdgeInsets.only(left: 8.0),
+      child: SettingListTile(
+        title: 'Copyparty username',
+        subtitle: username.isEmpty ? 'Not set (password only)' : username,
+        leading: const Icon(Icons.person_outline),
+        onTap: () => _showUsernameDialog(context, ref, username),
+      ),
+    );
+  }
+
+  /// Two ways to confirm: plain OK saves just the username; the second also sets the upload path to the same value
+  /// (`ian` -> `/ian`), for servers that give every person a folder named after their account.
+  Future<void> _showUsernameDialog(BuildContext context, WidgetRef ref, String current) async {
+    final controller = TextEditingController(text: current);
+    final result = await showDialog<({String name, bool setPath})>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Copyparty Username'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: 'Leave empty to log in with the password alone',
+            border: OutlineInputBorder(),
+          ),
+          autofocus: true,
+          onSubmitted: (v) => Navigator.pop(ctx, (name: v, setPath: false)),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, (name: controller.text, setPath: false)),
+            child: const Text('OK'),
+          ),
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: controller,
+            builder: (_, value, _) {
+              final path = uploadPathForUsername(value.text);
+              return FilledButton.tonal(
+                onPressed: path.isEmpty ? null : () => Navigator.pop(ctx, (name: value.text, setPath: true)),
+                child: Text(path.isEmpty ? 'OK + set upload path' : 'OK + set upload path to $path'),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+    if (result == null) {
+      return;
+    }
+    final settings = ref.read(settingsProvider);
+    final name = result.name.trim();
+    await settings.write(SettingsKey.copypartyUsername, name);
+    if (result.setPath) {
+      await settings.write(SettingsKey.copypartyUploadPath, uploadPathForUsername(name));
+    }
   }
 }
 
@@ -825,6 +897,7 @@ class _ConnectTestButton extends HookConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final testing = useState(false);
     final hostUrl = ref.watch(appConfigProvider.select((c) => c.copyparty.hostUrl));
+    final uploadPath = ref.watch(appConfigProvider.select((c) => c.copyparty.uploadPath));
 
     Future<void> runTest() async {
       if (testing.value || hostUrl.isEmpty) {
@@ -834,16 +907,20 @@ class _ConnectTestButton extends HookConsumerWidget {
       try {
         final password = await ref.read(copypartyPasswordProvider.future);
         final uploader = ref.read(copypartyUploaderProvider);
-        final error = await uploader.testConnection(hostUrl, password);
+        final result = await uploader.testConnection(
+          hostUrl,
+          uploadPath,
+          password,
+          tempDir: await getTemporaryDirectory(),
+        );
         if (!context.mounted) {
           return;
         }
-        final ok = error == null;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(ok ? 'Connected successfully' : error),
-            backgroundColor: ok ? Colors.green : context.colorScheme.error,
-            duration: const Duration(seconds: 4),
+            content: Text(result.message),
+            backgroundColor: result.ok ? Colors.green : context.colorScheme.error,
+            duration: const Duration(seconds: 8),
           ),
         );
       } finally {

@@ -46,6 +46,11 @@ class CopypartyConfig {
   /// app never requires the bridge, and nothing else reads this value.
   final String bridgeUrl;
 
+  /// Optional copyparty account name. Empty (the default) = log in with the password alone, exactly as before.
+  /// When set, requests authenticate with HTTP Basic `username:password`, which copyparty accepts whether or not the
+  /// server runs with `--usernames`. The password itself stays in secure storage, never here.
+  final String username;
+
   const CopypartyConfig({
     this.hostUrl = '',
     this.uploadPath = '/uploads',
@@ -61,6 +66,7 @@ class CopypartyConfig {
     this.cacheSizeMb = 4096,
     this.defaultDestination = 'both',
     this.bridgeUrl = '',
+    this.username = '',
   });
 
   CopypartyConfig copyWith({
@@ -78,6 +84,7 @@ class CopypartyConfig {
     int? cacheSizeMb,
     String? defaultDestination,
     String? bridgeUrl,
+    String? username,
   }) => CopypartyConfig(
     hostUrl: hostUrl ?? this.hostUrl,
     uploadPath: uploadPath ?? this.uploadPath,
@@ -93,6 +100,7 @@ class CopypartyConfig {
     cacheSizeMb: cacheSizeMb ?? this.cacheSizeMb,
     defaultDestination: defaultDestination ?? this.defaultDestination,
     bridgeUrl: bridgeUrl ?? this.bridgeUrl,
+    username: username ?? this.username,
   );
 
   @override
@@ -112,7 +120,8 @@ class CopypartyConfig {
           other.stageToLocalBeforeUpload == stageToLocalBeforeUpload &&
           other.cacheSizeMb == cacheSizeMb &&
           other.defaultDestination == defaultDestination &&
-          other.bridgeUrl == bridgeUrl);
+          other.bridgeUrl == bridgeUrl &&
+          other.username == username);
 
   @override
   int get hashCode => Object.hash(
@@ -130,6 +139,7 @@ class CopypartyConfig {
     cacheSizeMb,
     defaultDestination,
     bridgeUrl,
+    username,
   );
 
   @override
@@ -141,7 +151,7 @@ class CopypartyConfig {
       'recreateFolderStructure: $recreateFolderStructure, '
       'sortSmallestFirst: $sortSmallestFirst, debugMode: $debugMode, '
       'stageToLocalBeforeUpload: $stageToLocalBeforeUpload, cacheSizeMb: $cacheSizeMb, '
-      'defaultDestination: $defaultDestination, bridgeUrl: $bridgeUrl)';
+      'defaultDestination: $defaultDestination, bridgeUrl: $bridgeUrl, username: $username)';
 
   static bool _listEquals(List<String> a, List<String> b) {
     if (a.length != b.length) {
@@ -154,4 +164,11 @@ class CopypartyConfig {
     }
     return true;
   }
+}
+
+/// The upload path a person's own folder gets by default: their username as the single top-level folder
+/// (`ian` -> `/ian`). Empty when there is no usable username. Used by the "set upload path to the same value" button.
+String uploadPathForUsername(String username) {
+  final name = username.trim().replaceAll(RegExp(r'^/+|/+$'), '');
+  return name.isEmpty ? '' : '/$name';
 }
