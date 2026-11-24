@@ -103,7 +103,7 @@ def test_healthz_and_status(running_server):
     status, body = get_json(base + "/status")
     assert status == 200
     assert body["counts"] == {"imported": 1}
-    assert body["recent"][0]["asset_id"] == "a-1"
+    assert body["recent"] == []  # no bridge token: the open /status carries totals, never file names
 
 
 def test_unknown_route_404(running_server):

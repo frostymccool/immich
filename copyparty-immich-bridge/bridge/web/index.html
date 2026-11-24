@@ -365,7 +365,7 @@
     if (s < 86400) { return Math.round(s / 3600) + ' h ago'; }
     return Math.round(s / 86400) + ' d ago';
   }
-  function statusJson() { return viewUser ? api('GET', '/status' + uq()) : fetch('/status').then(function (r) { return r.json(); }); }
+  function statusJson() { return api('GET', '/status' + uq()); }  // with the token: the open /status has totals only
   function fail(e) { if (e && e.message !== 'auth') { alert(e.message); } }
   function uq(sep) { return viewUser ? (sep || '?') + 'user=' + encodeURIComponent(viewUser) : ''; }
   function withUser(b) { if (viewUser) { b.user = viewUser; } return b; }

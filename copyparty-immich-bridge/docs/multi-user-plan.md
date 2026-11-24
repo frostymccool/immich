@@ -136,7 +136,7 @@ Security
 * **Hook**: with more than one person `/hook` is refused without `BRIDGE_TOKEN`. `bridge_source` only selects a path
   map; an unknown source is ignored (it does not fall through to the global `PATH_MAP`). A claim can only move a file
   out of the main account's catch-all, never out of another person's folder.
-* **Open `/status`**: with several people it shows totals only (no `recent`, no paths/errors); the single-user output
+* **Open `/status`** (since 0.8.0 always totals only, per-person keys empty; each phone uses `/status/me`): with several people it shows totals only (no `recent`, no paths/errors); the single-user output
   is unchanged. Per-person recent files need `?user=` (still the open endpoint, as before for the one person).
 * **Keys**: never returned (not even the last 4 characters); `users.json` is created 0600 via `os.open` + fsync +
   atomic replace; per-person state directories 0700; ids are `[a-z0-9-]{1,32}` and `main`/reserved names refused.

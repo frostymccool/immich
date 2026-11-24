@@ -158,7 +158,8 @@ def test_put_config_applies_live_and_persists(app):
     assert body["values"]["sweep_interval"] == 120
     assert "watch_dirs" in body["overridden"]
     # /status reports the live values too, which is what the phone app shows
-    assert call(base, "GET", "/status", token=None)[1]["priority_dirs"] == [str(media / "other")]
+    assert call(base, "GET", "/status")[1]["priority_dirs"] == [str(media / "other")]
+    assert call(base, "GET", "/status", token=None)[1]["priority_dirs"] == []  # the open one has no folders
 
 
 def test_put_config_rejects_bad_input_with_reasons(app):
@@ -286,9 +287,10 @@ def test_hook_script_without_the_token_is_refused_but_never_fails_the_upload(app
 def test_status_reports_album_health_and_backfill_endpoint_needs_the_token(app):
     make, _ = app
     base, *_ = make()
-    status, body, _ = call(base, "GET", "/status", token=None)
+    status, body, _ = call(base, "GET", "/status")
     assert status == 200
     assert set(body["albums"]) >= {"enabled", "permission", "backfill"}
+    assert call(base, "GET", "/status", token=None)[1]["albums"] == {}
     assert call(base, "POST", "/api/albums/backfill", {}, token=None)[0] == 401
     status, body, _ = call(base, "POST", "/api/albums/backfill", {})
     assert status == 200 and "started" in body
@@ -393,7 +395,8 @@ def test_status_shows_health_counts_without_names(app, monkeypatch):
     base, *_ = make()
     monkeypatch.setattr(PRESSURE, "last_load", 0.42)
     monkeypatch.setattr(PRESSURE, "last_ping", 0.1)
-    st, body, _ = call(base, "GET", "/status", token=None)
+    st, body, _ = call(base, "GET", "/status")
     assert st == 200 and body["backoff"]["load"] == 0.42 and body["backoff"]["ping_s"] == 0.1 and "extras" in body
+    assert "extras" not in call(base, "GET", "/status", token=None)[1]
     page = call(base, "GET", "/", token=None, raw=True)[1]
     assert b'id="healthLine"' in page and b"renderHealth" in page

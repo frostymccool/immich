@@ -223,8 +223,8 @@ wrong account meanwhile.
 - Keys are stored in `/data/users.json` on the state volume (plaintext, mode 600, like `immich-bridge.env`). Back
   that file up with the state volume. Uninstalling keeps that volume; `docker volume rm copyparty_bridge-state`
   removes the keys too. If it ever cannot be read the bridge **refuses to start** rather than guess.
-- With several people `/hook` needs the token (the installer always sets one); the open `/status` the phone reads
-  shows totals and no file names.
+- With several people `/hook` needs the token (the installer always sets one); the open `/status` shows totals and no
+  folders, albums or file names; each phone reads its own person's view from `/status/me` with its Immich sign-in.
 - Each person has their own import workers (`WORKERS`, default 1, per person), so uploads run side by side.
 - With several people, symbolic links are not followed out of a person's folder (so nobody can link to somebody
   else's photos).
@@ -252,7 +252,7 @@ The bridge itself only speaks plain HTTP on its port. If you put a LAN reverse p
 
 - **Open the page** at `https://bridge.example.com/#token=<token>` (the token is in `immich-bridge.env`).
 - **Phone app:** Settings → copyparty → Import Bridge → URL `https://bridge.example.com`. The app only reads
-  `/healthz` and `/status`.
+  `/healthz`, `/status` and `/status/me` (its own person's view, sent with its Immich sign-in, over https only).
 - **Leave copyparty's hook alone.** It talks to the bridge directly over Docker
   (`IMMICH_BRIDGE_URL=http://immich-bridge:8099`), so it does not go through the proxy. Do not expose `/hook`
   or the bridge to the internet; keep the name LAN-only (or behind a VPN/login). The token is the only protection

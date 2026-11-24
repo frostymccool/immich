@@ -514,7 +514,11 @@ def test_status_is_aggregate_without_user_and_scoped_with_it(world):
 
 def test_single_user_status_has_the_old_shape(world):
     status = call(world.base, "GET", "/status", token=None)[1]
-    assert set(status) == {"counts", "queue", "paused", "active", "backlog", "watch_dirs", "priority_dirs", "albums", "recent", "backoff", "extras"}
+    # every key an older phone app reads is still there (empty), so it does not break
+    assert set(status) == {"counts", "queue", "paused", "active", "backlog", "watch_dirs", "priority_dirs", "albums", "recent", "backoff"}
+    assert status["watch_dirs"] == status["recent"] == status["active"] == [] and status["albums"] == {}  # same types as before
+    full = call(world.base, "GET", "/status")[1]
+    assert full["watch_dirs"] and "extras" in full
 
 
 def test_adopt_moves_records_from_the_previous_owner(world):
@@ -1266,3 +1270,51 @@ def test_extra_folders_must_stay_inside_the_persons_own_folder(pworld):
     status, body = call(pworld.base, "PUT", "/api/users/leza", {"folders": [base, outside]})
     assert status == 400 and "outside this person" in body["error"]
     assert pworld.users.get("leza").folders == [base]
+
+
+# ------------------------------------------------------- /status/me: the phone app's own view -------------------------
+
+
+def me(world, token):
+    headers = {} if token is None else {"X-Immich-Token": token}
+    req = urllib.request.Request(world.base + "/status/me", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as ex:
+        return ex.code, json.loads(ex.read())
+
+
+def test_status_me_shows_only_the_signed_in_persons_own_bridge(world):
+    add_alice(world)
+    call(world.base, "POST", "/api/pause", {"paused": False, "user": "alice"})
+    world.manager.check_identities()
+    put(world.tree, "shared/m.jpg", b"m")
+    put(world.tree, "shared/alice/a.jpg", b"a")
+    world.manager.sweep_all()
+    assert world.drain(MAIN_ID) and world.drain("alice")
+    # all sign-ins go to the one Immich server the bridge is set up with (here: main's stub)
+    world.stub_main.user_tokens = {"tok-alice": {"id": "user-alice", "name": "Alice", "email": "alice@example.test"},
+                                   "tok-main": {"id": world.stub_main.user_id, "name": "Main", "email": "m@example.test"},
+                                   "tok-stranger": {"id": "user-zz", "name": "Z", "email": "z@example.test"}}
+    st, body = me(world, "tok-alice")
+    assert st == 200, body
+    assert body["me"] == {"bridge_user": "alice", "name": "Alice"} and body["immich_user"]["id"] == "user-alice"
+    assert body["counts"] == {"imported": 1} and body["users"] == 1
+    assert [r["path"].endswith("a.jpg") for r in body["recent"]] == [True]
+    assert body["watch_dirs"] == [f"{world.tree}/shared/alice"] and "extras" not in body
+    st, body = me(world, "tok-main")
+    assert st == 200 and body["me"]["bridge_user"] == MAIN_ID and "extras" in body
+    assert all(not r["path"].endswith("a.jpg") for r in body["recent"])
+    assert me(world, "tok-stranger") == (404, {"error": "not a bridge user"})
+    assert me(world, "wrong") == (401, {"error": "token not accepted"})
+    assert me(world, None) == (401, {"error": "no token"})
+    # answers are remembered: asking again does not ask Immich again
+    calls = world.stub_main.user_token_calls
+    me(world, "tok-alice"), me(world, "wrong")
+    assert world.stub_main.user_token_calls == calls
+
+
+def test_status_me_says_immich_is_unreachable_not_signed_out(world):
+    world.cfg.immich_url = "http://127.0.0.1:9"
+    assert me(world, "tok-anything") == (503, {"error": "immich unreachable"})

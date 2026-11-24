@@ -3,6 +3,16 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.8.0 - each phone sees only its own person
+
+- New `GET /status/me` for the phone app: it sends its Immich sign-in (`X-Immich-Token`), the bridge asks Immich whose
+  it is and answers only that person's status (counts, queue, folders, albums, recent files), plus who is signed in.
+  401 for a missing or wrong sign-in, 404 for an Immich user with no bridge account, 503 when Immich cannot be asked.
+  Answers are remembered for 5 minutes (60 s for a wrong sign-in); the sign-in is never logged or put in a URL.
+- The open `/status` no longer shows anybody's folders, albums, file names or auto-correct counts: totals, queue,
+  pause and back-off only. The keys are still there, empty, so older app builds keep working. The bridge page sends
+  its token and still sees everything.
+
 ## 0.7.2 - gentler automatic correction
 
 - Automatic correction now waits 6 s after each change (was 2 s, `AUTO_FIX_PAUSE_S`), so a batch of 50 is spread over

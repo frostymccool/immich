@@ -174,7 +174,8 @@ within 5 km of each other, or one within 10 minutes). Everything else is left al
 
 - `POST /hook` — copyparty event receiver (single JSON object, or a list for
   `xiu` batch hooks). Needs the token when `BRIDGE_TOKEN` is set
-- `GET /status` — counters by status, queue depth, `paused`, watch/priority dirs, album health (`albums`: key permission check, added/failed counts, last error, back-fill progress), 20 most recent items (open; the phone app reads it)
+- `GET /status` — open: totals only (counters by status, queue depth, `paused`, backlog, `users`, `backoff`); the per-person keys (`watch_dirs`, `priority_dirs`, `albums`, `recent`, `active`) are present but empty. With the bridge token (`X-Bridge-Token`) it adds watch/priority dirs, album health (`albums`: key permission check, added/failed counts, last error, back-fill progress), the 20 most recent items and `extras` (auto-correct counts, MQTT); `?user=<id>` (token) is one person's view
+- `GET /status/me` — the phone app's own view: header `X-Immich-Token: <the app's Immich access token>`. The bridge asks Immich (`/api/users/me`) whose token it is and answers that person's `?user=` view plus `me` and `immich_user`. 401 = no or wrong token, 404 = an Immich user with no bridge account, 503 = Immich could not be asked (try later). Answers are remembered 5 min (60 s for a wrong token), keyed by a hash; the token is never logged. Send it over https only
 - `GET /healthz` — liveness (open)
 - `GET /` — the web page (the page itself is public; all data behind it needs the token)
 - `GET|PUT /api/config`, `POST /api/config/reset`, `GET /api/fs?path=`, `GET /api/logs`,

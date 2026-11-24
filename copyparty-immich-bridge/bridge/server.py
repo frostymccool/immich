@@ -15,6 +15,7 @@ anonymously. /healthz and /status stay open (the phone app reads them).
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import logging
@@ -73,6 +74,55 @@ def status_extras(geofix) -> dict:
     return out
 
 
+class TokenCheck:
+    """Who an Immich access token (the phone app's sign-in) belongs to, asked of Immich itself.
+
+    Accepted tokens are remembered for 5 minutes and refused ones for 60 s, keyed by a sha256 of the token, so a
+    phone polling /status/me (or a wrong token tried in a loop) does not cost an Immich call each time. The token
+    itself is never stored, logged or put in a URL."""
+
+    OK_S, BAD_S = 300, 60
+
+    def __init__(self, immich_url: Callable[[], str], verify_tls: Callable[[], bool] = lambda: True,
+                 clock: Callable[[], float] = time.monotonic):
+        self._url = immich_url  # read at each check: the Immich address can be changed on the page
+        self._verify = verify_tls
+        self._clock = clock
+        self._cache: dict[str, tuple[float, str, dict | None]] = {}
+        self._lock = threading.Lock()
+
+    def check(self, token: str) -> tuple[str, dict | None]:
+        """("ok", {"id", "name", "email"}) | ("bad", None) | ("down", None): Immich could not be asked."""
+        key = hashlib.sha256(token.encode()).hexdigest()
+        now = self._clock()
+        with self._lock:
+            hit = self._cache.get(key)
+            if hit and hit[0] > now:
+                return hit[1], hit[2]
+        try:
+            resp = requests.get(self._url().rstrip("/") + "/api/users/me", timeout=10, verify=self._verify(),
+                                headers={"x-immich-user-token": token, "Accept": "application/json"})
+        except requests.RequestException:
+            return "down", None
+        if resp.status_code in (401, 403):
+            verdict, who, ttl = "bad", None, self.BAD_S
+        elif resp.status_code != 200:
+            return "down", None
+        else:
+            try:
+                body = resp.json()
+                who = {"id": str(body.get("id") or "").lower(), "name": str(body.get("name") or ""),
+                       "email": str(body.get("email") or "")}
+            except (ValueError, AttributeError):
+                return "down", None
+            verdict, ttl = ("ok", self.OK_S) if who["id"] else ("bad", self.BAD_S)
+        with self._lock:
+            if len(self._cache) > 1000:
+                self._cache = {k: v for k, v in self._cache.items() if v[0] > now}
+            self._cache[key] = (now + ttl, verdict, who)
+        return verdict, who
+
+
 def llms_txt(cfg: Config) -> str:
     """What another agent or person needs to read this bridge's state. Open: holds no secrets and no paths."""
     page = cfg.public_url or "http://<this host>:%d" % cfg.bind_port
@@ -104,6 +154,7 @@ Commands: none.
 ## HTTP (open)
 GET {page}/healthz      liveness and version
 GET {page}/status       totals, queue, backoff (per-person detail needs the token)
+GET {page}/status/me    one person's own status; header X-Immich-Token = their Immich access token (https only)
 GET {page}/llms.txt     this text
 """
 
@@ -118,6 +169,8 @@ def make_handler(
     manager: UserManager | None = None,
     geofix: GeoFix | None = None,
 ) -> type[BaseHTTPRequestHandler]:
+    tokens = TokenCheck(lambda: cfg.immich_url, lambda: cfg.verify_tls)
+
     class Handler(BaseHTTPRequestHandler):
         server_version = f"copyparty-immich-bridge/{__version__}"
 
@@ -232,13 +285,68 @@ def make_handler(
                 "browse_roots": settings.browse_roots,
             }
 
-        def _send_status(self, query: dict) -> None:
-            """/status is open (the phone app reads it): counters, queue, no names, no keys. Without ?user= it
-            is the total over everybody, which for a single-user install is exactly the old output."""
+        def _send_status(self, query: dict, me: str | None = None, extra: dict | None = None) -> None:
+            """/status is open (the phone app reads it): without the bridge token it carries totals only, no
+            folders, albums, file names or paths (the keys stay, empty, so older app builds still read it). With
+            the token, or for /status/me (`me` = the bridge user an Immich sign-in was matched to), the detail."""
+            full = bool(cfg.token) and self._authorized()
+            sent: dict = {}
+            real = self._send_json
+
+            def capture(code: int, payload: dict) -> None:
+                if code == 200 and me is None and not full:
+                    payload = {**payload, "watch_dirs": [], "priority_dirs": [], "albums": {}, "recent": [], "active": []}
+                    payload.pop("extras", None)
+                if code == 200 and me is not None:
+                    payload = {**payload, **(extra or {})}
+                    if me != MAIN_ID:
+                        payload.pop("extras", None)
+                sent["done"] = True
+                real(code, payload)
+
+            self._send_json = capture  # type: ignore[method-assign]
+            try:
+                self._status_body(query if me is None else {"user": [me]}, me is not None)
+            finally:
+                self._send_json = real  # type: ignore[method-assign]
+
+        def _send_status_me(self) -> None:
+            """The phone app's own view: the signed-in Immich user's bridge status, nobody else's."""
+            token = self.headers.get("X-Immich-Token", "").strip()
+            if not token:
+                self._send_json(401, {"error": "no token"})
+                return
+            verdict, who = tokens.check(token)
+            if verdict == "down":
+                self._send_json(503, {"error": "immich unreachable"})
+                return
+            if verdict != "ok" or who is None:
+                self._send_json(401, {"error": "token not accepted"})
+                return
+            uid = None
+            if manager is None:
+                if (worker.immich_user or {}).get("id", "").lower() == who["id"]:
+                    uid = MAIN_ID
+            else:
+                for rt in manager.runtimes():
+                    known = (rt.worker.immich_user or {}).get("id") or ""
+                    if not known and rt.uid != MAIN_ID:
+                        u = manager.users.get(rt.uid)
+                        known = u.immich_id if u else ""
+                    if known and known.lower() == who["id"]:
+                        uid = rt.uid
+                        break
+            if uid is None:
+                self._send_json(404, {"error": "not a bridge user"})
+                return
+            name = (manager.describe(uid) or {}).get("name", "") if manager else who["name"]
+            self._send_status({}, me=uid, extra={"me": {"bridge_user": uid, "name": name}, "immich_user": who})
+
+        def _status_body(self, query: dict, trusted: bool) -> None:
             if (query.get("user") or [None])[0] is not None or self._multi():
                 one = (query.get("user") or [None])[0]
                 if one is not None:
-                    if not self._require_api():  # per-person detail (paths, errors) is not for the open endpoint
+                    if not trusted and not self._require_api():  # per-person detail is not for the open endpoint
                         return
                     ctx = self._ctx(query)
                     if ctx is None:
@@ -425,6 +533,8 @@ def make_handler(
                 self._send_json(200, {"ok": True, "version": __version__, "build": cfg.build})
             elif route == "/status":
                 self._send_status(query)
+            elif route == "/status/me":
+                self._send_status_me()
             elif route == "/llms.txt":
                 body = llms_txt(cfg).encode()
                 self.send_response(200)
