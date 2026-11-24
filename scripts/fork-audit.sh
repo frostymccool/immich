@@ -36,6 +36,7 @@ ALLOW_FILES=(
   "deployment/.env"            # upstream docker-compose sample (DB_PASSWORD=postgres placeholder)
   "docker/example.env"         # upstream sample
   "packages/e2e-auth-server/test-keys.ts"   # upstream e2e test key pair, not a real credential
+  "mobile/test/domain/services/log_service_test.dart"   # upstream v3.4.2 log-redaction test: synthetic access token next to example.com URLs
 )
 allowed() { local f="$1" a; for a in "${ALLOW_FILES[@]}"; do [ "$f" = "$a" ] && return 0; done; return 1; }
 

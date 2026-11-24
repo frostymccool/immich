@@ -28,6 +28,7 @@ vite.config.js.timestamp-*
 .devcontainer/.env*
 *.tsbuildinfo
 *.tsbuildInfo
+misc/release/notes.md
 
 # fork: never commit secrets or local state (installer-generated / signing / debug artifacts)
 immich-bridge*.env

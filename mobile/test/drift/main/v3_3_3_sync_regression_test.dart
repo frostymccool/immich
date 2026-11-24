@@ -86,7 +86,7 @@ void main() {
         );
     expect(
       userVersion,
-      37,
+      db.schemaVersion,
       reason: 'user_version should land on the new schemaVersion',
     );
 

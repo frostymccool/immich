@@ -122,7 +122,7 @@ class Drift extends $Drift {
   @override
   Future<void> close() async {
     await super.close();
-    _updatePool?.close();
+    await _updatePool?.close();
   }
 
   Future<void> reset() async {
@@ -160,7 +160,7 @@ class Drift extends $Drift {
   }
 
   @override
-  int get schemaVersion => 37;
+  int get schemaVersion => 38;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -196,9 +196,22 @@ class Drift extends $Drift {
             }
           }
 
-          // The generated migrationSteps only knows versions 1-34.
-          // Handle v35+ migrations below, separately (raw SQL, not drift-tracked).
-          final stepsTarget = to < 35 ? to : 34;
+          // Same problem, third renumbering (v3.4.2 sync): this fork's raw-SQL copyparty versions were
+          // 35-37, but real upstream v35 adds group_date to the asset tables. A device stored at 35-37 under
+          // the old numbering has real content v34, so if group_date is missing, cap genuine progress at v34
+          // and let the generated from34To35 step run.
+          if (generatedStepsCurrent > 34) {
+            final hasGroupDate = await customSelect(
+              "SELECT 1 FROM pragma_table_info('local_asset_entity') WHERE name = 'group_date'",
+            ).getSingleOrNull();
+            if (hasGroupDate == null) {
+              generatedStepsCurrent = 34;
+            }
+          }
+
+          // The generated migrationSteps knows real upstream versions 1-35 (36-38 carry no drift changes).
+          // Copyparty's raw-SQL table is handled below, separately (not drift-tracked).
+          final stepsTarget = to < 36 ? to : 35;
           if (generatedStepsCurrent < stepsTarget) {
             await m.runMigrationSteps(
               from: generatedStepsCurrent,
@@ -400,22 +413,24 @@ class Drift extends $Drift {
                 from33To34: (m, v34) async {
                   await _healV33DateTimes(this);
                 },
-                from34To36: (m, v36) async {
-                  // No drift-tracked schema changes between v34 and v36 — the
-                  // copyparty_upload_receipts table and its columns are raw SQL,
-                  // handled below (outside the generated migration steps).
+                from34To35: (m, v35) async {
+                  await m.addColumn(v35.remoteAssetEntity, v35.remoteAssetEntity.groupDate);
+                  await m.addColumn(v35.localAssetEntity, v35.localAssetEntity.groupDate);
+                  await m.createIndex(v35.idxRemoteAssetGroup);
+                  await m.createIndex(v35.idxLocalAssetGroup);
                 },
-                from36To37: (m, v37) async {
-                  // No drift-tracked schema changes — v37 exists only to force onUpgrade to
-                  // run again for devices stuck in the broken v36 state (see the
-                  // generatedStepsCurrent repair above and the v3.3.3-sync-regression note).
+                from35To38: (m, v38) async {
+                  // No drift-tracked changes: 36-38 only move past this fork's old raw-SQL copyparty
+                  // numbering (35-37), so every installed custom build runs onUpgrade again.
                 },
               ),
             );
           }
 
-          // v34 → v35: add copyparty upload receipts table (raw SQL, outside generated steps)
-          if (current < 35 && to >= 35) {
+          // Copyparty upload receipts table (raw SQL, outside the generated steps). Runs on every upgrade:
+          // stored version numbers under this fork's renumbered schemes cannot be trusted, and every
+          // statement here is idempotent (IF NOT EXISTS / pragma_table_info guards).
+          if (to >= 36) {
             await customStatement('''
           CREATE TABLE IF NOT EXISTS copyparty_upload_receipts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -435,14 +450,14 @@ class Drift extends $Drift {
             );
           }
 
-          // v35 → v36: add upload_confirmed + immich_asset_id columns.
+          // upload_confirmed + immich_asset_id columns.
           // Devices that installed a pre-merge build already got these columns under an
           // OLDER numbering (this raw-SQL ceiling has been renumbered twice now, once per
           // upstream sync that added real drift-tracked versions below it), so their stored
           // user_version doesn't reliably tell us whether these columns already exist. Check
           // pragma_table_info rather than trusting a version number to avoid a
           // duplicate-column crash.
-          if (current < 36 && to >= 36) {
+          if (to >= 36) {
             final existingColumns = await customSelect(
               "SELECT name FROM pragma_table_info('copyparty_upload_receipts')",
             ).get();
