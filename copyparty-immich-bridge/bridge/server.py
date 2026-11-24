@@ -58,6 +58,21 @@ def _load_ui() -> bytes:
         return b"<h1>web page missing from this build</h1>"
 
 
+def status_extras(geofix) -> dict:
+    """Counts only (no names or paths): safe for the open /status."""
+    out: dict = {}
+    auto = getattr(geofix, "autofix", None)
+    if auto is not None:
+        try:
+            out["autofix"] = {"on": bool(getattr(auto, "enabled", lambda: False)()), "counts": auto.describe(0)["counts"]}
+        except Exception:
+            pass
+    mq = getattr(geofix, "mqtt", None)
+    if mq is not None:
+        out["mqtt"] = {"on": bool(mq.url()), "connected": mq.connected, "error": mq.last_error[:120] if mq.last_error else ""}
+    return out
+
+
 def llms_txt(cfg: Config) -> str:
     """What another agent or person needs to read this bridge's state. Open: holds no secrets and no paths."""
     page = cfg.public_url or "http://<this host>:%d" % cfg.bind_port
@@ -269,7 +284,7 @@ def make_handler(
                         "albums": parts[0][0].album_info() if one is not None else worker.album_info(),
                         "recent": recent,
                         "users": len(parts) if one is None else 1,
-                        "backoff": PRESSURE.describe(),
+                        "backoff": PRESSURE.describe(), "extras": status_extras(geofix),
                     },
                 )
                 return
@@ -296,7 +311,7 @@ def make_handler(
                     "priority_dirs": (manager.runtime(MAIN_ID).view.priority_dirs if manager and manager.runtime(MAIN_ID) else cfg.priority_dirs),
                     "albums": worker.album_info(),
                     "recent": recent,
-                    "backoff": PRESSURE.describe(),
+                    "backoff": PRESSURE.describe(), "extras": status_extras(geofix),
                 },
             )
 

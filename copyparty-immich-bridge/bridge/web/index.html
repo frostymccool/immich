@@ -161,6 +161,7 @@
         <h2>Imports</h2>
         <div id="pauseNote"></div>
         <div id="backoffNote"></div>
+        <div id="healthLine" class="muted" style="margin:0 0 10px"></div>
         <div id="alertsAcct"></div>
         <div id="alertsAlbum"></div>
         <div class="strip" id="tiles"></div>
@@ -495,6 +496,27 @@
     renderAlbums(s.albums);
     renderPaused(s.paused, s.queue);
     renderBackoff(s.backoff);
+    renderHealth(s.backoff, s.extras);
+  }
+  function renderHealth(b, x) {
+    var box = $('healthLine'); box.textContent = '';
+    if (!b) { return; }
+    x = x || {};
+    var dot = function (ok, warn) { var d = el('span', {}, '\u25CF '); d.style.color = ok ? 'var(--ok)' : warn ? 'var(--warn)' : 'var(--bad)'; return d; };
+    var part = function (ok, warn, text, tip) { var s = el('span', { title: tip || '' }); s.appendChild(dot(ok, warn)); s.appendChild(document.createTextNode(text)); s.style.marginRight = '18px'; s.style.whiteSpace = 'nowrap'; box.appendChild(s); };
+    var bits = [];
+    if (b.load !== null && b.load !== undefined) { bits.push('server load ' + b.load.toFixed(1) + ' per CPU'); }
+    if (b.ping_s !== null && b.ping_s !== undefined) { bits.push('answers in ' + b.ping_s.toFixed(1) + ' s'); }
+    part(!b.busy, false, (b.busy ? 'Immich overloaded' : 'Immich healthy') + (bits.length ? ' · ' + bits.join(' · ') : ''),
+      'Checked every 30 s. The bridge holds off by itself at 3 per CPU or a 5 s answer, and resumes under 1.5.');
+    if (x.autofix) {
+      var c = x.autofix.counts || {};
+      part(x.autofix.on, true, 'Auto-correct ' + (x.autofix.on ? 'on' : 'off') + ' · ' + (c.applied || 0) + ' fixed · ' + (c.review || 0) + ' waiting for evidence',
+        'Place and time zone set from your own geotagged photos, on strong evidence only. Waiting files are checked again every 6 hours.');
+    }
+    if (x.mqtt && x.mqtt.on) {
+      part(x.mqtt.connected, false, 'MQTT ' + (x.mqtt.connected ? 'connected' : 'not connected'), x.mqtt.error || 'State under ImmichBridge/');
+    }
   }
   function renderBackoff(b) {
     var box = $('backoffNote'); box.textContent = '';

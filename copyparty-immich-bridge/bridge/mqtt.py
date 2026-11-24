@@ -61,6 +61,9 @@ class MqttPublisher:
         self.connected = False
         self.last_error = ""
 
+    def url(self) -> str:
+        return self._url()
+
     def event(self, level: str, msg: str) -> None:
         self._put(("event", json.dumps({"t": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "level": level, "src": "bridge", "msg": msg}), False))
 

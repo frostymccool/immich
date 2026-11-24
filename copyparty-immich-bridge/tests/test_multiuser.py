@@ -514,7 +514,7 @@ def test_status_is_aggregate_without_user_and_scoped_with_it(world):
 
 def test_single_user_status_has_the_old_shape(world):
     status = call(world.base, "GET", "/status", token=None)[1]
-    assert set(status) == {"counts", "queue", "paused", "active", "backlog", "watch_dirs", "priority_dirs", "albums", "recent", "backoff"}
+    assert set(status) == {"counts", "queue", "paused", "active", "backlog", "watch_dirs", "priority_dirs", "albums", "recent", "backoff", "extras"}
 
 
 def test_adopt_moves_records_from_the_previous_owner(world):

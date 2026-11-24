@@ -51,6 +51,7 @@ class AutoFix:
         self._lock = threading.Lock()
         self._running = False
         self.last_run = 0.0
+        self.enabled = lambda: False  # set by the app: the auto_fix setting
         self._db = sqlite3.connect(db_path, check_same_thread=False)
         self._db.execute("""CREATE TABLE IF NOT EXISTS autofix (asset_id TEXT PRIMARY KEY, path TEXT, status TEXT, reason TEXT,
             lat REAL, lon REAL, zone TEXT, new_time TEXT, old_time TEXT, old_zone TEXT, source_asset TEXT, gap_s INTEGER,

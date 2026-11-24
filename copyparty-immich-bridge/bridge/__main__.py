@@ -130,6 +130,7 @@ def main() -> int:
     # Main account only: other people's libraries are never changed without their own say-so
     autofix = AutoFix(os.path.join(data_dir, "autofix.db"), geofix, state, client)
     geofix.autofix = autofix
+    autofix.enabled = lambda: cfg.auto_fix
 
     def auto_fix_loop() -> None:
         while not stop_event.wait(300):
@@ -168,6 +169,7 @@ def main() -> int:
 
     mqtt = MqttPublisher(lambda: cfg.mqtt_url, snapshot, register=register)
     mqtt.start()
+    geofix.mqtt = mqtt
 
     def on_backoff(info: dict) -> None:
         mqtt.event("warn" if info["busy"] else "info",

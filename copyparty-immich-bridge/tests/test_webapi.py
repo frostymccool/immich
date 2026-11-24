@@ -384,3 +384,16 @@ def test_mqtt_and_public_url_settings_are_checked(app):
     assert st == 200
     st, body, _ = call(base, "GET", "/api/config")
     assert body["values"]["mqtt_url"] == "mqtt://broker.example:1883" and body["values"]["public_url"] == "http://bridge.example:8099"
+
+
+def test_status_shows_health_counts_without_names(app, monkeypatch):
+    from bridge.pressure import PRESSURE
+
+    make, _ = app
+    base, *_ = make()
+    monkeypatch.setattr(PRESSURE, "last_load", 0.42)
+    monkeypatch.setattr(PRESSURE, "last_ping", 0.1)
+    st, body, _ = call(base, "GET", "/status", token=None)
+    assert st == 200 and body["backoff"]["load"] == 0.42 and body["backoff"]["ping_s"] == 0.1 and "extras" in body
+    page = call(base, "GET", "/", token=None, raw=True)[1]
+    assert b'id="healthLine"' in page and b"renderHealth" in page

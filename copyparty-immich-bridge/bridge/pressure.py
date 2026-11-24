@@ -53,13 +53,17 @@ class Pressure:
         self.since = 0.0
         self.until = 0.0
         self.level = 0
+        self.last_load: float | None = None
+        self.last_ping: float | None = None
+        self.checked_at = 0.0
         self.listeners: list[Callable[[dict], None]] = []
         self._stop = threading.Event()
 
     def describe(self) -> dict:
         with self._lock:
             return {"busy": self.busy, "reason": self.reason, "since": self.since or None, "until": self.until or None,
-                    "level": self.level}
+                    "level": self.level, "load": None if self.last_load is None else round(self.last_load, 2),
+                    "ping_s": None if self.last_ping is None else round(self.last_ping, 2), "checked_at": self.checked_at or None}
 
     def _notify(self) -> None:
         info = self.describe()
@@ -72,11 +76,13 @@ class Pressure:
     def measure(self) -> str:
         """Why Immich should be left alone right now ('' = healthy)."""
         load = self._load()
+        self.last_load, self.checked_at = load, self._clock()
         limit = LOAD_OK if self.busy else LOAD_HIGH
         if load is not None and load >= limit:
             return f"the server is overloaded (load {load:.1f} per CPU)"
         if self._ping is not None:
             took = self._ping()
+            self.last_ping = took
             if took is None:
                 return "Immich does not answer"
             if took >= PING_SLOW_S:

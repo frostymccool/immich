@@ -3,6 +3,13 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.7.1 - health line on the Status tab
+
+- The Status tab always shows a one-line health summary under **Imports**: whether Immich is healthy, the server load
+  per CPU and how fast Immich answers (checked every 30 s), auto-correct on/off with how many files it fixed and how
+  many wait for evidence, and whether MQTT is connected. `/status` carries the same numbers (`backoff.load`,
+  `backoff.ping_s`, `extras.autofix.counts`, `extras.mqtt`); counts only, no names or paths.
+
 ## 0.7.0 - backs off when Immich is overloaded; MQTT
 
 - **Backs off by itself** when the server is overloaded (load per CPU of 3 or more, `BACKOFF_LOAD`), Immich is slow
