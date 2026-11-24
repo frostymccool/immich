@@ -162,8 +162,8 @@ def test_scan_groups_files_and_suggests_the_place(rig):
 
 def test_real_camera_tag_shapes_insta360_uses_the_clock_in_its_name(rig):
     """Tags exactly as real exiftool -json -n printed them for a HERO9 and an Insta360 video (no Make on either, no
-    zone, no GPS). Insta360's CreateDate is the camera clock already turned into UTC (here 9 h behind the name), so
-    the wall clock comes from the name; GoPro's CreateDate IS the wall clock."""
+    zone, no GPS). Insta360's CreateDate is the true instant in UTC (here 9 h behind the name), so name + tag give the
+    wall clock AND the camera's zone; GoPro's CreateDate IS the wall clock."""
     rig.add("Kyoto walk/GX013948.MP4", {"CreateDate": "2026:05:01 14:03:22", "MediaCreateDate": "2026:05:01 14:03:22",
                                         "Model": "HERO9 Black"})
     rig.add("Kyoto walk/VID_20260501_142000_00_001.insv", {"CreateDate": "2026:05:01 05:20:00",
@@ -171,7 +171,28 @@ def test_real_camera_tag_shapes_insta360_uses_the_clock_in_its_name(rig):
     out = rig.scan()
     (only,) = out["sessions"]  # both on the same afternoon: ONE group, not split by the 9 h UTC gap
     assert (only["start"], only["end"]) == ("2026-05-01T14:03:22", "2026-05-01T14:20:00")
-    assert only["needs"] == {"place and time zone": 2} and only["suggestions"][0]["label"] == "Kyoto, Japan"
+    assert only["needs"] == {"place and time zone": 1, "place": 1} and only["suggestions"][0]["label"] == "Kyoto, Japan"
+
+
+@pytest.mark.parametrize("name,tag,wall,offset", [
+    ("VID_20260501_142000_00_001.insv", "2026:05:01 05:20:00", datetime(2026, 5, 1, 14, 20), 540),  # lens field
+    ("VID_20260501_073835_005.mp4", "2026:05:01 15:38:35", datetime(2026, 5, 1, 7, 38, 35), -480),  # no lens field
+    ("VID_20260501_142001_006.mp4", "2026:05:01 04:50:00", datetime(2026, 5, 1, 14, 20, 1), 570),  # half-hour zone
+    ("VID_20260501_142000_007.mp4", "2026:05:01 05:13:00", datetime(2026, 5, 1, 14, 20), None),  # not a real zone
+])
+def test_an_insta360_video_knows_its_true_instant_from_name_and_tag(rig, name, tag, wall, offset):
+    clip = rig.add("Trip/" + name, {"CreateDate": tag})
+    f = rig.gf._read_metadata([clip])[0]
+    assert (f["taken"], f["offset_min"]) == (wall, offset)
+
+
+def test_a_camera_left_on_another_zone_is_matched_by_its_true_instant(rig):
+    """The camera still says the last trip's zone: only the UTC instant finds the photos really taken at that moment."""
+    rig.add("Trip/VID_20260501_232000_001.mp4", {"CreateDate": "2026:05:01 05:20:00"})  # wall clock on UTC+18 is refused
+    clip = rig.add("Trip/VID_20260501_012000_002.mp4", {"CreateDate": "2026:05:01 05:20:00"})  # camera on UTC-4
+    f = rig.gf._read_metadata([clip])[0]
+    assert f["taken"] - timedelta(minutes=f["offset_min"]) == datetime(2026, 5, 1, 5, 20)
+    assert f["need"] == "place"
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs real ffmpeg")

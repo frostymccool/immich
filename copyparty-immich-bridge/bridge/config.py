@@ -78,6 +78,9 @@ class Config:
     # Also add every imported file to an album named after the folder it sits in (created on demand).
     album_from_folder: bool = True
 
+    # After import, correct place and time zone from the account's own geotagged photos, on strong evidence only.
+    auto_fix: bool = False
+
     # Explicit extension allow-list; empty = ask Immich /server/media-types.
     include_extensions: set[str] = field(default_factory=set)
 
@@ -190,6 +193,7 @@ class Config:
             move_subdir=e.get("MOVE_SUBDIR", ".imported").strip() or ".imported",
             album_name=e.get("IMMICH_ALBUM_NAME", "").strip(),
             album_from_folder=e.get("ALBUM_FROM_FOLDER", "true").strip().lower() not in ("0", "false", "no", "off"),
+            auto_fix=e.get("AUTO_FIX", "false").strip().lower() in ("1", "true", "yes", "on"),
             include_extensions=include_extensions,
             bind_host=e.get("BIND_HOST", "0.0.0.0").strip() or "0.0.0.0",
             bind_port=_int("BIND_PORT", 8099, minimum=1),

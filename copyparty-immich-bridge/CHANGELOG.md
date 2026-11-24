@@ -3,6 +3,18 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.6.0 - automatic place and time zone from your own photos
+
+- **New setting `auto_fix` (`AUTO_FIX`, off by default).** After imports finish, files this bridge imported that have no
+  place are compared with the account's geotagged photos. A file is changed only when its true instant is known and
+  photos within 30 minutes agree on the place (two photos within 5 km of each other, or one within 10 minutes). The
+  same instant is then shown in the local time of that place. Only Immich's metadata changes, never the original.
+- Anything else stays as it is, is listed with the reason (`GET /api/geofix/auto`), and is checked again every 6 hours
+  because new photos can settle it. Files Immich already had, and other people's accounts, are never changed.
+- **Insta360 videos now know their true time.** The stored tag is the instant in UTC and the file name is the wall
+  clock in whatever zone the camera was left on, so together they give both. Names without the lens field are now
+  recognised too. Before, such a clip could match photos from hours away and be moved by that much when accepted.
+
 ## 0.5.2 - the token can be saved by the browser
 
 - The sign-in box is now a real sign-in form (user name `immich-bridge`, the token as password), so Chrome and other

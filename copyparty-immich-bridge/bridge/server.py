@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -287,6 +288,9 @@ def make_handler(
                     self._send_bytes(200, geofix.thumbnail(one("path"), big=one("big") == "1"), "image/jpeg", {"Cache-Control": "private, max-age=3600"})
                 elif route == "/api/geofix/saved-places":
                     self._send_json(200, {"places": geofix.saved_places()})
+                elif route == "/api/geofix/auto":
+                    auto = getattr(geofix, "autofix", None)
+                    self._send_json(200, auto.describe() if auto else {"error": "not running"})
                 elif route == "/api/geofix/sidecar":
                     self._send_bytes(200, geofix.preview_sidecar(one("path")), "text/plain; charset=utf-8")
                 elif route in ("/api/geofix/immich-thumb", "/api/geofix/places"):
@@ -340,6 +344,13 @@ def make_handler(
                     else:
                         self._send_json(200, geofix.save_place(body.get("name"), body.get("lat"), body.get("lon"), body.get("radius_m")))
                         return
+                elif self.path == "/api/geofix/auto/run":
+                    auto = getattr(geofix, "autofix", None)
+                    if auto is None:
+                        raise GeoFixError("automatic correction is not running", 503)
+                    threading.Thread(target=auto.run_once, name="auto-fix-now", daemon=True).start()
+                    self._send_json(200, {"started": True})
+                    return
                 elif self.path == "/api/geofix/accept-confident":
                     self._send_json(200, {"accepted": geofix.accept_confident()})
                     return

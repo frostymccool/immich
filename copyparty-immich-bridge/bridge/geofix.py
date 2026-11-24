@@ -99,9 +99,9 @@ VIDEO_EXT = {"mp4", "mov", "insv", "lrv", "360", "m4v", "avi", "mts", "mkv"}
 # Insta360 names carry the camera's wall clock: VID_20260501_142000_00_001.insv (LRV_/IMG_ too; _LL_ = lens/type).
 # Its QuickTime CreateDate is that clock turned into UTC with the zone set IN THE CAMERA (seen on real files: hours off,
 # not always the zone the camera was really in), so for a zone-less match the name is the trustworthy local clock.
-INSTA360_NAME = re.compile(r"^(?:VID|LRV|IMG)_(\d{8}_\d{6})_\d{2}_\d{3}\.", re.I)
+INSTA360_NAME = re.compile(r"^(?:VID|LRV|IMG)_(\d{8}_\d{6})(?:_\d{2})?_\d{3}\.", re.I)
 QUICKTIME_KEYS = ("CreateDate", "MediaCreateDate")
-READER_VERSION = 4  # bump whenever a change to reading metadata must invalidate the cached files table
+READER_VERSION = 5  # bump whenever a change to reading metadata must invalidate the cached files table
 
 
 class GeoFixError(Exception):
@@ -136,6 +136,14 @@ def insta360_clock(path: str) -> datetime | None:
         return datetime.strptime(m.group(1), "%Y%m%d_%H%M%S")
     except ValueError:
         return None
+
+
+def clock_offset(wall: datetime, utc: datetime) -> int | None:
+    """The zone a camera was set to, from its wall clock and the UTC time it stored (minutes east of UTC). None unless
+    the difference is a real zone: a quarter-hour step (within 2 min, the name and tag can differ by seconds) in range."""
+    minutes = (wall - utc).total_seconds() / 60
+    step = round(minutes / 15) * 15
+    return step if abs(minutes - step) <= 2 and -12 * 60 <= step <= 14 * 60 else None
 
 
 def bad_date(taken: datetime | None, model: str, now: datetime | None = None) -> str:
@@ -660,8 +668,13 @@ class GeoFix:
                     if taken is not None:
                         break
                 raw = str(t.get(key) or "") if taken is not None else ""  # what Immich itself will read
-                if key in QUICKTIME_KEYS and offset is None:
-                    taken = insta360_clock(p) or taken
+                if key in QUICKTIME_KEYS and offset is None and taken is not None:
+                    # Insta360 videos: the tag is the true instant in UTC, the name the wall clock in whatever zone the
+                    # camera was left on (often the previous trip's), so together they pin the instant exactly
+                    wall = insta360_clock(p)
+                    if wall is not None:
+                        offset = clock_offset(wall, taken)
+                        taken = wall
                 if offset is None:
                     offset = parse_offset(t.get("OffsetTimeOriginal"))
                 if offset is None:

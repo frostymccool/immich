@@ -96,6 +96,8 @@ starts the bridge, asks only for the Immich API key). The manual steps below are
 | `IMMICH_CLIP_MODEL` | `ViT-B-32__openai` | The image-recognition model asked for; set it to the one in Immich's Administration > Machine Learning, or the service loads a second model |
 | `GEOFIX_LOOK_ALIKE` | `0.80` | How alike (CLIP cosine similarity, 0-1) two groups' frames must be to be joined |
 | `GEOFIX_SHOT_INTERVAL_S` | `90` | Seconds a shot assumed when dating an undated file from its file number and only one dated neighbour |
+| `AUTO_FIX` | `false` | After import, set place and local time from the account's own geotagged photos, on strong evidence only (also editable through `PUT /api/config` as `auto_fix`). Main account only |
+| `AUTO_FIX_WINDOW_S` | `1800` | How far in time a geotagged photo may be from a file to count as evidence |
 | `SOURCE_MAPS` | *(empty)* | Several copyparty containers: `name\|/their/path=/bridge/path[,…]` — how to translate hook paths from the container whose hook sets `IMMICH_BRIDGE_SOURCE=name` (the installer writes this for `EXTRA_COPYPARTY`) |
 
 ## Web page (settings, folder picker, status, logs)
@@ -155,6 +157,11 @@ How files are grouped and dated (0.5.0):
   to Immich with a description saying how it was made (`Date estimated by copyparty-immich-bridge: …`).
 - **A geotagged shot next to an untagged one** (same camera and folder, at most 10 file numbers away) is the first
   suggestion for its place.
+
+**Automatic correction (`AUTO_FIX`).** When the queue is empty, files the bridge imported without a place are checked
+against the account's geotagged photos. A change needs a known true instant and agreeing photos within 30 minutes (two
+within 5 km of each other, or one within 10 minutes). Everything else is left alone and listed with its reason at
+`GET /api/geofix/auto`; `POST /api/geofix/auto/run` starts a pass now. Each change is logged with the values it replaced.
 
 ![Fix locations tab](docs/ui-fix-locations.png)
 

@@ -35,6 +35,7 @@ EDITABLE = (
     "post_import_action",
     "album_name",
     "album_from_folder",
+    "auto_fix",
     "people_root",
     "paused",
     "include_extensions",
@@ -164,7 +165,7 @@ def validate(cfg: Config, changes: dict[str, Any], browse_roots: list[str]) -> d
         else:
             out["people_root"] = ""
 
-    for flag in ("album_from_folder", "paused"):
+    for flag in ("album_from_folder", "auto_fix", "paused"):
         if flag in changes:
             raw = changes[flag]
             if isinstance(raw, bool):

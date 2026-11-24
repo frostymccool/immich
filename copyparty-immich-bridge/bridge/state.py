@@ -215,6 +215,15 @@ class StateStore:
             ).fetchall()
         return [(p, a) for p, a in rows]
 
+    def imported_assets(self) -> list[tuple[str, str]]:
+        """(path, asset id) of files THIS bridge put into Immich; ones Immich already had are never auto-corrected."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT path, asset_id FROM files WHERE status = 'imported' "
+                "AND asset_id IS NOT NULL AND asset_id != '' AND asset_id != 'present' ORDER BY updated_at"
+            ).fetchall()
+        return [(p, a) for p, a in rows]
+
     def recent(self, limit: int = 20) -> list[FileRecord]:
         with self._lock:
             if self._closed:

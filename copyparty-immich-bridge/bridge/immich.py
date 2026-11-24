@@ -246,6 +246,17 @@ class ImmichClient:
         self._explain(resp, "look up photos (asset.read)")
         return resp.json()
 
+    def get_asset(self, asset_id: str) -> dict:
+        """GET /assets/{id} (permission asset.read), with its EXIF."""
+        resp = self._session.get(f"{self._base}/api/assets/{asset_id}", timeout=self._timeout)
+        self._explain(resp, "read a photo (asset.read)")
+        return resp.json()
+
+    def update_asset(self, asset_id: str, fields: dict) -> None:
+        """PUT /assets/{id} (permission asset.update): place / time in Immich's metadata; the original is not touched."""
+        resp = self._session.put(f"{self._base}/api/assets/{asset_id}", json=fields, timeout=self._timeout)
+        self._explain(resp, "update a photo (asset.update)")
+
     def search_places(self, name: str) -> list[dict]:
         """GET /search/places (permission asset.read): Immich's own place-name index."""
         resp = self._session.get(self._base + "/api/search/places", params={"name": name}, timeout=self._timeout)

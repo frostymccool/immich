@@ -11,6 +11,7 @@ import time
 
 from bridge import __version__
 from bridge.config import Config, ConfigError
+from bridge.autofix import AutoFix
 from bridge.geofix import GeoFix, clip_embedder
 from bridge.immich import DEFAULT_EXTENSIONS, ImmichClient, ImmichError
 from bridge.logbuffer import RingLogHandler
@@ -123,6 +124,19 @@ def main() -> int:
     geofix = GeoFix(os.path.join(data_dir, "geofix.db"), lambda: settings.browse_roots, lambda: worker.allowed_extensions,
                     embed=clip_embedder(os.environ.get("IMMICH_ML_URL", ""), clip_model), embed_model=clip_model)
     ImportWorker.geofix = geofix
+    # Main account only: other people's libraries are never changed without their own say-so
+    autofix = AutoFix(os.path.join(data_dir, "autofix.db"), geofix, state, client)
+    geofix.autofix = autofix
+
+    def auto_fix_loop() -> None:
+        while not stop_event.wait(300):
+            if cfg.auto_fix and not cfg.paused and worker.queue_size == 0:  # imports first
+                try:
+                    autofix.run_once()
+                except Exception:
+                    log.exception("auto-fix pass failed")
+
+    threading.Thread(target=auto_fix_loop, name="auto-fix", daemon=True).start()
     httpd = serve(cfg, state, worker, settings, logs, scan_now=wake_sweep.set, manager=manager, geofix=geofix)
 
     def shutdown(signum, frame) -> None:
@@ -138,6 +152,7 @@ def main() -> int:
     httpd.serve_forever()
     manager.close_all()
     router.close()
+    autofix.close()
     geofix.close()
     state.close()
     client.close()
