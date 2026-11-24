@@ -5,6 +5,38 @@ import 'package:http/http.dart' as http;
 
 enum BridgeHealth { disabled, invalidUrl, unreachable, running }
 
+/// Whose information the bridge showed. Personal detail (counts, folders, albums, recent files) only ever
+/// comes from `/status/me`, which identifies the person by their own Immich login; the open `/status`
+/// is never read for it, so one person can never see another's imports.
+enum BridgeAccess {
+  /// Not asked yet (bridge disabled, invalid or unreachable).
+  notChecked,
+
+  /// `/status/me` answered for this person.
+  signedIn,
+
+  /// The bridge URL is plain http: the Immich login is never sent without TLS.
+  needsHttps,
+
+  /// The app has no Immich login to identify the person with.
+  notSignedIn,
+
+  /// The bridge could not confirm the Immich login (HTTP 401).
+  tokenRejected,
+
+  /// A valid Immich user that has no account on the bridge (HTTP 404 "not a bridge user").
+  notBridgeUser,
+
+  /// The bridge cannot reach Immich right now (HTTP 503): try later, the person is not signed out.
+  immichUnreachable,
+
+  /// The bridge predates `/status/me` (older than 0.8.0).
+  bridgeTooOld,
+
+  /// Any other failure of the personal status request.
+  failed,
+}
+
 class BridgeRecentItem {
   final String path;
   final String status;
@@ -33,6 +65,11 @@ class BridgeStatus {
   /// The normalised bridge address (also serves its web page); null unless the URL parsed.
   final Uri? baseUrl;
 
+  final BridgeAccess access;
+
+  /// The person the bridge identified (its display name for them), when [access] is [BridgeAccess.signedIn].
+  final String? signedInAs;
+
   const BridgeStatus({
     required this.health,
     required this.checkedAt,
@@ -43,7 +80,24 @@ class BridgeStatus {
     this.priorityDirs = const [],
     this.recent = const [],
     this.baseUrl,
+    this.access = BridgeAccess.notChecked,
+    this.signedInAs,
   });
+
+  /// One line for the "Test bridge" result and the status tile when no personal detail is shown.
+  String get accessMessage => switch (access) {
+    BridgeAccess.signedIn => 'Signed in as ${signedInAs ?? 'you'}',
+    BridgeAccess.needsHttps =>
+      'Use the bridge\'s https:// address to see your own imports. Your Immich login is never sent over plain http.',
+    BridgeAccess.notSignedIn => 'Sign in to Immich to see your own imports.',
+    BridgeAccess.tokenRejected =>
+      'The bridge could not confirm your Immich login. Sign out and back in if this persists.',
+    BridgeAccess.notBridgeUser => 'Your Immich account is not set up on this bridge.',
+    BridgeAccess.immichUnreachable => 'The bridge cannot reach Immich right now. Try again later.',
+    BridgeAccess.bridgeTooOld => 'This bridge is too old to show your own imports. Update it to 0.8.0 or later.',
+    BridgeAccess.failed => 'Could not read your bridge status. Try again later.',
+    BridgeAccess.notChecked => '',
+  };
 
   int get imported => counts['imported'] ?? 0;
   int get duplicates => counts['duplicate'] ?? 0;
@@ -63,7 +117,7 @@ class BridgeStatus {
   }
 }
 
-/// Reads the optional copyparty-immich-bridge's /healthz and /status.
+/// Reads the optional copyparty-immich-bridge's /healthz and, for the signed-in person only, /status/me.
 ///
 /// Strictly best-effort and informational: every failure mode (blank URL, bad
 /// URL, bridge down, slow, garbage response) maps to a [BridgeStatus] and is
@@ -96,7 +150,9 @@ class ImmichBridgeStatusService {
     return uri;
   }
 
-  Future<BridgeStatus> fetch(String rawUrl) async {
+  /// [immichToken] is the app's Immich access token. It is sent only to an https bridge URL, in the
+  /// `X-Immich-Token` header, and the bridge answers with that person's own status.
+  Future<BridgeStatus> fetch(String rawUrl, {String? immichToken}) async {
     final checkedAt = _now();
     if (rawUrl.trim().isEmpty) {
       return BridgeStatus(health: BridgeHealth.disabled, checkedAt: checkedAt);
@@ -106,45 +162,79 @@ class ImmichBridgeStatusService {
       return BridgeStatus(health: BridgeHealth.invalidUrl, checkedAt: checkedAt);
     }
 
+    final String? version;
     try {
-      final healthBody = await _getJson(base, '/healthz');
+      final health = await _get(base, '/healthz');
+      final healthBody = health.statusCode == 200 ? jsonDecode(utf8.decode(health.bodyBytes)) : null;
       if (healthBody is! Map || healthBody['ok'] != true) {
         return BridgeStatus(health: BridgeHealth.unreachable, checkedAt: checkedAt);
       }
-      final version = healthBody['version'] is String ? healthBody['version'] as String : null;
+      version = healthBody['version'] is String ? healthBody['version'] as String : null;
+    } catch (_) {
+      return BridgeStatus(health: BridgeHealth.unreachable, checkedAt: checkedAt);
+    }
 
-      // /status adds detail; the bridge is still "running" if only this part fails.
+    BridgeStatus running(BridgeAccess access) => BridgeStatus(
+      health: BridgeHealth.running,
+      checkedAt: checkedAt,
+      version: version,
+      baseUrl: base,
+      access: access,
+    );
+
+    if (base.scheme != 'https') {
+      return running(BridgeAccess.needsHttps);
+    }
+    final token = immichToken?.trim() ?? '';
+    if (token.isEmpty) {
+      return running(BridgeAccess.notSignedIn);
+    }
+
+    try {
+      final response = await _get(base, '/status/me', headers: {'X-Immich-Token': token});
+      Object? body;
       try {
-        final statusBody = await _getJson(base, '/status');
-        if (statusBody is Map) {
+        body = jsonDecode(utf8.decode(response.bodyBytes));
+      } catch (_) {
+        body = null;
+      }
+      switch (response.statusCode) {
+        case 200 when body is Map:
+          final me = body['me'];
+          final who = me is Map && me['name'] is String && (me['name'] as String).isNotEmpty
+              ? me['name'] as String
+              : null;
           return BridgeStatus(
             health: BridgeHealth.running,
             checkedAt: checkedAt,
             baseUrl: base,
             version: version,
-            counts: _parseCounts(statusBody['counts']),
-            queue: statusBody['queue'] is int ? statusBody['queue'] as int : 0,
-            watchDirs: _parseStrings(statusBody['watch_dirs']),
-            priorityDirs: _parseStrings(statusBody['priority_dirs']),
-            recent: _parseRecent(statusBody['recent']),
+            access: BridgeAccess.signedIn,
+            signedInAs: who,
+            counts: _parseCounts(body['counts']),
+            queue: body['queue'] is int ? body['queue'] as int : 0,
+            watchDirs: _parseStrings(body['watch_dirs']),
+            priorityDirs: _parseStrings(body['priority_dirs']),
+            recent: _parseRecent(body['recent']),
           );
-        }
-      } catch (_) {
-        // fall through to the health-only result
+        case 401:
+          return running(BridgeAccess.tokenRejected);
+        case 404:
+          final notUser = body is Map && body['error'] == 'not a bridge user';
+          return running(notUser ? BridgeAccess.notBridgeUser : BridgeAccess.bridgeTooOld);
+        case 503:
+          return running(BridgeAccess.immichUnreachable);
+        default:
+          return running(BridgeAccess.failed);
       }
-      return BridgeStatus(health: BridgeHealth.running, checkedAt: checkedAt, version: version, baseUrl: base);
     } catch (_) {
-      return BridgeStatus(health: BridgeHealth.unreachable, checkedAt: checkedAt);
+      return running(BridgeAccess.failed);
     }
   }
 
-  Future<Object?> _getJson(Uri base, String path) async {
+  Future<http.Response> _get(Uri base, String path, {Map<String, String>? headers}) {
     final basePath = base.path.endsWith('/') ? base.path.substring(0, base.path.length - 1) : base.path;
-    final response = await _client.get(base.replace(path: '$basePath$path')).timeout(_timeout);
-    if (response.statusCode != 200) {
-      throw http.ClientException('HTTP ${response.statusCode}');
-    }
-    return jsonDecode(utf8.decode(response.bodyBytes));
+    return _client.get(base.replace(path: '$basePath$path'), headers: headers).timeout(_timeout);
   }
 
   static List<String> _parseStrings(Object? raw) => raw is List

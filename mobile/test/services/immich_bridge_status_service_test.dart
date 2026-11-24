@@ -71,69 +71,128 @@ void main() {
     });
   });
 
-  group('fetch parses a healthy bridge', () {
-    test('reads version, counts, queue and recent activity', () async {
+  group('per-person status (/status/me)', () {
+    const token = 'test-immich-token';
+    Map<String, Object?> meBody() => {
+      'me': {'bridge_user': 'alice', 'name': 'Alice'},
+      'immich_user': {'id': 'u1', 'name': 'Alice', 'email': 'alice@example.com'},
+      'counts': {'imported': 12, 'duplicate': 3, 'failed': 1, 'skipped': 2},
+      'queue': 4,
+      'watch_dirs': ['/w/alice'],
+      'priority_dirs': ['/w/alice/Phone'],
+      'recent': [
+        {
+          'path': '/w/alice/trip/IMG_0001.JPG',
+          'status': 'imported',
+          'asset_id': 'abc',
+          'error': null,
+          'attempts': 0,
+          'updated_at': 1792576800.5,
+        },
+        {
+          'path': '/w/alice/IMG_0002.MOV',
+          'status': 'failed',
+          'error': 'upload failed: HTTP 500',
+          'attempts': 2,
+          'updated_at': 1792576700,
+        },
+        {'bogus': true},
+      ],
+    };
+
+    test('reads only this person\'s status, sending the token in a header over https', () async {
+      final seen = <http.Request>[];
       final service = _service(
         MockClient((request) async {
+          seen.add(request);
           if (request.url.path == '/healthz') {
-            return _json({'ok': true, 'version': '0.1.0'});
+            return _json({'ok': true, 'version': '0.8.0'});
           }
-          expect(request.url.path, '/status');
-          return _json({
-            'counts': {'imported': 12, 'duplicate': 3, 'failed': 1, 'skipped': 2},
-            'queue': 4,
-            'watch_dirs': ['/w/Trips'],
-            'priority_dirs': ['/w/Trips/Summer2026'],
-            'recent': [
-              {
-                'path': '/w/uploads/trip/IMG_0001.JPG',
-                'status': 'imported',
-                'asset_id': 'abc',
-                'error': null,
-                'attempts': 0,
-                'updated_at': 1792576800.5,
-              },
-              {
-                'path': '/w/uploads/IMG_0002.MOV',
-                'status': 'failed',
-                'error': 'upload failed: HTTP 500',
-                'attempts': 2,
-                'updated_at': 1792576700,
-              },
-              {'bogus': true},
-            ],
-          });
+          expect(request.url.path, '/status/me');
+          return _json(meBody());
         }),
       );
 
-      final status = await service.fetch('http://bridge:8099/');
+      final status = await service.fetch('https://bridge.example.com/', immichToken: token);
       expect(status.health, BridgeHealth.running);
-      expect(status.baseUrl.toString(), 'http://bridge:8099/');
-      expect(status.version, '0.1.0');
+      expect(status.access, BridgeAccess.signedIn);
+      expect(status.signedInAs, 'Alice');
+      expect(status.accessMessage, 'Signed in as Alice');
+      expect(status.version, '0.8.0');
       expect(status.imported, 12);
       expect(status.duplicates, 3);
       expect(status.failed, 1);
       expect(status.queue, 4);
-      expect(status.watchDirs, ['/w/Trips']);
-      expect(status.priorityDirs, ['/w/Trips/Summer2026']);
+      expect(status.watchDirs, ['/w/alice']);
+      expect(status.priorityDirs, ['/w/alice/Phone']);
       expect(status.recent, hasLength(2));
       expect(status.recent.first.fileName, 'IMG_0001.JPG');
       expect(status.recent.last.error, 'upload failed: HTTP 500');
       expect(status.lastActivity, DateTime.fromMillisecondsSinceEpoch(1792576800500));
+
+      expect(seen.map((r) => r.url.path), ['/healthz', '/status/me'], reason: 'the open /status is never read');
+      expect(seen.first.headers.containsKey('X-Immich-Token'), isFalse, reason: 'no token on the health check');
+      expect(seen.last.headers['X-Immich-Token'], token);
+      for (final r in seen) {
+        expect(r.url.toString(), isNot(contains(token)), reason: 'the token never goes into a URL');
+      }
     });
 
-    test('status failure still reports running (health alone is enough)', () async {
+    test('plain http never sends the token and shows no personal detail', () async {
+      final seen = <http.Request>[];
       final service = _service(
         MockClient((request) async {
-          if (request.url.path == '/healthz') {
-            return _json({'ok': true, 'version': '0.1.0'});
-          }
-          return _json({'error': 'boom'}, 500);
+          seen.add(request);
+          return _json({'ok': true, 'version': '0.8.0'});
         }),
       );
-      final status = await service.fetch('http://bridge:8099');
+      final status = await service.fetch('http://192.168.1.50:8099', immichToken: token);
       expect(status.health, BridgeHealth.running);
-      expect(status.version, '0.1.0');
+      expect(status.access, BridgeAccess.needsHttps);
+      expect(status.imported, 0);
+      expect(status.watchDirs, isEmpty);
+      expect(seen.map((r) => r.url.path), ['/healthz']);
+      expect(seen.any((r) => r.headers.containsKey('X-Immich-Token')), isFalse);
+    });
+
+    test('no Immich login means no personal request', () async {
+      final seen = <String>[];
+      final service = _service(
+        MockClient((request) async {
+          seen.add(request.url.path);
+          return _json({'ok': true});
+        }),
+      );
+      final status = await service.fetch('https://bridge.example.com', immichToken: null);
+      expect(status.access, BridgeAccess.notSignedIn);
+      expect(seen, ['/healthz']);
+    });
+
+    Future<BridgeStatus> answer(int code, Object body) => _service(
+      MockClient(
+        (request) async => request.url.path == '/healthz' ? _json({'ok': true, 'version': '0.8.0'}) : _json(body, code),
+      ),
+    ).fetch('https://bridge.example.com', immichToken: token);
+
+    test('401 means the login was not accepted', () async {
+      final status = await answer(401, {'error': 'token not accepted'});
+      expect(status.access, BridgeAccess.tokenRejected);
+      expect(status.imported, 0);
+    });
+
+    test('404 "not a bridge user" is told apart from an older bridge', () async {
+      expect((await answer(404, {'error': 'not a bridge user'})).access, BridgeAccess.notBridgeUser);
+      expect((await answer(404, {'error': 'not found'})).access, BridgeAccess.bridgeTooOld);
+    });
+
+    test('503 means Immich is unreachable, try later (not signed out)', () async {
+      expect((await answer(503, {'error': 'immich unreachable'})).access, BridgeAccess.immichUnreachable);
+    });
+
+    test('other failures still report the bridge as running, with no personal detail', () async {
+      final status = await answer(500, {'error': 'boom'});
+      expect(status.health, BridgeHealth.running);
+      expect(status.access, BridgeAccess.failed);
       expect(status.recent, isEmpty);
     });
 
@@ -145,8 +204,8 @@ void main() {
           return request.url.path.endsWith('/healthz') ? _json({'ok': true}) : _json({'counts': {}, 'queue': 0});
         }),
       );
-      await service.fetch('https://example.com/bridge/');
-      expect(seen, ['/bridge/healthz', '/bridge/status']);
+      await service.fetch('https://example.com/bridge/', immichToken: token);
+      expect(seen, ['/bridge/healthz', '/bridge/status/me']);
     });
   });
 }

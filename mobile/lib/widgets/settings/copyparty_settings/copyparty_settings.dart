@@ -69,6 +69,7 @@ class CopypartySettings extends ConsumerWidget {
             const SettingGroupTitle(title: 'Import Bridge (optional)', icon: Icons.sync_alt_rounded),
             const _BridgeUrlTile(),
             const _BridgeStatusTile(),
+            const _BridgeTestButton(),
             const Divider(),
           ],
           const SettingGroupTitle(title: 'Import', icon: Icons.sd_card_rounded),
@@ -1012,7 +1013,7 @@ class _BridgeUrlTile extends ConsumerWidget {
         onTap: () => _showTextDialog(
           context,
           title: 'Bridge status URL',
-          hint: 'http://192.168.1.50:8099',
+          hint: 'https://bridge.example.com',
           initialValue: url,
           onSave: (value) => ref.read(settingsProvider).write(SettingsKey.copypartyBridgeUrl, value.trim()),
         ),
@@ -1063,7 +1064,7 @@ class _BridgeStatusTile extends ConsumerWidget {
               padding: const EdgeInsets.only(left: 8.0),
               child: SettingListTile(
                 title: 'Import bridge: invalid URL',
-                subtitle: 'Enter an address like http://192.168.1.50:8099',
+                subtitle: 'Enter an address like https://bridge.example.com',
                 leading: Icon(Icons.error_outline, color: scheme.error),
               ),
             );
@@ -1080,12 +1081,18 @@ class _BridgeStatusTile extends ConsumerWidget {
               ),
             );
           case BridgeHealth.running:
+            // Personal detail only from /status/me (this person's own Immich login); otherwise just say why.
+            final mine = status.access == BridgeAccess.signedIn;
             final lines = <String>[
-              '${status.imported} imported · ${status.duplicates} already in Immich · ${status.queue} queued',
-              if (status.failed > 0) '${status.failed} failed (retried automatically)',
-              if (status.watchDirs.isNotEmpty) 'Watching: ${status.watchDirs.join(', ')}',
-              if (status.priorityDirs.isNotEmpty) 'Imported first: ${status.priorityDirs.join(', ')}',
-              if (status.lastActivity != null) 'Last activity ${_bridgeAgo(status.lastActivity!, status.checkedAt)}',
+              if (mine) ...[
+                status.accessMessage,
+                '${status.imported} imported · ${status.duplicates} already in Immich · ${status.queue} queued',
+                if (status.failed > 0) '${status.failed} failed (retried automatically)',
+                if (status.watchDirs.isNotEmpty) 'Watching: ${status.watchDirs.join(', ')}',
+                if (status.priorityDirs.isNotEmpty) 'Imported first: ${status.priorityDirs.join(', ')}',
+                if (status.lastActivity != null) 'Last activity ${_bridgeAgo(status.lastActivity!, status.checkedAt)}',
+              ] else
+                status.accessMessage,
             ];
             return Column(
               children: [
@@ -1097,8 +1104,12 @@ class _BridgeStatusTile extends ConsumerWidget {
                         : 'Import bridge: running (v${status.version})',
                     subtitle: lines.join('\n'),
                     leading: Icon(
-                      status.failed > 0 ? Icons.warning_amber_rounded : Icons.check_circle_outline,
-                      color: status.failed > 0 ? scheme.tertiary : scheme.primary,
+                      !mine
+                          ? Icons.info_outline
+                          : status.failed > 0
+                          ? Icons.warning_amber_rounded
+                          : Icons.check_circle_outline,
+                      color: !mine ? scheme.outline : (status.failed > 0 ? scheme.tertiary : scheme.primary),
                     ),
                     onTap: refresh,
                   ),
@@ -1113,7 +1124,7 @@ class _BridgeStatusTile extends ConsumerWidget {
                       onTap: () => unawaited(_openBridgePage(status.baseUrl!)),
                     ),
                   ),
-                if (status.recent.isNotEmpty)
+                if (mine && status.recent.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(left: 8.0),
                     child: ExpansionTile(
@@ -1126,6 +1137,66 @@ class _BridgeStatusTile extends ConsumerWidget {
             );
         }
       },
+    );
+  }
+}
+
+/// Runs the same per-person check as the status tile once, on demand, and says plainly what happened.
+class _BridgeTestButton extends HookConsumerWidget {
+  const _BridgeTestButton();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final testing = useState(false);
+    final url = ref.watch(appConfigProvider.select((c) => c.copyparty.bridgeUrl));
+    if (url.trim().isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    Future<void> runTest() async {
+      if (testing.value) {
+        return;
+      }
+      testing.value = true;
+      try {
+        final status = await ref
+            .read(immichBridgeStatusServiceProvider)
+            .fetch(url, immichToken: currentImmichAccessToken());
+        ref.invalidate(immichBridgeStatusProvider);
+        if (!context.mounted) {
+          return;
+        }
+        final (ok, message) = switch (status.health) {
+          BridgeHealth.invalidUrl => (false, 'The bridge URL is not valid.'),
+          BridgeHealth.unreachable => (false, 'The bridge did not answer at $url.'),
+          BridgeHealth.disabled => (false, 'No bridge URL is set.'),
+          BridgeHealth.running => (
+            status.access == BridgeAccess.signedIn,
+            'Bridge${status.version == null ? '' : ' v${status.version}'} reachable. ${status.accessMessage}',
+          ),
+        };
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: ok ? Colors.green : context.colorScheme.error,
+            duration: const Duration(seconds: 8),
+          ),
+        );
+      } finally {
+        testing.value = false;
+      }
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+      child: OutlinedButton.icon(
+        onPressed: testing.value ? null : runTest,
+        icon: testing.value
+            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+            : const Icon(Icons.sync_alt_rounded),
+        label: Text(testing.value ? 'Testing…' : 'Test bridge'),
+        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+      ),
     );
   }
 }

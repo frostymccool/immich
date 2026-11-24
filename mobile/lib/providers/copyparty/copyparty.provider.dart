@@ -119,6 +119,9 @@ final immichBridgeStatusServiceProvider = Provider.autoDispose<ImmichBridgeStatu
   return service;
 });
 
+/// The signed-in person's Immich access token, used only to ask the bridge for that person's own status.
+String? currentImmichAccessToken() => Store.tryGet(StoreKey.accessToken);
+
 /// Live status of the optional bridge. autoDispose: it only runs (and polls
 /// every 15s) while a widget is actually watching it — never in the background,
 /// never at app start — and never throws, so the bridge being down or
@@ -132,7 +135,7 @@ final immichBridgeStatusProvider = FutureProvider.autoDispose<BridgeStatus>((ref
     disposed = true;
     timer?.cancel();
   });
-  final result = await service.fetch(url);
+  final result = await service.fetch(url, immichToken: currentImmichAccessToken());
   if (!disposed && result.health != BridgeHealth.disabled && result.health != BridgeHealth.invalidUrl) {
     timer = Timer(const Duration(seconds: 15), ref.invalidateSelf);
   }
