@@ -3,6 +3,13 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.7.2 - gentler automatic correction
+
+- Automatic correction now waits 6 s after each change (was 2 s, `AUTO_FIX_PAUSE_S`), so a batch of 50 is spread over
+  the 5-minute cycle: about 10 changes a minute, even when the server looks healthy. The Proxmox history for the
+  2026-11-23 overload showed the first pass alone (404 changes in 11 minutes) was enough to overload the server, so the
+  bridge no longer relies on backing off alone.
+
 ## 0.7.1 - health line on the Status tab
 
 - The Status tab always shows a one-line health summary under **Imports**: whether Immich is healthy, the server load

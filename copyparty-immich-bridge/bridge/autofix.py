@@ -27,7 +27,7 @@ CLOSE_S = 600  # one reference photo alone is enough only this close
 AGREE_KM = 5.0  # references further apart than this mean the owner was travelling: not safe to pick one
 RECHECK_S = 6 * 3600
 BATCH = 50  # files per pass: each change makes Immich re-read the file, so big passes overload a small server
-PAUSE_S = float(os.environ.get("AUTO_FIX_PAUSE_S", "2"))  # between two changes
+PAUSE_S = float(os.environ.get("AUTO_FIX_PAUSE_S", "6"))  # between two changes: 50 x 6 s spreads a batch over the 5-minute cycle
 
 
 def evaluate(instant: datetime, references: list[dict]) -> tuple[dict | None, str]:

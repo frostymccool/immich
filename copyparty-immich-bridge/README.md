@@ -98,6 +98,7 @@ starts the bridge, asks only for the Immich API key). The manual steps below are
 | `GEOFIX_SHOT_INTERVAL_S` | `90` | Seconds a shot assumed when dating an undated file from its file number and only one dated neighbour |
 | `AUTO_FIX` | `false` | After import, set place and local time from the account's own geotagged photos, on strong evidence only (also editable through `PUT /api/config` as `auto_fix`). Main account only |
 | `AUTO_FIX_WINDOW_S` | `1800` | How far in time a geotagged photo may be from a file to count as evidence |
+| `AUTO_FIX_PAUSE_S` | `6` | Seconds to wait after each automatic change (at most 50 every 5 minutes), so Immich never gets a burst. |
 | `BACKOFF_LOAD` / `BACKOFF_LOAD_OK` | `3.0` / `1.5` | Load per CPU at which the bridge backs off, and under which it resumes |
 | `BACKOFF_PING_S` | `5` | An Immich ping slower than this counts as overloaded |
 | `MQTT_URL` | *(empty)* | `mqtt://[user:pass@]host:1883`: publish state and events under `ImmichBridge/` (also `mqtt_url` on `PUT /api/config`). Empty = off |
