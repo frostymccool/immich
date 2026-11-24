@@ -36,6 +36,8 @@ EDITABLE = (
     "album_name",
     "album_from_folder",
     "auto_fix",
+    "mqtt_url",
+    "public_url",
     "people_root",
     "paused",
     "include_extensions",
@@ -185,6 +187,14 @@ def validate(cfg: Config, changes: dict[str, Any], browse_roots: list[str]) -> d
             exts = {normalize_ext(str(x)) for x in raw}
             exts.discard("")
             out["include_extensions"] = exts
+
+    for key, schemes in (("mqtt_url", ("mqtt://",)), ("public_url", ("http://", "https://"))):
+        if key in changes:
+            raw = str(changes[key] or "").strip().rstrip("/")
+            if raw and not raw.startswith(schemes):
+                problems.append(f"{key} must start with {' or '.join(schemes)} (or be empty to switch it off)")
+            else:
+                out[key] = raw
 
     if "log_level" in changes:
         level = str(changes["log_level"]).strip().upper()

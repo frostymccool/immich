@@ -122,6 +122,7 @@
   <span class="muted" id="ver"></span>
   <select id="userSel" class="hidden" title="Whose imports to show" style="width:auto;max-width:260px"></select>
   <span class="pill hidden" id="pausedPill" style="color:var(--warn);border-color:var(--warn)">Paused</span>
+  <span class="pill hidden" id="backoffPill" style="color:var(--warn);border-color:var(--warn)" title="Immich or its server is overloaded">Backing off</span>
   <span class="grow"></span>
   <span class="muted hidden" id="acct" style="font-size:13px"></span>
   <button id="pause" class="hidden">Pause imports</button>
@@ -159,6 +160,7 @@
       <div class="card">
         <h2>Imports</h2>
         <div id="pauseNote"></div>
+        <div id="backoffNote"></div>
         <div id="alertsAcct"></div>
         <div id="alertsAlbum"></div>
         <div class="strip" id="tiles"></div>
@@ -492,6 +494,18 @@
     $('recentEmpty').classList.toggle('hidden', s.recent.length > 0 || act.length > 0);
     renderAlbums(s.albums);
     renderPaused(s.paused, s.queue);
+    renderBackoff(s.backoff);
+  }
+  function renderBackoff(b) {
+    var box = $('backoffNote'); box.textContent = '';
+    $('backoffPill').classList.toggle('hidden', !(b && b.busy));
+    if (!b || !b.busy) { return; }
+    var t = function (x) { return new Date(x * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
+    var d = el('div', { 'class': 'errs' }, 'Holding off by itself since ' + t(b.since) + ': ' + b.reason +
+      '. No new imports or Immich changes start until it is healthy again (next check ' + t(b.until) +
+      '). A file already being imported finishes. Nothing is lost: waiting files stay queued.');
+    d.style.color = 'var(--warn)'; d.style.borderColor = 'var(--warn)'; d.style.margin = '0 0 10px';
+    box.appendChild(d);
   }
   var lastStatus = null, batchMax = 0;
   function renderProgress(s) {

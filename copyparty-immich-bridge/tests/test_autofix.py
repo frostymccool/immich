@@ -121,3 +121,13 @@ def test_the_page_can_read_the_result_and_start_a_pass(rig, auto, tmp_path):  # 
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_nothing_is_changed_while_immich_is_overloaded(rig, auto, monkeypatch):  # noqa: F811
+    from bridge.pressure import PRESSURE
+
+    fix, imported, _ = auto
+    imported(rig.add("Trip/VID_20260501_012000_002.mp4", {"CreateDate": "2026:05:01 05:20:00"}))
+    monkeypatch.setattr(PRESSURE, "busy", True)
+    assert fix.run_once() == {"held (Immich busy)": 1}
+    assert not rig.stub.__dict__.get("asset_updates")

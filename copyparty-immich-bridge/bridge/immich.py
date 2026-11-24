@@ -246,6 +246,15 @@ class ImmichClient:
         self._explain(resp, "look up photos (asset.read)")
         return resp.json()
 
+    def ping(self) -> float | None:
+        """Seconds Immich took to answer GET /server/ping (no permission needed), or None when it did not."""
+        start = time.monotonic()
+        try:
+            resp = self._session.get(self._base + "/api/server/ping", timeout=(5, 20))
+        except requests.RequestException:
+            return None
+        return time.monotonic() - start if resp.status_code == 200 else None
+
     def get_asset(self, asset_id: str) -> dict:
         """GET /assets/{id} (permission asset.read), with its EXIF."""
         resp = self._session.get(f"{self._base}/api/assets/{asset_id}", timeout=self._timeout)

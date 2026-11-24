@@ -523,3 +523,21 @@ def test_backlog_and_eta_estimates(tmp_path):
         assert b["bytes_left"] == 600 and b["rate"] == 50 and b["eta_seconds"] == 12
         a = w.active()[0]
         assert a["percent"] == 40 and 45 <= a["rate"] <= 50 and a["eta_seconds"] in (11, 12, 13)
+
+
+def test_backing_off_holds_new_imports_until_immich_is_healthy(tmp_path, monkeypatch):
+    from bridge.pressure import PRESSURE
+
+    with StubImmich() as stub:
+        worker, state, cfg = make_worker(tmp_path, stub)
+        monkeypatch.setattr(PRESSURE, "busy", True)
+        a = write_file(tmp_path, "Day 1/a.jpg", b"a")
+        worker.start()
+        try:
+            worker.enqueue(a, "hook")
+            time.sleep(1.2)
+            assert state.get(a) is None and stub.uploads == [] and worker.queue_size == 1
+            PRESSURE.busy = False
+            assert _wait_for(lambda: state.get(a) is not None)
+        finally:
+            worker.stop()

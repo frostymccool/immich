@@ -12,7 +12,7 @@ SCRIPT = os.environ.get("UPDATE_BRIDGE_SH") or os.path.join(os.path.dirname(os.p
 FAKE_DOCKER = r"""#!/usr/bin/env bash
 echo "docker $*" >> "$FAKE_LOG"
 case "$*" in
-  inspect*Config.Env*) [ -n "${FAKE_BUILD_ID:-}" ] && printf 'PATH=/x\nBRIDGE_BUILD=%s\n' "$FAKE_BUILD_ID"; exit 0;;
+  inspect*Config.Env*) [ -n "${FAKE_BUILD_ID:-}" ] && printf 'PATH=/x\nBRIDGE_BUILD=%s\n' "$FAKE_BUILD_ID"; [ -n "${FAKE_BRANCH:-}" ] && printf 'BRIDGE_BRANCH=%s\n' "$FAKE_BRANCH"; exit 0;;
 esac
 exit 0
 """
@@ -103,3 +103,13 @@ def test_offline_or_bad_download_keeps_the_saved_copy_and_still_updates(box, tmp
 def test_unknown_option_is_refused(box):
     r = box.run("--bogus")
     assert r.returncode == 2 and "unknown option" in r.stderr
+
+
+def test_an_update_stays_on_the_branch_the_install_came_from(box):
+    r = box.run(env={"FAKE_BUILD_ID": "aaa1111 2026-10-01", "FAKE_LATEST": "bbb2222", "FAKE_BRANCH": "claude/some-work", "BRANCH": ""})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Branch:          claude/some-work" in r.stdout and "claude/some-work" in box.calls()
+    r = box.run(env={"FAKE_BUILD_ID": "aaa1111 2026-10-01", "FAKE_LATEST": "bbb2222", "BRANCH": ""})
+    assert "Branch:          feature/copyparty-up2k-import" in r.stdout  # older installs: the published branch
+    r = box.run(env={"FAKE_BUILD_ID": "aaa1111 2026-10-01", "FAKE_LATEST": "bbb2222", "FAKE_BRANCH": "claude/some-work", "BRANCH": "feature/x"})
+    assert "Branch:          feature/x" in r.stdout  # asked for explicitly

@@ -81,6 +81,10 @@ class Config:
     # After import, correct place and time zone from the account's own geotagged photos, on strong evidence only.
     auto_fix: bool = False
 
+    # MQTT state/events (mqtt://[user:pass@]host:1883, empty = off) and the URL others reach this page at (for llms.txt)
+    mqtt_url: str = ""
+    public_url: str = ""
+
     # Explicit extension allow-list; empty = ask Immich /server/media-types.
     include_extensions: set[str] = field(default_factory=set)
 
@@ -194,6 +198,8 @@ class Config:
             album_name=e.get("IMMICH_ALBUM_NAME", "").strip(),
             album_from_folder=e.get("ALBUM_FROM_FOLDER", "true").strip().lower() not in ("0", "false", "no", "off"),
             auto_fix=e.get("AUTO_FIX", "false").strip().lower() in ("1", "true", "yes", "on"),
+            mqtt_url=e.get("MQTT_URL", "").strip(),
+            public_url=e.get("PUBLIC_URL", "").strip().rstrip("/"),
             include_extensions=include_extensions,
             bind_host=e.get("BIND_HOST", "0.0.0.0").strip() or "0.0.0.0",
             bind_port=_int("BIND_PORT", 8099, minimum=1),

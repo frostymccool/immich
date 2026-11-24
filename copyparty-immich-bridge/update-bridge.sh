@@ -10,7 +10,14 @@
 # Set UPDATE_BRIDGE_NO_UPDATE=1 to skip the check for a newer update-bridge.sh.
 set -euo pipefail
 
+# The branch this install came from (the installer records it in the container), so an update never swaps an install
+# onto another branch; BRANCH=... overrides it.
+remembered_branch() {
+  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' immich-bridge 2>/dev/null | sed -n 's/^BRIDGE_BRANCH=//p' | head -n1 || true
+}
+BRANCH="${BRANCH:-$(remembered_branch)}"
 BRANCH="${BRANCH:-feature/copyparty-up2k-import}"
+export BRANCH
 REPO="${REPO:-https://github.com/frostymccool/immich.git}"
 RAW="${UPDATE_BRIDGE_RAW:-https://raw.githubusercontent.com/frostymccool/immich/$BRANCH/copyparty-immich-bridge}"
 SELF_URL="$RAW/update-bridge.sh"
@@ -65,6 +72,7 @@ main() {
     export COPYPARTY_DIR="$here"
   fi
 
+  echo "Branch:          $BRANCH"
   before="$(installed_build)"
   echo "Installed now:   ${before:-unknown (the container is not running, or it predates build numbers)}"
   latest="$(git ls-remote "$REPO" "refs/heads/$BRANCH" 2>/dev/null | cut -c1-7 || true)"

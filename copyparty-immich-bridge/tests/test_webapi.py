@@ -360,3 +360,27 @@ def test_page_is_served_for_any_tab_link(app, query):
     status, body, headers = call(base, "GET", "/" + query, token=None, raw=True)
     assert status == 200 and b"<html" in body.lower() and "text/html" in headers["Content-Type"]
     assert b"data-tab=\"people\"" in body  # the same single page: the tab is chosen in the browser
+
+
+def test_status_reports_backing_off_and_llms_txt_is_open(app, monkeypatch):
+    from bridge.pressure import PRESSURE
+
+    make, _ = app
+    base, *_ = make()
+    monkeypatch.setattr(PRESSURE, "busy", True)
+    monkeypatch.setattr(PRESSURE, "reason", "the server is overloaded (load 19.0 per CPU)")
+    st, body, _ = call(base, "GET", "/status", token=None)
+    assert st == 200 and body["backoff"]["busy"] is True and "overloaded" in body["backoff"]["reason"]
+    st, text, hdr = call(base, "GET", "/llms.txt", token=None, raw=True)
+    assert st == 200 and b"ImmichBridge/state/backoff" in text and b"key" not in text.lower().replace(b"token", b"")
+
+
+def test_mqtt_and_public_url_settings_are_checked(app):
+    make, _ = app
+    base, *_ = make()
+    st, body, _ = call(base, "PUT", "/api/config", {"mqtt_url": "tcp://broker"})
+    assert st == 400 and "mqtt_url" in str(body)
+    st, body, _ = call(base, "PUT", "/api/config", {"mqtt_url": "mqtt://broker.example:1883", "public_url": "http://bridge.example:8099/"})
+    assert st == 200
+    st, body, _ = call(base, "GET", "/api/config")
+    assert body["values"]["mqtt_url"] == "mqtt://broker.example:1883" and body["values"]["public_url"] == "http://bridge.example:8099"

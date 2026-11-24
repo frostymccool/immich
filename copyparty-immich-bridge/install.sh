@@ -387,6 +387,7 @@ $EXTRA_MAPS_LINE
 $PEOPLE_LINE
 $ML_ENV_LINE
       BRIDGE_BUILD: "$BUILD_ID"
+      BRIDGE_BRANCH: "$BRANCH"
     volumes:
       - $MOUNT_SRC:$MOUNT_DEST:$MOUNT_MODE
 ${EXTRA_VOLUMES}      - bridge-state:/data

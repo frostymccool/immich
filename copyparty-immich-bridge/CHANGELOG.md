@@ -3,6 +3,20 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.7.0 - backs off when Immich is overloaded; MQTT
+
+- **Backs off by itself** when the server is overloaded (load per CPU of 3 or more, `BACKOFF_LOAD`), Immich is slow
+  to answer a ping (5 s, `BACKOFF_PING_S`) or does not answer, or an upload fails with a server error, 429 or timeout.
+  No new import or Immich change starts; a file already uploading finishes; waiting files stay queued. Checks wait 1,
+  2, 4 ... up to 30 minutes, and work resumes once the load is under 1.5 per CPU (`BACKOFF_LOAD_OK`) and Immich
+  answers quickly. The page shows a **Backing off** pill and a banner with the reason and the next check.
+- Automatic correction works in batches of 50 with a 2 s pause after each change (`AUTO_FIX_PAUSE_S`): every change
+  makes Immich re-read the file, and a large first pass could overload a small server.
+- **MQTT** (`mqtt_url` / `MQTT_URL`, off by default): retained state under `ImmichBridge/` (node with a last will,
+  queue, paused, backoff with reason and next check, imports, corrections) and events. With `public_url` set, the
+  bridge registers itself in an mqtt-netdocs style device index. `GET /llms.txt` (open) describes it all.
+- `update-bridge.sh` keeps an install on the branch it came from (recorded as `BRIDGE_BRANCH` by the installer).
+
 ## 0.6.0 - automatic place and time zone from your own photos
 
 - **New setting `auto_fix` (`AUTO_FIX`, off by default).** After imports finish, files this bridge imported that have no

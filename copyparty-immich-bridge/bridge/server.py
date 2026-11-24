@@ -35,6 +35,7 @@ from bridge.geofix import GeoFix, GeoFixError
 from bridge.immich import ImmichError
 from bridge.logbuffer import RingLogHandler
 from bridge.manager import UserManager
+from bridge.pressure import PRESSURE
 from bridge.scanner import is_within_dirs
 from bridge.settings import SettingsError, SettingsStore
 from bridge.state import StateStore
@@ -55,6 +56,41 @@ def _load_ui() -> bytes:
             return fh.read()
     except OSError:
         return b"<h1>web page missing from this build</h1>"
+
+
+def llms_txt(cfg: Config) -> str:
+    """What another agent or person needs to read this bridge's state. Open: holds no secrets and no paths."""
+    page = cfg.public_url or "http://<this host>:%d" % cfg.bind_port
+    return f"""# copyparty-immich-bridge {__version__}
+
+Imports files uploaded to copyparty into Immich, then (optionally) corrects place and time zone from the account's own
+geotagged photos. Human page: {page}/ (token required).
+
+## Scope for other agents
+Read-only. Nothing here is meant to be changed by other agents; settings need the bridge token, which only the user has.
+
+## MQTT (prefix "ImmichBridge/"{', broker ' + cfg.mqtt_url.split('@')[-1] if cfg.mqtt_url else ', currently switched off'})
+State (retained, refreshed at least every 60 s):
+  ImmichBridge/node                    ON | OFF (last will: OFF when the bridge stops or loses the connection)
+  ImmichBridge/state/updated           ISO-8601 UTC time of the last refresh; older than 5 min = the bridge is down
+  ImmichBridge/device/version          software version
+  ImmichBridge/state/queue             files waiting to be imported (all people)
+  ImmichBridge/state/paused            ON | OFF (paused by the user)
+  ImmichBridge/state/backoff           ON | OFF (holding off by itself because Immich or its server is overloaded)
+  ImmichBridge/state/backoff_reason    why, in words ("" when not backing off)
+  ImmichBridge/state/backoff_until     ISO-8601 UTC time of the next check ("" when not backing off)
+  ImmichBridge/state/imported_total    files imported by the bridge (all people)
+  ImmichBridge/state/autofix           JSON counts of automatic place/time corrections: applied, review, ...
+  ImmichBridge/state/summary           JSON with all of the above
+Events (not retained):
+  ImmichBridge/event                   JSON {{t, level, src, msg}}: backing off, resuming
+Commands: none.
+
+## HTTP (open)
+GET {page}/healthz      liveness and version
+GET {page}/status       totals, queue, backoff (per-person detail needs the token)
+GET {page}/llms.txt     this text
+"""
 
 
 def make_handler(
@@ -233,6 +269,7 @@ def make_handler(
                         "albums": parts[0][0].album_info() if one is not None else worker.album_info(),
                         "recent": recent,
                         "users": len(parts) if one is None else 1,
+                        "backoff": PRESSURE.describe(),
                     },
                 )
                 return
@@ -259,6 +296,7 @@ def make_handler(
                     "priority_dirs": (manager.runtime(MAIN_ID).view.priority_dirs if manager and manager.runtime(MAIN_ID) else cfg.priority_dirs),
                     "albums": worker.album_info(),
                     "recent": recent,
+                    "backoff": PRESSURE.describe(),
                 },
             )
 
@@ -372,6 +410,13 @@ def make_handler(
                 self._send_json(200, {"ok": True, "version": __version__, "build": cfg.build})
             elif route == "/status":
                 self._send_status(query)
+            elif route == "/llms.txt":
+                body = llms_txt(cfg).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
             elif route == "/api/users" and manager is not None:
                 if self._require_api():
                     self._send_json(200, manager.describe_all())

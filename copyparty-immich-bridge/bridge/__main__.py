@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
 import signal
 import sys
@@ -12,6 +13,8 @@ import time
 from bridge import __version__
 from bridge.config import Config, ConfigError
 from bridge.autofix import AutoFix
+from bridge.mqtt import MqttPublisher
+from bridge.pressure import PRESSURE
 from bridge.geofix import GeoFix, clip_embedder
 from bridge.immich import DEFAULT_EXTENSIONS, ImmichClient, ImmichError
 from bridge.logbuffer import RingLogHandler
@@ -137,11 +140,48 @@ def main() -> int:
                     log.exception("auto-fix pass failed")
 
     threading.Thread(target=auto_fix_loop, name="auto-fix", daemon=True).start()
+
+    # Back off while Immich or its server is overloaded; say so on MQTT and the page
+    PRESSURE._ping = client.ping
+    PRESSURE.start()
+
+    def snapshot() -> dict:
+        b = PRESSURE.describe()
+        counts = state.counts()
+        try:
+            auto = autofix.describe(0)["counts"]
+        except Exception:
+            auto = {}
+        queue = sum(r.worker.queue_size for r in manager.runtimes()) if hasattr(manager, "runtimes") else worker.queue_size
+        out = {"device/version": __version__, "state/queue": str(queue), "state/paused": "ON" if cfg.paused else "OFF",
+               "state/backoff": "ON" if b["busy"] else "OFF", "state/backoff_reason": b["reason"],
+               "state/backoff_until": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(b["until"])) if b["until"] else "",
+               "state/imported_total": str(counts.get("imported", 0)), "state/autofix": auto}
+        out["state/summary"] = {k.split("/")[-1]: v for k, v in out.items()}
+        return out
+
+    def register() -> str | None:
+        if not cfg.public_url:
+            return None
+        return json.dumps({"name": "immich-bridge", "llms_txt_url": cfg.public_url + "/llms.txt", "html_url": cfg.public_url + "/",
+                           "mqtt_prefix": "ImmichBridge/"})
+
+    mqtt = MqttPublisher(lambda: cfg.mqtt_url, snapshot, register=register)
+    mqtt.start()
+
+    def on_backoff(info: dict) -> None:
+        mqtt.event("warn" if info["busy"] else "info",
+                   f"backing off: {info['reason']}" if info["busy"] else "Immich is healthy again: imports and corrections resumed")
+        mqtt.refresh()
+
+    PRESSURE.listeners.append(on_backoff)
     httpd = serve(cfg, state, worker, settings, logs, scan_now=wake_sweep.set, manager=manager, geofix=geofix)
 
     def shutdown(signum, frame) -> None:
         log.info("signal %d — shutting down", signum)
         stop_event.set()
+        PRESSURE.stop()
+        mqtt.stop()
         wake_sweep.set()
         manager.stop_all()
         threading.Thread(target=httpd.shutdown, daemon=True).start()

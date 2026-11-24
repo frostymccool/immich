@@ -12,6 +12,7 @@ import time
 
 import requests
 
+from bridge.pressure import PRESSURE
 from bridge.config import Config
 from bridge.people import parse_folder
 from bridge.immich import ImmichClient, ImmichError, UploadOutcome, sha1_hex
@@ -228,9 +229,12 @@ class ImportWorker:
 
     # -- pipeline ----------------------------------------------------------------
 
+    def _holding(self) -> bool:
+        return self._cfg.paused or PRESSURE.busy
+
     def _wait_while_paused(self) -> bool:
-        """Blocks while imports are paused. False when the bridge is stopping."""
-        while self._cfg.paused and not self._stop.is_set():
+        """Blocks while imports are paused or Immich is overloaded (backing off). False when the bridge is stopping."""
+        while self._holding() and not self._stop.is_set():
             self._stop.wait(0.5)
         return not self._stop.is_set()
 
@@ -243,7 +247,7 @@ class ImportWorker:
                 break
             # Paused while this worker was waiting for work: hold the file (it stays marked as pending, so it
             # is not queued twice) until imports resume. A file already being imported always finishes.
-            if self._cfg.paused:
+            if self._holding():
                 with self._lock:
                     self._held += 1
                 try:
@@ -324,6 +328,7 @@ class ImportWorker:
                 self._post_import(path)
         except (ImmichError, requests.RequestException, OSError) as ex:
             log.warning("import failed for %s: %s", path, ex)
+            PRESSURE.report_error(ex)
             self._state.record_failure(path, size, mtime, sha1, str(ex))
         finally:
             with self._lock:

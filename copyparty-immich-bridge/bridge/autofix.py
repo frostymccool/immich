@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from bridge.geofix import haversine_km, neighbour_from_asset, zone_at
+from bridge.pressure import PRESSURE
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +26,8 @@ WINDOW_S = int(os.environ.get("AUTO_FIX_WINDOW_S", "1800"))  # how far from the 
 CLOSE_S = 600  # one reference photo alone is enough only this close
 AGREE_KM = 5.0  # references further apart than this mean the owner was travelling: not safe to pick one
 RECHECK_S = 6 * 3600
-BATCH = 200
+BATCH = 50  # files per pass: each change makes Immich re-read the file, so big passes overload a small server
+PAUSE_S = float(os.environ.get("AUTO_FIX_PAUSE_S", "2"))  # between two changes
 
 
 def evaluate(instant: datetime, references: list[dict]) -> tuple[dict | None, str]:
@@ -137,10 +139,16 @@ class AutoFix:
         counts: dict[str, int] = {}
         try:
             for path, asset_id in self._todo():
+                if PRESSURE.busy:
+                    counts["held (Immich busy)"] = counts.get("held (Immich busy)", 0) + 1
+                    break
                 try:
                     r = self.fix_one(path, asset_id)
+                    if r == "applied" and PAUSE_S:
+                        time.sleep(PAUSE_S)
                 except Exception as ex:  # one bad file or a brief Immich error must not stop the pass; it is retried later
                     log.warning("auto-fix failed for %s: %s", os.path.basename(path), ex)
+                    PRESSURE.report_error(ex)
                     self._save(asset_id, path, "review", f"could not be checked: {str(ex)[:120]}")
                     r = "error"
                 counts[r] = counts.get(r, 0) + 1
