@@ -102,12 +102,17 @@ void main() {
       final r = await t.service.testConnection(_host, '/ian', 'hunter2', tempDir: tmp);
       expect(r.ok, isTrue);
       expect(r.message, contains('write access to /ian'));
-      expect(t.seen.map((q) => q.method), ['GET', 'POST', 'DELETE']);
+      expect(t.seen.map((q) => q.method), [
+        'GET',
+        'POST',
+        'DELETE',
+        'GET',
+      ], reason: 'the last GET confirms the test file is gone');
       for (final q in t.seen) {
         expect(q.headers['authorization'], _basic('ian', 'hunter2'));
         expect(q.url.queryParameters.containsKey('pw'), isFalse);
       }
-      expect(t.seen.last.url.path, startsWith('/ian/immich-connection-test-'));
+      expect(t.seen[2].url.path, startsWith('/ian/immich-connection-test-'));
       expect(tmp.listSync(), isEmpty, reason: 'the local temp file must be removed');
     });
 

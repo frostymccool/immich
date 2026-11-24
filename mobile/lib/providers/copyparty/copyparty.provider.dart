@@ -13,6 +13,7 @@ import 'package:immich_mobile/providers/infrastructure/db.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/repositories/secure_storage.repository.dart';
 import 'package:immich_mobile/repositories/upload.repository.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_error_advice.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_foreground_service.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
@@ -200,6 +201,10 @@ class ImportSessionState {
   final int scannedFiles;
   final String? errorMessage;
 
+  /// Set when the phone cannot reach copyparty (checked before a batch and after a network-type
+  /// failure): what the user must do, then the detail line. Kept until the next successful check.
+  final String? connectionProblem;
+
   /// The file paths the user chose to upload this run. Null until upload
   /// starts (= "all"). The progress screen filters to these so deselected
   /// files are not listed during upload.
@@ -231,6 +236,7 @@ class ImportSessionState {
     this.cancelled = false,
     this.paused = false,
     this.cacheUsedBytes = 0,
+    this.connectionProblem,
   });
 
   ImportSessionState copyWith({
@@ -245,6 +251,8 @@ class ImportSessionState {
     bool? cancelled,
     bool? paused,
     int? cacheUsedBytes,
+    String? connectionProblem,
+    bool clearConnectionProblem = false,
   }) => ImportSessionState(
     step: step ?? this.step,
     directoryPath: directoryPath ?? this.directoryPath,
@@ -257,6 +265,7 @@ class ImportSessionState {
     cancelled: cancelled ?? this.cancelled,
     paused: paused ?? this.paused,
     cacheUsedBytes: cacheUsedBytes ?? this.cacheUsedBytes,
+    connectionProblem: clearConnectionProblem ? null : (connectionProblem ?? this.connectionProblem),
   );
 
   int get totalBytes => uploadSets.fold(0, (s, u) => s + u.totalBytes);
@@ -373,6 +382,33 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     }
   }
 
+  /// Retry ONE failed (or skipped) file. Its staged copy, if any, is reused, so a large file is
+  /// not copied off the card again. Starts the upload loop when none is running.
+  Future<void> retryFile(String localPath) async {
+    for (final s in state.uploadSets) {
+      for (final f in s.files) {
+        if (f.localPath != localPath) {
+          continue;
+        }
+        if (f.status == UploadFileStatus.skipped) {
+          retrySkippedFile(localPath);
+        } else if (f.status == UploadFileStatus.failed) {
+          f.status = UploadFileStatus.pending;
+          f.errorMessage = null;
+          f.uploadedBytes = 0;
+          _log.log('-- retry ${f.filename}');
+          _notify();
+        } else {
+          return;
+        }
+        if (!_uploadRunning) {
+          await startUpload(selectedFilePaths: {localPath});
+        }
+        return;
+      }
+    }
+  }
+
   void reset() {
     cancelUpload();
     state = const ImportSessionState();
@@ -429,6 +465,23 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       return;
     }
     _uploadRunning = true;
+
+    // Reachability check first: a dead link (no Wi-Fi, VPN off) fails here in seconds with one
+    // clear instruction, instead of 60 s per file. Files stay pending, so starting again resumes.
+    {
+      final pre = _ref.read(appConfigProvider).copyparty;
+      final prePassword = await _ref.read(copypartyPasswordProvider.future);
+      final problem = await _uploader.preflight(pre.hostUrl, pre.uploadPath, prePassword);
+      if (problem != null && (problem.isConnectionProblem || problem.kind == UploadFailureKind.auth)) {
+        _log.log('PREFLIGHT BLOCKED: ${problem.detail}');
+        state = state.copyWith(connectionProblem: problem.userText);
+        _uploadRunning = false;
+        return;
+      }
+      if (state.connectionProblem != null) {
+        state = state.copyWith(clearConnectionProblem: true);
+      }
+    }
 
     // Keep the device awake for the whole upload. Without this, a long import
     // (multi-GB files over slow links = many minutes) gets the screen-off doze /
@@ -922,12 +975,26 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
               _notify();
               break;
             }
-            // Neither skip nor cancel was requested — a genuine failure.
+            // Neither skip nor cancel was requested — a genuine failure. Say what to do, plus a
+            // detail line (url, time, type) that can be matched to the server logs.
+            final advice = UploadFailureAdvice.classify(e, hostUrl: config.hostUrl, uploadPath: config.uploadPath);
             file.staging = false;
             file.status = UploadFileStatus.failed;
-            file.errorMessage = e.toString();
-            _log.log('!! FAILED ${file.filename}: $e');
+            file.errorMessage = advice.userText;
+            _log.log('!! FAILED ${file.filename}: $e  [${advice.detail}]');
             _notify();
+            // If the link itself is gone, every remaining file would stall the same way: check once,
+            // and if the server is still unreachable stop the batch with one banner. The rest stay
+            // pending and their staged copies stay cached for Retry.
+            if (advice.isConnectionProblem) {
+              final still = await _uploader.preflight(config.hostUrl, config.uploadPath, password);
+              if (still != null && still.isConnectionProblem) {
+                _log.log('-- STOPPED: server unreachable after ${file.filename} [${still.detail}]');
+                state = state.copyWith(connectionProblem: still.userText);
+                cancelled = true;
+                break;
+              }
+            }
           }
         }
       }
@@ -1770,6 +1837,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       cancelled: state.cancelled,
       paused: state.paused,
       cacheUsedBytes: state.cacheUsedBytes,
+      connectionProblem: state.connectionProblem,
     );
   }
 

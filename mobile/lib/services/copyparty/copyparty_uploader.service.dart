@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_error_advice.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
 
 /// Outcome of [CopypartyUploaderService.removeStrayPartials]; it never throws.
@@ -174,9 +175,20 @@ class CopypartyUploaderService {
           password,
           parallelism: 1,
         ).timeout(const Duration(seconds: 60));
+        var leftOver = false;
         try {
           await deleteFile(hostUrl, uploadPath, name, password);
+          // A 2xx DELETE is not proof: confirm the listing no longer has the file.
+          try {
+            final sizes = await listUploadFolder(hostUrl, uploadPath, password);
+            leftOver = sizes.containsKey(name);
+          } catch (_) {
+            // listing unavailable: trust the DELETE status
+          }
         } catch (_) {
+          leftOver = true;
+        }
+        if (leftOver) {
           return ConnectionTestResult.success(
             'Write access to $shownPath works, but the test file "$name" could not be deleted '
             '(this account may lack delete permission) — remove it on the server.',
@@ -207,6 +219,32 @@ class CopypartyUploaderService {
       return ConnectionTestResult.failure('TLS error: ${e.message}. Is "Allow self-signed certificate" needed?');
     } catch (e) {
       return ConnectionTestResult.failure('Error: $e');
+    }
+  }
+
+  /// Quick reachability and login check before a batch (and after a network-type failure), so a
+  /// dead link fails in seconds with one clear message instead of 60 s per file. Returns null when
+  /// the server answered and accepted the login (a 404 is fine: the first upload creates the
+  /// folder), otherwise what the user must do. Never throws.
+  Future<UploadFailureAdvice?> preflight(String hostUrl, String uploadPath, String password) async {
+    try {
+      final uri = _buildUri(
+        hostUrl,
+        uploadPath,
+        password,
+      ).replace(queryParameters: {'ls': '', if (password.isNotEmpty && !_basicAuth) 'pw': password});
+      final response = await _client.get(uri, headers: _authHeaders(password)).timeout(const Duration(seconds: 10));
+      final code = response.statusCode;
+      if (code < 400 || code == 404) {
+        return null;
+      }
+      return UploadFailureAdvice.classify(
+        CopypartyUploadException('Reachability check failed: HTTP $code', statusCode: code),
+        hostUrl: hostUrl,
+        uploadPath: uploadPath,
+      );
+    } catch (e) {
+      return UploadFailureAdvice.classify(e, hostUrl: hostUrl, uploadPath: uploadPath);
     }
   }
 
@@ -385,7 +423,7 @@ class CopypartyUploaderService {
         .post(uri, headers: {'Content-Type': 'application/json', ..._authHeaders(password)}, body: body)
         .timeout(
           const Duration(seconds: 60),
-          onTimeout: () => throw CopypartyUploadException('$label stalled (no response in 60s)'),
+          onTimeout: () => throw CopypartyUploadException('$label stalled (no response in 60s)', stalled: true),
         );
     final http.Response response;
     if (cancelToken != null) {
@@ -418,11 +456,15 @@ class CopypartyUploaderService {
         'server${resumePath != null ? ' at $resumePath' : ''}. copyparty will not '
         'accept a fresh upload over it. Remove that partial on the server, or '
         'point the upload path at an empty folder, then retry.',
+        statusCode: 422,
       );
     }
 
     if (response.statusCode != 200) {
-      throw CopypartyUploadException('Handshake failed: HTTP ${response.statusCode}\n${response.body}');
+      throw CopypartyUploadException(
+        'Handshake failed: HTTP ${response.statusCode}\n${response.body}',
+        statusCode: response.statusCode,
+      );
     }
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;
@@ -507,7 +549,8 @@ class CopypartyUploaderService {
         .get(uri, headers: {'Accept': 'application/json', ..._authHeaders(password)})
         .timeout(
           const Duration(seconds: 60),
-          onTimeout: () => throw const CopypartyUploadException('Folder listing stalled (no response in 60s)'),
+          onTimeout: () =>
+              throw const CopypartyUploadException('Folder listing stalled (no response in 60s)', stalled: true),
         );
     _log?.response(
       resp.statusCode,
@@ -523,7 +566,7 @@ class CopypartyUploaderService {
       return const <String, int>{};
     }
     if (resp.statusCode != 200) {
-      throw CopypartyUploadException('Listing failed: HTTP ${resp.statusCode}');
+      throw CopypartyUploadException('Listing failed: HTTP ${resp.statusCode}', statusCode: resp.statusCode);
     }
     final json = jsonDecode(resp.body) as Map<String, dynamic>;
     final files = (json['files'] as List<dynamic>?) ?? const [];
@@ -618,7 +661,10 @@ class CopypartyUploaderService {
     final response = await _client.delete(fileUri, headers: _authHeaders(password));
     _log?.response(response.statusCode, headers: response.headers, body: response.body);
     if (response.statusCode >= 300) {
-      throw CopypartyUploadException('DELETE $filename failed: HTTP ${response.statusCode}');
+      throw CopypartyUploadException(
+        'DELETE $filename failed: HTTP ${response.statusCode}',
+        statusCode: response.statusCode,
+      );
     }
   }
 
@@ -777,7 +823,8 @@ class CopypartyUploaderService {
         .send(request)
         .timeout(
           const Duration(seconds: 120),
-          onTimeout: () => throw const CopypartyUploadException('Chunk upload stalled (no response in 120s)'),
+          onTimeout: () =>
+              throw const CopypartyUploadException('Chunk upload stalled (no response in 120s)', stalled: true),
         );
     final http.StreamedResponse response;
     if (cancelToken != null) {
@@ -821,6 +868,7 @@ class CopypartyUploaderService {
     throw CopypartyUploadException(
       'Chunk #$chunkIdx upload failed: HTTP $statusCode '
       '(wark=$wark, hash=$chunkHash)\n$respBody',
+      statusCode: statusCode,
     );
   }
 
@@ -1626,7 +1674,14 @@ class _DigestSink implements Sink<Digest> {
 
 class CopypartyUploadException implements Exception {
   final String message;
-  const CopypartyUploadException(this.message);
+
+  /// HTTP status of the response that failed, when there was one.
+  final int? statusCode;
+
+  /// True when nothing came back before the stall timeout.
+  final bool stalled;
+
+  const CopypartyUploadException(this.message, {this.statusCode, this.stalled = false});
 
   @override
   String toString() => 'CopypartyUploadException: $message';

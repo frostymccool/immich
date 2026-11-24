@@ -73,18 +73,76 @@ class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
         // Q4: SelectionArea makes all the text on these pages long-press
         // selectable + copyable (helpful for support / sharing values).
         body: SelectionArea(
-          child: switch (session.step) {
-            ImportSessionStep.idle => const _DirectoryPickerStep(),
-            ImportSessionStep.scanning => _ScanningStep(session),
-            ImportSessionStep.options => _OptionsStep(session),
-            ImportSessionStep.uploading => _UploadProgressStep(
-              session,
-              onCancel: () => ref.read(importSessionProvider.notifier).cancelUpload(),
-              onAddFolders: () => pickAndAddFoldersToImport(context),
-            ),
-            ImportSessionStep.complete => _CompletionStep(session),
-          },
+          child: Column(
+            children: [
+              if (session.connectionProblem != null &&
+                  session.step != ImportSessionStep.idle &&
+                  session.step != ImportSessionStep.scanning)
+                _ConnectionProblemBanner(message: session.connectionProblem!),
+              Expanded(
+                child: switch (session.step) {
+                  ImportSessionStep.idle => const _DirectoryPickerStep(),
+                  ImportSessionStep.scanning => _ScanningStep(session),
+                  ImportSessionStep.options => _OptionsStep(session),
+                  ImportSessionStep.uploading => _UploadProgressStep(
+                    session,
+                    onCancel: () => ref.read(importSessionProvider.notifier).cancelUpload(),
+                    onAddFolders: () => pickAndAddFoldersToImport(context),
+                  ),
+                  ImportSessionStep.complete => _CompletionStep(session),
+                },
+              ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+}
+
+/// One clear instruction when the phone cannot reach copyparty (or the login was refused), shown
+/// above the current step until the next successful reachability check.
+class _ConnectionProblemBanner extends StatelessWidget {
+  final String message;
+  const _ConnectionProblemBanner({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    final i = message.indexOf('\n');
+    final action = i < 0 ? message : message.substring(0, i);
+    final detail = i < 0 ? null : message.substring(i + 1);
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(color: context.colorScheme.errorContainer, borderRadius: BorderRadius.circular(8)),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.wifi_off_rounded, color: context.colorScheme.onErrorContainer, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  action,
+                  style: context.textTheme.bodyMedium?.copyWith(
+                    color: context.colorScheme.onErrorContainer,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (detail != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    detail,
+                    style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.onErrorContainer),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1904,7 +1962,7 @@ class _UploadProgressStep extends ConsumerWidget {
               selectedPaths: selected,
               rootPath: orderedSets[i].rootPath ?? session.directoryPath,
               onSkipFile: (f) => ref.read(importSessionProvider.notifier).skipCurrentFile(f.localPath),
-              onRetryFile: (f) => ref.read(importSessionProvider.notifier).retrySkippedFile(f.localPath),
+              onRetryFile: (f) => ref.read(importSessionProvider.notifier).retryFile(f.localPath),
             ),
           ),
         ),
@@ -2366,7 +2424,21 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
             SizedBox(
               width: 56,
               child: isFailed
-                  ? Icon(Icons.error_rounded, color: context.colorScheme.error, size: 28)
+                  // Failed files get a Retry too (reuses the staged copy, so a large file is not
+                  // copied off the card again).
+                  ? (widget.onRetry == null
+                        ? Icon(Icons.error_rounded, color: context.colorScheme.error, size: 28)
+                        : Tooltip(
+                            message: 'Retry this file',
+                            child: InkWell(
+                              onTap: widget.onRetry,
+                              borderRadius: BorderRadius.circular(20),
+                              child: Padding(
+                                padding: const EdgeInsets.all(4),
+                                child: Icon(Icons.replay_rounded, color: context.colorScheme.error, size: 26),
+                              ),
+                            ),
+                          ))
                   : isSkipped
                   // Tappable when a retry handler is wired up: requeue this
                   // ONE file instead of only being able to retry via a bulk
