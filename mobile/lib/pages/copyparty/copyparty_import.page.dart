@@ -75,10 +75,8 @@ class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
         body: SelectionArea(
           child: Column(
             children: [
-              if (session.connectionProblem != null &&
-                  session.step != ImportSessionStep.idle &&
-                  session.step != ImportSessionStep.scanning)
-                _ConnectionProblemBanner(message: session.connectionProblem!),
+              if (session.step != ImportSessionStep.idle && session.step != ImportSessionStep.scanning)
+                _UploadStateBanner(session: session),
               Expanded(
                 child: switch (session.step) {
                   ImportSessionStep.idle => const _DirectoryPickerStep(),
@@ -100,45 +98,70 @@ class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
   }
 }
 
-/// One clear instruction when the phone cannot reach copyparty (or the login was refused), shown
-/// above the current step until the next successful reachability check.
-class _ConnectionProblemBanner extends StatelessWidget {
-  final String message;
-  const _ConnectionProblemBanner({required this.message});
+/// The upload's state in words, above the current step: "Waiting for network" (automatic, with
+/// the next check time), "Needs attention" (with the action), or "Paused by you". Nothing is
+/// shown while uploading normally.
+class _UploadStateBanner extends StatelessWidget {
+  final ImportSessionState session;
+  const _UploadStateBanner({required this.session});
 
   @override
   Widget build(BuildContext context) {
-    final i = message.indexOf('\n');
-    final action = i < 0 ? message : message.substring(0, i);
-    final detail = i < 0 ? null : message.substring(i + 1);
+    final problem = session.connectionProblem;
+    final scheme = context.colorScheme;
+    final String title;
+    final String? body;
+    final Color background;
+    final Color foreground;
+    final Widget icon;
+    if (session.networkWaiting && problem != null) {
+      final next = session.nextNetworkCheckAt;
+      title = 'Waiting for network';
+      String two(int n) => n.toString().padLeft(2, '0');
+      body = next == null
+          ? problem
+          : '$problem\nNext check at ${two(next.hour)}:${two(next.minute)}:${two(next.second)}.';
+      background = scheme.tertiaryContainer;
+      foreground = scheme.onTertiaryContainer;
+      icon = SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: foreground));
+    } else if (problem != null) {
+      title = 'Needs attention';
+      body = problem.startsWith('Needs attention. ') ? problem.substring('Needs attention. '.length) : problem;
+      background = scheme.errorContainer;
+      foreground = scheme.onErrorContainer;
+      icon = Icon(Icons.wifi_off_rounded, color: foreground, size: 20);
+    } else if (session.paused && session.step == ImportSessionStep.uploading) {
+      title = 'Paused by you';
+      body = 'Tap Resume to continue. Files already sent are not sent again.';
+      background = scheme.secondaryContainer;
+      foreground = scheme.onSecondaryContainer;
+      icon = Icon(Icons.pause_circle_outline_rounded, color: foreground, size: 20);
+    } else {
+      return const SizedBox.shrink();
+    }
+    final lines = body.split('\n');
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(color: context.colorScheme.errorContainer, borderRadius: BorderRadius.circular(8)),
+      decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(8)),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.wifi_off_rounded, color: context.colorScheme.onErrorContainer, size: 20),
+          icon,
           const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  action,
-                  style: context.textTheme.bodyMedium?.copyWith(
-                    color: context.colorScheme.onErrorContainer,
-                    fontWeight: FontWeight.w600,
+                Text(title, style: context.textTheme.titleSmall?.copyWith(color: foreground)),
+                const SizedBox(height: 2),
+                Text(lines.first, style: context.textTheme.bodyMedium?.copyWith(color: foreground)),
+                for (final extra in lines.skip(1))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(extra, style: context.textTheme.bodySmall?.copyWith(color: foreground)),
                   ),
-                ),
-                if (detail != null) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    detail,
-                    style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.onErrorContainer),
-                  ),
-                ],
               ],
             ),
           ),

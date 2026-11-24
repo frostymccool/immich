@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:crypto/crypto.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
@@ -17,6 +18,7 @@ import 'package:immich_mobile/services/copyparty/copyparty_error_advice.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_foreground_service.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_network_watch.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_staging.service.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 import 'package:immich_mobile/services/copyparty/immich_bridge_status.service.dart';
@@ -205,6 +207,14 @@ class ImportSessionState {
   /// failure): what the user must do, then the detail line. Kept until the next successful check.
   final String? connectionProblem;
 
+  /// True while the upload is automatically waiting for the network to come back ("Waiting for
+  /// network"); [connectionProblem] then holds what is happening. False with a [connectionProblem]
+  /// means "Needs attention".
+  final bool networkWaiting;
+
+  /// When the next automatic reachability check runs while [networkWaiting].
+  final DateTime? nextNetworkCheckAt;
+
   /// The file paths the user chose to upload this run. Null until upload
   /// starts (= "all"). The progress screen filters to these so deselected
   /// files are not listed during upload.
@@ -237,6 +247,8 @@ class ImportSessionState {
     this.paused = false,
     this.cacheUsedBytes = 0,
     this.connectionProblem,
+    this.networkWaiting = false,
+    this.nextNetworkCheckAt,
   });
 
   ImportSessionState copyWith({
@@ -253,6 +265,8 @@ class ImportSessionState {
     int? cacheUsedBytes,
     String? connectionProblem,
     bool clearConnectionProblem = false,
+    bool? networkWaiting,
+    DateTime? nextNetworkCheckAt,
   }) => ImportSessionState(
     step: step ?? this.step,
     directoryPath: directoryPath ?? this.directoryPath,
@@ -266,6 +280,10 @@ class ImportSessionState {
     paused: paused ?? this.paused,
     cacheUsedBytes: cacheUsedBytes ?? this.cacheUsedBytes,
     connectionProblem: clearConnectionProblem ? null : (connectionProblem ?? this.connectionProblem),
+    networkWaiting: clearConnectionProblem ? false : (networkWaiting ?? this.networkWaiting),
+    nextNetworkCheckAt: clearConnectionProblem || networkWaiting == false
+        ? null
+        : (nextNetworkCheckAt ?? this.nextNetworkCheckAt),
   );
 
   int get totalBytes => uploadSets.fold(0, (s, u) => s + u.totalBytes);
@@ -382,6 +400,56 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     }
   }
 
+  /// Network watchdog hooks for the file in flight (null between files).
+  Future<void> Function({bool networkChanged})? _checkStall;
+
+  /// Per file: how many times the network "came back" without that file making any progress, and
+  /// the bytes it had then. Stops an endless stall-and-retry loop when small requests work but
+  /// uploads never do (typically a VPN or link that drops large packets).
+  final Map<String, ({int retries, int bytes})> _noProgressRetries = {};
+  static const _maxNoProgressRetries = 3;
+
+  /// Fires whenever the phone's network changes (Wi-Fi, mobile, VPN) during an upload session.
+  StreamController<void>? _networkChanges;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+
+  Future<bool> _vpnOn() async {
+    try {
+      return (await Connectivity().checkConnectivity()).contains(ConnectivityResult.vpn);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// "Waiting for network": keeps the file pending and its staged copy cached, re-checks the server
+  /// with back-off (and at once when the network changes), and tells the user what is happening.
+  Future<NetworkWaitResult> _waitForNetwork(
+    String hostUrl,
+    String uploadPath,
+    String password,
+    Completer<void> cancelToken,
+    UploadFailureAdvice advice,
+  ) async {
+    final vpn = await _vpnOn();
+    final message = '${waitingForNetworkMessage(hostUrl, vpnOn: vpn)}\n${advice.detail}';
+    final waiter = CopypartyNetworkWaiter(
+      probe: () {
+        _uploader.resetConnection(); // a fresh connection pool on the (possibly new) network
+        return _uploader.preflight(hostUrl, uploadPath, password);
+      },
+      networkChanges: _networkChanges?.stream,
+    );
+    final result = await waiter.wait(
+      cancelled: cancelToken.future,
+      lastProblem: advice,
+      onWaiting: (nextCheckAt, attempt) {
+        _log.log('   waiting for network: check #${attempt + 1} at $nextCheckAt');
+        state = state.copyWith(networkWaiting: true, connectionProblem: message, nextNetworkCheckAt: nextCheckAt);
+      },
+    );
+    return result;
+  }
+
   /// Retry ONE failed (or skipped) file. Its staged copy, if any, is reused, so a large file is
   /// not copied off the card again. Starts the upload loop when none is running.
   Future<void> retryFile(String localPath) async {
@@ -482,6 +550,22 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         state = state.copyWith(clearConnectionProblem: true);
       }
     }
+
+    // A new run (Start, Resume or Retry) gives every file fresh stall retries.
+    _noProgressRetries.clear();
+
+    // Watch the phone's network for the whole session: a change re-checks the file in flight at
+    // once, and wakes a "Waiting for network" wait early.
+    _networkChanges = StreamController<void>.broadcast();
+    await _connectivitySub?.cancel();
+    _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
+      _log.log('network changed: ${results.map((r) => r.name).join(', ')}');
+      _networkChanges?.add(null);
+      final check = _checkStall;
+      if (check != null) {
+        unawaited(check(networkChanged: true));
+      }
+    });
 
     // Keep the device awake for the whole upload. Without this, a long import
     // (multi-GB files over slow links = many minutes) gets the screen-off doze /
@@ -629,6 +713,47 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         }
 
         unawaited(skip.future.then(completeFileToken));
+        // Network watchdog for THIS file: if bytes stop moving and a quick probe says the server is
+        // gone (or the phone's network changes and the probe fails), abort the in-flight request so
+        // the loop can wait for the network and resume, instead of sitting on a 60-120 s timeout.
+        final netAbort = Completer<UploadFailureAdvice>();
+        unawaited(netAbort.future.then(completeFileToken));
+        var lastBytes = file.uploadedBytes;
+        var lastProgressAt = DateTime.now();
+        var checking = false;
+        Future<void> checkStall({bool networkChanged = false}) async {
+          if (checking || netAbort.isCompleted || fileToken.isCompleted) {
+            return;
+          }
+          if (file.uploadedBytes != lastBytes) {
+            lastBytes = file.uploadedBytes;
+            lastProgressAt = DateTime.now();
+            if (!networkChanged) {
+              return;
+            }
+          }
+          final transferring = file.status == UploadFileStatus.uploading || file.status == UploadFileStatus.handshaking;
+          if (!transferring) {
+            return;
+          }
+          final since = DateTime.now().difference(lastProgressAt);
+          if (!networkChanged && since < CopypartyStallWatch.checkEvery) {
+            return;
+          }
+          checking = true;
+          try {
+            final probe = await _uploader.preflight(config.hostUrl, config.uploadPath, password);
+            if (CopypartyStallWatch.shouldAbort(sinceProgress: since, probe: probe) && !netAbort.isCompleted) {
+              _log.log('-- NETWORK STALL on ${file.filename} after ${since.inSeconds}s: ${probe!.detail}');
+              netAbort.complete(probe);
+            }
+          } finally {
+            checking = false;
+          }
+        }
+
+        _checkStall = checkStall;
+        final stallTimer = Timer.periodic(CopypartyStallWatch.checkEvery, (_) => unawaited(checkStall()));
         {
           // FB9: when "create folders" is on, mirror the file's subfolder beneath
           // the upload path, rooted at the set's OWN picked folder (so added
@@ -975,26 +1100,72 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
               _notify();
               break;
             }
-            // Neither skip nor cancel was requested — a genuine failure. Say what to do, plus a
-            // detail line (url, time, type) that can be matched to the server logs.
-            final advice = UploadFailureAdvice.classify(e, hostUrl: config.hostUrl, uploadPath: config.uploadPath);
+            // Neither skip nor cancel was requested. A network abort from the watchdog, or any
+            // failure that means the link is gone, does NOT fail the file: it waits for the network
+            // and resumes (up2k resumes from the chunks the server is still missing). Anything else
+            // fails the file with what the user must do plus a detail line for the server logs.
+            final advice = netAbort.isCompleted
+                ? await netAbort.future
+                : UploadFailureAdvice.classify(e, hostUrl: config.hostUrl, uploadPath: config.uploadPath);
             file.staging = false;
-            file.status = UploadFileStatus.failed;
-            file.errorMessage = advice.userText;
-            _log.log('!! FAILED ${file.filename}: $e  [${advice.detail}]');
-            _notify();
-            // If the link itself is gone, every remaining file would stall the same way: check once,
-            // and if the server is still unreachable stop the batch with one banner. The rest stay
-            // pending and their staged copies stay cached for Retry.
-            if (advice.isConnectionProblem) {
-              final still = await _uploader.preflight(config.hostUrl, config.uploadPath, password);
-              if (still != null && still.isConnectionProblem) {
-                _log.log('-- STOPPED: server unreachable after ${file.filename} [${still.detail}]');
-                state = state.copyWith(connectionProblem: still.userText);
-                cancelled = true;
-                break;
-              }
+            if (!advice.isConnectionProblem) {
+              file.status = UploadFileStatus.failed;
+              file.errorMessage = advice.userText;
+              _log.log('!! FAILED ${file.filename}: $e  [${advice.detail}]');
+              _notify();
+              continue;
             }
+            file.status = UploadFileStatus.pending;
+            file.errorMessage = null;
+            _log.log('-- WAITING FOR NETWORK at ${file.filename}: $e  [${advice.detail}]');
+            final waitResult = await _waitForNetwork(config.hostUrl, config.uploadPath, password, cancelToken, advice);
+            switch (waitResult.outcome) {
+              case NetworkWaitOutcome.recovered:
+                final prev = _noProgressRetries[file.localPath];
+                final retries = prev != null && file.uploadedBytes <= prev.bytes ? prev.retries + 1 : 1;
+                _noProgressRetries[file.localPath] = (retries: retries, bytes: file.uploadedBytes);
+                if (retries <= _maxNoProgressRetries) {
+                  _log.log('-- NETWORK BACK, resuming ${file.filename} (try $retries)');
+                  state = state.copyWith(clearConnectionProblem: true);
+                  continue;
+                }
+                // The server answers small checks but this file keeps stalling with no progress.
+                _noProgressRetries.remove(file.localPath);
+                file.status = UploadFileStatus.failed;
+                const action =
+                    'The server answers, but this upload keeps stalling. This usually means the VPN or '
+                    'network drops large transfers: turn the VPN off (or allow local network access) and '
+                    'stay on home Wi-Fi, then tap Retry.';
+                file.errorMessage = '$action\n${advice.detail}';
+                _log.log('-- NEEDS ATTENTION at ${file.filename}: stalled $retries times with no progress');
+                state = state.copyWith(
+                  networkWaiting: false,
+                  connectionProblem: 'Needs attention. $action\n${advice.detail}',
+                );
+                cancelled = true;
+                _notify();
+              case NetworkWaitOutcome.cancelled:
+                state = state.copyWith(clearConnectionProblem: true);
+                cancelled = true;
+                _log.log('-- CANCELLED while waiting for network at ${file.filename}');
+                _notify();
+              case NetworkWaitOutcome.gaveUp:
+              case NetworkWaitOutcome.blocked:
+                final last = waitResult.advice ?? advice;
+                file.status = UploadFileStatus.failed;
+                file.errorMessage = last.userText;
+                _log.log('-- NEEDS ATTENTION at ${file.filename}: ${last.detail}');
+                state = state.copyWith(
+                  networkWaiting: false,
+                  connectionProblem: 'Needs attention. ${last.action}\n${last.detail}',
+                );
+                cancelled = true;
+                _notify();
+            }
+            break;
+          } finally {
+            stallTimer.cancel();
+            _checkStall = null;
           }
         }
       }
@@ -1037,6 +1208,13 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       }
       _heartbeatTimer?.cancel();
       _heartbeatTimer = null;
+      await _connectivitySub?.cancel();
+      _connectivitySub = null;
+      await _networkChanges?.close();
+      _networkChanges = null;
+      if (state.networkWaiting) {
+        state = state.copyWith(networkWaiting: false);
+      }
       _uploadCancelToken = null;
       _uploadRunning = false;
       _uploadingPath = null;
@@ -1838,6 +2016,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       paused: state.paused,
       cacheUsedBytes: state.cacheUsedBytes,
       connectionProblem: state.connectionProblem,
+      networkWaiting: state.networkWaiting,
+      nextNetworkCheckAt: state.nextNetworkCheckAt,
     );
   }
 

@@ -422,8 +422,9 @@ class CopypartyUploaderService {
     final postFuture = _client
         .post(uri, headers: {'Content-Type': 'application/json', ..._authHeaders(password)}, body: body)
         .timeout(
-          const Duration(seconds: 60),
-          onTimeout: () => throw CopypartyUploadException('$label stalled (no response in 60s)', stalled: true),
+          // A handshake is a small JSON exchange: 20 s without an answer means the link is gone.
+          const Duration(seconds: 20),
+          onTimeout: () => throw CopypartyUploadException('$label stalled (no response in 20s)', stalled: true),
         );
     final http.Response response;
     if (cancelToken != null) {
