@@ -77,7 +77,8 @@ class MqttPublisher:
         s = self._snapshot()
         out = [("node", "ON", True), ("state/updated", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), True)]
         for k, v in s.items():
-            out.append((k, v if isinstance(v, str) else json.dumps(v), True))
+            # an empty retained payload would DELETE the topic on the broker, so nothing is ever sent empty
+            out.append((k, (v if isinstance(v, str) else json.dumps(v)) or "none", True))
         return out
 
     def _session(self, url: str) -> None:

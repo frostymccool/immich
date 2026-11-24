@@ -154,8 +154,8 @@ def main() -> int:
             auto = {}
         queue = sum(r.worker.queue_size for r in manager.runtimes()) if hasattr(manager, "runtimes") else worker.queue_size
         out = {"device/version": __version__, "state/queue": str(queue), "state/paused": "ON" if cfg.paused else "OFF",
-               "state/backoff": "ON" if b["busy"] else "OFF", "state/backoff_reason": b["reason"],
-               "state/backoff_until": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(b["until"])) if b["until"] else "",
+               "state/backoff": "ON" if b["busy"] else "OFF", "state/backoff_reason": b["reason"] or "none",
+               "state/backoff_until": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(b["until"])) if b["until"] else "none",
                "state/imported_total": str(counts.get("imported", 0)), "state/autofix": auto}
         out["state/summary"] = {k.split("/")[-1]: v for k, v in out.items()}
         return out

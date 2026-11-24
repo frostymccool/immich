@@ -77,8 +77,8 @@ State (retained, refreshed at least every 60 s):
   ImmichBridge/state/queue             files waiting to be imported (all people)
   ImmichBridge/state/paused            ON | OFF (paused by the user)
   ImmichBridge/state/backoff           ON | OFF (holding off by itself because Immich or its server is overloaded)
-  ImmichBridge/state/backoff_reason    why, in words ("" when not backing off)
-  ImmichBridge/state/backoff_until     ISO-8601 UTC time of the next check ("" when not backing off)
+  ImmichBridge/state/backoff_reason    why, in words ("none" when not backing off)
+  ImmichBridge/state/backoff_until     ISO-8601 UTC time of the next check ("none" when not backing off)
   ImmichBridge/state/imported_total    files imported by the bridge (all people)
   ImmichBridge/state/autofix           JSON counts of automatic place/time corrections: applied, review, ...
   ImmichBridge/state/summary           JSON with all of the above

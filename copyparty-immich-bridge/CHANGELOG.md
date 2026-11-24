@@ -15,6 +15,7 @@ Versions are shown in the page header, `GET /healthz`, the start-up log line and
 - **MQTT** (`mqtt_url` / `MQTT_URL`, off by default): retained state under `ImmichBridge/` (node with a last will,
   queue, paused, backoff with reason and next check, imports, corrections) and events. With `public_url` set, the
   bridge registers itself in an mqtt-netdocs style device index. `GET /llms.txt` (open) describes it all.
+- No retained topic is ever published empty (that deletes it on the broker): "none" instead.
 - `update-bridge.sh` keeps an install on the branch it came from (recorded as `BRIDGE_BRANCH` by the installer).
 
 ## 0.6.0 - automatic place and time zone from your own photos
