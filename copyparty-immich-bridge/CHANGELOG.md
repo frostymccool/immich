@@ -3,6 +3,12 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.8.1 - "Everyone" no longer names one account
+
+- With several people and **Everyone** picked, the Status tab's "Where files come from and go to" said it imported
+  into the main person's account and showed only their album count. It now says each person imports into their own
+  Immich account, and to pick a person to see which.
+
 ## 0.8.0 - each phone sees only its own person
 
 - New `GET /status/me` for the phone app: it sends its Immich sign-in (`X-Immich-Token`), the bridge asks Immich whose

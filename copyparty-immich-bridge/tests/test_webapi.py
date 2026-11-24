@@ -400,3 +400,10 @@ def test_status_shows_health_counts_without_names(app, monkeypatch):
     assert "extras" not in call(base, "GET", "/status", token=None)[1]
     page = call(base, "GET", "/", token=None, raw=True)[1]
     assert b'id="healthLine"' in page and b"renderHealth" in page
+
+
+def test_everyone_view_does_not_name_one_account(app):
+    make, _ = app
+    base, *_ = make()
+    page = call(base, "GET", "/", token=None, raw=True)[1].decode()
+    assert "r.multi && !viewUser" in page and "each person's own Immich account" in page

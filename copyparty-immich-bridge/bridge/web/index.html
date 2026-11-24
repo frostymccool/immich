@@ -551,6 +551,10 @@
     var s = lastStatus;
     if (s) { row('Watching', s.watch_dirs.join(', ') + (s.priority_dirs.length ? '  (imported first: ' + s.priority_dirs.join(', ') + ')' : '')); }
     var r = lastIdentity;
+    if (r && r.multi && !viewUser) {  // "Everyone": the account, albums and album count below are the main person's only
+      row('Importing into', "each person's own Immich account. Pick a person at the top to see which account and albums.");
+      return;
+    }
     if (r && r.immich_user) {
       row('Importing into', (r.immich_user.name || '?') + (r.immich_user.email ? ' (' + r.immich_user.email + ')' : '') + ' — log in to Immich as this user to see imports and albums');
     }
