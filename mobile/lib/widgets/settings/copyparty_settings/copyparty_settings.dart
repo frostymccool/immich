@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -129,28 +131,69 @@ class _DownloadLogButton extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Save: Android's own "save to" screen (pick Downloads), so the log can be kept as a file.
+    // Share: the share menu, for emailing or sending it.
+    Future<void> save() async {
+      final path = await ref.read(copypartyLoggerProvider).flush();
+      final bytes = await File(path).readAsBytes();
+      final stamp = DateTime.now().toIso8601String().split('.').first.replaceAll(':', '-');
+      String? saved;
+      try {
+        saved = await FilePicker.platform.saveFile(
+          dialogTitle: 'Save diagnostic log',
+          fileName: 'copyparty_diag_$stamp.log',
+          bytes: bytes,
+        );
+      } catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Could not save the log: $e. Use Share log instead.')));
+        }
+        return;
+      }
+      if (context.mounted && saved != null) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Diagnostic log saved.'), backgroundColor: Colors.green));
+      }
+    }
+
+    Future<void> share() async {
+      final path = await ref.read(copypartyLoggerProvider).flush();
+      if (!context.mounted) {
+        return;
+      }
+      final box = context.findRenderObject() as RenderBox?;
+      await Share.shareXFiles(
+        [XFile(path)],
+        subject: 'Copyparty diagnostic log',
+        sharePositionOrigin: box != null ? box.localToGlobal(Offset.zero) & box.size : null,
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-      child: SizedBox(
-        width: double.infinity,
-        child: OutlinedButton.icon(
-          onPressed: () async {
-            final logger = ref.read(copypartyLoggerProvider);
-            final path = await logger.flush();
-            if (!context.mounted) {
-              return;
-            }
-            final box = context.findRenderObject() as RenderBox?;
-            await Share.shareXFiles(
-              [XFile(path)],
-              subject: 'Copyparty diagnostic log',
-              sharePositionOrigin: box != null ? box.localToGlobal(Offset.zero) & box.size : null,
-            );
-          },
-          icon: const Icon(Icons.download_rounded),
-          label: const Text('Download log'),
-          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-        ),
+      child: Row(
+        children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () => unawaited(save()),
+              icon: const Icon(Icons.download_rounded),
+              label: const Text('Save log'),
+              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () => unawaited(share()),
+              icon: const Icon(Icons.share_rounded),
+              label: const Text('Share log'),
+              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -551,8 +551,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       }
     }
 
-    // A new run (Start, Resume or Retry) gives every file fresh stall retries.
+    // A new run (Start, Resume or Retry) gives every file fresh stall retries and source checks.
     _noProgressRetries.clear();
+    _sourceChecks.clear();
 
     // Watch the phone's network for the whole session: a change re-checks the file in flight at
     // once, and wakes a "Waiting for network" wait early.
@@ -812,6 +813,14 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             }
             final readPath = staged?.path ?? file.localPath;
 
+            // Auto-delete needs a second, independent read of the ORIGINAL to catch a bad first read
+            // (the staged copy, its hash and the server would all agree on corrupt bytes). Start it now,
+            // in parallel with this file's upload: the card is much faster than the network, so it is
+            // normally finished before the upload is, and the delete then waits for nothing.
+            if (staged != null && config.autoDeleteAfterVerify) {
+              _startSourceCheck(file, cancelToken);
+            }
+
             // Keep the read-ahead cache filler running so the following files
             // copy from the card into the cache (up to the cache budget) while
             // this one uploads over the network. (cache-size feature)
@@ -1008,19 +1017,29 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                   _log.log('AUTO-DELETE SKIPPED for ${file.filename}: source gone — nothing to verify against');
                 } else {
                   try {
-                    // Visible, with progress: a large file on a card can take minutes, and before this
-                    // the card showed as finished at 100% while the app was still reading.
-                    file.status = UploadFileStatus.verifyingSource;
-                    file.uploadedBytes = 0;
-                    _notify();
-                    final srcHash = await _wholeFileSha512(
-                      file.localPath,
-                      onProgress: (done) {
-                        file.uploadedBytes = done;
+                    // Normally already finished (it ran alongside the upload). If not, show it with
+                    // progress instead of a card that looks done at 100%.
+                    final check = _startSourceCheck(file, cancelToken);
+                    Timer? ticker;
+                    if (!check.done) {
+                      file.status = UploadFileStatus.verifyingSource;
+                      file.uploadedBytes = check.bytes;
+                      _notify();
+                      ticker = Timer.periodic(const Duration(milliseconds: 500), (_) {
+                        file.uploadedBytes = check.bytes;
                         _notify();
-                      },
-                      cancelToken: fileToken,
-                    );
+                      });
+                    }
+                    final String srcHash;
+                    try {
+                      // Skip/Stop on this file abandons the wait (and the delete), never the safety rule.
+                      srcHash = await Future.any<String>([
+                        check.hash,
+                        fileToken.future.then<String>((_) => throw const CopypartyCancelledException()),
+                      ]);
+                    } finally {
+                      ticker?.cancel();
+                    }
                     file.uploadedBytes = file.sizeBytes;
                     safeToRemove = srcHash == file.sha512;
                     if (!safeToRemove) {
@@ -1958,6 +1977,31 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
 
   /// Streams the whole-file SHA-512 of [path] (hex) — used to cross-check a
   /// staged upload against the source before an irreversible auto-delete.
+  /// Independent re-reads of originals for auto-delete, per file, for the current run. Reused when an
+  /// upload is interrupted and resumes, so the card is not read a third time.
+  final Map<String, _SourceCheck> _sourceChecks = {};
+
+  _SourceCheck _startSourceCheck(UploadFile file, Completer<void> cancelToken) {
+    return _sourceChecks.putIfAbsent(file.localPath, () {
+      final check = _SourceCheck();
+      check.hash = _wholeFileSha512(file.localPath, onProgress: (done) => check.bytes = done, cancelToken: cancelToken);
+      unawaited(
+        check.hash.then(
+          (_) {
+            check.done = true;
+            _log.log('source check done: ${file.filename}');
+          },
+          onError: (Object e) {
+            check.done = true;
+            _log.log('source check failed: ${file.filename}: $e');
+          },
+        ),
+      );
+      _log.log('source check started in parallel: ${file.filename}');
+      return check;
+    });
+  }
+
   Future<String> _wholeFileSha512(
     String path, {
     void Function(int bytesRead)? onProgress,
@@ -2113,4 +2157,11 @@ String mirroredUploadPath(String base, String? rootDir, String fileLocalPath) {
   }
   final tail = rel.isEmpty ? rootName : '$rootName/$rel';
   return '$cleanBase/$tail';
+}
+
+/// One file's independent re-read of its original (for auto-delete).
+class _SourceCheck {
+  late Future<String> hash;
+  int bytes = 0;
+  bool done = false;
 }
