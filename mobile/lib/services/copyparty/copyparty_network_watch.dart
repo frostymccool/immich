@@ -49,6 +49,11 @@ class CopypartyNetworkWaiter {
 
   static Duration delayFor(int attempt) => attempt < backoff.length ? backoff[attempt] : steady;
 
+  /// After a network change, check every [quickDelay] this many times before the normal back-off:
+  /// Android reports a new network before it is usable, so the first check often fails.
+  static const quickChecks = 5;
+  static const quickDelay = Duration(seconds: 2);
+
   /// [onWaiting] is told when the next check happens, so the UI can show it.
   Future<NetworkWaitResult> wait({
     required Future<void> cancelled,
@@ -57,8 +62,11 @@ class CopypartyNetworkWaiter {
   }) async {
     var cancelledNow = false;
     unawaited(cancelled.then((_) => cancelledNow = true));
+    // Set by every network change, even one that arrives while a probe is running.
+    var changed = false;
     Completer<void>? wake;
     final sub = networkChanges?.listen((_) {
+      changed = true;
       final w = wake;
       if (w != null && !w.isCompleted) {
         w.complete();
@@ -66,17 +74,37 @@ class CopypartyNetworkWaiter {
     });
     final since = now();
     var last = lastProblem;
+    var backoffStep = 0;
+    var quickLeft = 0;
     try {
       for (var attempt = 0; ; attempt++) {
         if (cancelledNow) {
           return const NetworkWaitResult(NetworkWaitOutcome.cancelled);
         }
-        final delay = delayFor(attempt);
+        final Duration delay;
+        if (changed) {
+          changed = false;
+          quickLeft = quickChecks;
+          delay = Duration.zero; // the network just changed: check now
+        } else if (quickLeft > 0) {
+          quickLeft--;
+          delay = quickDelay;
+        } else {
+          delay = delayFor(backoffStep++);
+        }
         onWaiting?.call(now().add(delay), attempt);
-        wake = Completer<void>();
-        await Future.any<void>([sleep(delay), wake.future, cancelled]);
+        if (delay > Duration.zero) {
+          wake = Completer<void>();
+          await Future.any<void>([sleep(delay), wake.future, cancelled]);
+          wake = null;
+        }
         if (cancelledNow) {
           return const NetworkWaitResult(NetworkWaitOutcome.cancelled);
+        }
+        if (changed) {
+          // Woken by a network change: probe now, then keep checking quickly.
+          changed = false;
+          quickLeft = quickChecks;
         }
         final problem = await probe();
         if (problem == null) {

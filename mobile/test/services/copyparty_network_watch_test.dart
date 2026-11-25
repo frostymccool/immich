@@ -94,6 +94,61 @@ void main() {
     });
   });
 
+  group('reconnecting quickly after a network change', () {
+    test('a change mid-back-off probes at once, then every 2 s, not on the 30 s step', () async {
+      final clock = _Clock();
+      final changes = StreamController<void>.broadcast();
+      var probes = 0;
+      final waiter = CopypartyNetworkWaiter(
+        // Fails 4 times; the network change arrives during the 3rd probe, as Android reports a
+        // new network before it is usable. Then it succeeds.
+        probe: () async {
+          probes++;
+          if (probes == 3) {
+            changes.add(null);
+            await Future<void>.delayed(Duration.zero);
+          }
+          return probes < 5 ? _down : null;
+        },
+        networkChanges: changes.stream,
+        now: () => clock.now,
+        sleep: clock.sleep,
+      );
+      final r = await waiter.wait(cancelled: Completer<void>().future, lastProblem: _down);
+      expect(r.outcome, NetworkWaitOutcome.recovered);
+      // Probes run after each wait: 5 s, 10 s, 30 s (the change arrives during that 3rd probe).
+      // The change is still seen, so the 4th probe runs at once (no wait) and the 5th after 2 s,
+      // instead of the 60 s step.
+      expect(clock.slept.map((d) => d.inSeconds), [5, 10, 30, 2]);
+      expect(probes, 5);
+      await changes.close();
+    });
+
+    test('quick checks run out, then the normal back-off resumes', () async {
+      final clock = _Clock();
+      final changes = StreamController<void>.broadcast();
+      var probes = 0;
+      final waiter = CopypartyNetworkWaiter(
+        probe: () async {
+          probes++;
+          if (probes == 1) {
+            changes.add(null);
+            await Future<void>.delayed(Duration.zero);
+          }
+          return probes < 9 ? _down : null;
+        },
+        networkChanges: changes.stream,
+        now: () => clock.now,
+        sleep: clock.sleep,
+      );
+      await waiter.wait(cancelled: Completer<void>().future, lastProblem: _down);
+      // 5 s, then the change: one probe at once, five 2 s quick checks, then back to the normal
+      // back-off where it left off (10 s, 30 s).
+      expect(clock.slept.map((d) => d.inSeconds), [5, 2, 2, 2, 2, 2, 10, 30]);
+      await changes.close();
+    });
+  });
+
   group('stall watchdog', () {
     test('a slow but working link (probe answers) is never aborted', () {
       expect(CopypartyStallWatch.shouldAbort(sinceProgress: const Duration(minutes: 5), probe: null), isFalse);
