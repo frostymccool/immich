@@ -434,13 +434,17 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   /// Deletes one source file and records it. When the file was hash-verified AND a leftover `.PARTIAL`
   /// sits next to it on copyparty, that stray partial is removed from the server too (best effort; the
   /// local delete has already succeeded and is never undone by a failure here).
-  Future<({bool deleted, int partialsRemoved, int partialsFailed})> _deleteReceiptFile(CopypartyReceipt receipt) async {
+  Future<({bool deleted, int partialsRemoved, int partialsFailed, String? error})> _deleteReceiptFile(
+    CopypartyReceipt receipt,
+  ) async {
     // Same deleter as auto-delete: a plain delete, then the folder permission Android granted when the
     // folder was picked (removable cards often refuse the plain delete).
     final result = await CopypartySourceDeleter().delete(receipt.localPath);
     if (!result.ok) {
-      return (deleted: false, partialsRemoved: 0, partialsFailed: 0);
+      ref.read(copypartyLoggerProvider).log('CLEANUP DELETE FAILED ${receipt.localPath}: ${result.reason}');
+      return (deleted: false, partialsRemoved: 0, partialsFailed: 0, error: result.reason);
     }
+    ref.read(copypartyLoggerProvider).log('CLEANUP DELETED ${receipt.localPath}');
     try {
       await ref.read(copypartyReceiptRepositoryProvider).markSourceDeleted(receipt.id!);
     } catch (_) {}
@@ -453,7 +457,32 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       removed = res.removed.length;
       failed = res.failed.length + (res.skipped != null ? 1 : 0);
     }
-    return (deleted: true, partialsRemoved: removed, partialsFailed: failed);
+    return (deleted: true, partialsRemoved: removed, partialsFailed: failed, error: null);
+  }
+
+  /// Says in full why files could not be deleted from the card, and what to do. A snackbar would cut it off.
+  Future<void> _showDeleteFailures(List<({String name, String reason})> failures) async {
+    if (!mounted) {
+      return;
+    }
+    final first = failures.first;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('${failures.length} file${failures.length == 1 ? '' : 's'} could not be deleted from the card'),
+        content: SingleChildScrollView(
+          child: SelectableText(
+            'They are verified and stay safely on the card. Android refused the delete:\n\n'
+            '${first.name}: ${first.reason}'
+            '${failures.length > 1 ? '\n(and ${failures.length - 1} more, see the diagnostic log)' : ''}\n\n'
+            'To fix it: go to Import from Memory Card, pick the card folder again and allow access when '
+            'Android asks, then try again here. If it still fails, use Save log in Copyparty settings and '
+            'send the log.',
+          ),
+        ),
+        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+      ),
+    );
   }
 
   /// Snackbar suffix describing what happened to leftover server-side partials.
@@ -503,7 +532,8 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     var deletedCount = 0;
     var partialsRemoved = 0;
     var partialsFailed = 0;
-    final notDeleted = <String>[];
+    final notVerified = <String>[];
+    final deleteFailed = <({String name, String reason})>[];
     var processed = 0;
     for (final r in targets) {
       if (!mounted) {
@@ -520,7 +550,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       }
       final safe = _verify[r.id]?.safeToDeleteAt(DateTime.now()) ?? false;
       if (!safe) {
-        notDeleted.add(r.filename);
+        notVerified.add(r.filename);
         continue;
       }
       final outcome = await _deleteReceiptFile(r);
@@ -535,7 +565,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
           });
         }
       } else {
-        notDeleted.add(r.filename);
+        deleteFailed.add((name: r.filename, reason: outcome.error ?? 'unknown'));
       }
     }
     if (!mounted) {
@@ -549,11 +579,15 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     final untouched = targets.length - processed;
     final parts = <String>[
       'Verified and deleted $deletedCount of ${targets.length}',
-      if (notDeleted.isNotEmpty) '${notDeleted.length} not verified, left untouched',
+      if (deleteFailed.isNotEmpty) '${deleteFailed.length} verified but could not be deleted',
+      if (notVerified.isNotEmpty) '${notVerified.length} not verified, left untouched',
       if (stopped && untouched > 0) 'stopped with $untouched not checked',
       if (partialsRemoved > 0 || partialsFailed > 0) _partialsNote(partialsRemoved, partialsFailed),
     ];
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(parts.join(' · '))));
+    if (deleteFailed.isNotEmpty) {
+      await _showDeleteFailures(deleteFailed);
+    }
     ref.invalidate(pendingCleanupProvider);
   }
 
@@ -640,6 +674,7 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     }
 
     final deletedIds = <int>[];
+    final deleteFailed = <({String name, String reason})>[];
     var partialsRemoved = 0;
     var partialsFailed = 0;
     for (final receipt in toDelete) {
@@ -648,6 +683,8 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       partialsFailed += outcome.partialsFailed;
       if (outcome.deleted) {
         deletedIds.add(receipt.id!);
+      } else {
+        deleteFailed.add((name: receipt.filename, reason: outcome.error ?? 'unknown'));
       }
     }
     if (mounted) {
@@ -662,12 +699,16 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
           content: Text(
             [
               'Deleted ${deletedIds.length} / ${toDelete.length} files',
+              if (deleteFailed.isNotEmpty) '${deleteFailed.length} could not be deleted',
               if (partialsRemoved > 0 || partialsFailed > 0) _partialsNote(partialsRemoved, partialsFailed),
             ].join(' · '),
           ),
         ),
       );
       ref.invalidate(pendingCleanupProvider);
+      if (deleteFailed.isNotEmpty) {
+        await _showDeleteFailures(deleteFailed);
+      }
     }
   }
 
