@@ -2396,11 +2396,12 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
                         ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · skipped'
                         : isDone
                         ? (file.alreadyOnServer
-                              ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · already on server (hash verified)'
-                              : _doneTimingSuffix(file) != null
-                              // total · elapsed · avg speed — read from the model (item 2)
-                              ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · ${_doneTimingSuffix(file)}'
-                              : '${formatHumanReadableBytes(file.sizeBytes, 1)} · Done')
+                                  ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · already on server (hash verified)'
+                                  : _doneTimingSuffix(file) != null
+                                  // total · elapsed · avg speed — read from the model (item 2)
+                                  ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · ${_doneTimingSuffix(file)}'
+                                  : '${formatHumanReadableBytes(file.sizeBytes, 1)} · Done') +
+                              (file.sourceNote == null ? '' : '\n${file.sourceNote}')
                         : isCopying
                         // Copying to phone (staging, batch item 4) % on the full
                         // bar so a large file being staged isn't a frozen 0%.
@@ -3193,6 +3194,11 @@ class _CompletionFileTile extends StatelessWidget {
               file.errorMessage!,
               style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.error),
             ),
+          ),
+        if (file.sourceNote != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(56, 0, 16, 4),
+            child: Text(file.sourceNote!, style: context.textTheme.bodySmall),
           ),
       ],
     );

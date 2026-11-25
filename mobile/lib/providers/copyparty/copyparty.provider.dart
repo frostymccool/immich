@@ -1004,6 +1004,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                 }
                 if (!sourceStillThere) {
                   safeToRemove = false;
+                  file.sourceNote = 'Original kept: it could not be found on the card to check against the upload.';
                   _log.log('AUTO-DELETE SKIPPED for ${file.filename}: source gone — nothing to verify against');
                 } else {
                   try {
@@ -1023,26 +1024,42 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                     file.uploadedBytes = file.sizeBytes;
                     safeToRemove = srcHash == file.sha512;
                     if (!safeToRemove) {
+                      file.sourceNote =
+                          'Original kept on the card: it does not match what was uploaded (possible bad read). '
+                          'The upload itself is complete.';
                       _log.log(
                         'AUTO-DELETE BLOCKED for ${file.filename}: source hash != uploaded hash '
                         '(possible bad read) — keeping the source file',
                       );
                     }
-                  } catch (_) {
-                    // Source unreadable (e.g. card pulled mid-check) → nothing to delete anyway.
+                  } on CopypartyCancelledException {
+                    // Stopped during the check: never delete without a finished check.
                     safeToRemove = false;
+                    file.sourceNote = 'Original kept on the card: the check before deleting was stopped.';
+                  } catch (_) {
+                    // Source unreadable (e.g. card pulled mid-check) → never delete.
+                    safeToRemove = false;
+                    file.sourceNote = 'Original kept on the card: it could not be read to check it.';
                   }
                 }
               }
               if (safeToRemove) {
                 try {
                   await File(file.localPath).delete();
+                  file.sourceNote = staged != null
+                      ? 'Original deleted from the card (checked: it matched the upload).'
+                      : 'Original deleted from the card.';
                   await _receiptRepo.markSourceDeleted(receiptId);
                   // This file just left Pending Cleanup (auto-deleted) — keep
                   // the badge count in sync the same way a fresh receipt does.
                   _ref.invalidate(pendingCleanupProvider);
-                } catch (_) {}
+                } catch (e) {
+                  if (File(file.localPath).existsSync()) {
+                    file.sourceNote = 'Original kept on the card: deleting it failed ($e).';
+                  }
+                }
               }
+              _log.log('SOURCE ${file.filename}: ${file.sourceNote}');
             }
 
             // Freeze the transfer duration so "total · elapsed · avg" is stable in

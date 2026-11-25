@@ -37,6 +37,10 @@ class UploadFile {
   bool dbRecordWritten;
   UploadFileStatus status;
   String? errorMessage;
+
+  /// After an upload with auto-delete on: whether the ORIGINAL on the card was deleted, and if it was
+  /// kept, why. Shown on the file so the user always knows. Null when auto-delete did not apply.
+  String? sourceNote;
   int uploadedBytes;
   UploadDestination destination;
   String? immichAssetId;
