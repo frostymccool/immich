@@ -11,6 +11,7 @@ import 'package:immich_mobile/providers/api.provider.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_source_delete.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -434,12 +435,15 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
   /// sits next to it on copyparty, that stray partial is removed from the server too (best effort; the
   /// local delete has already succeeded and is never undone by a failure here).
   Future<({bool deleted, int partialsRemoved, int partialsFailed})> _deleteReceiptFile(CopypartyReceipt receipt) async {
-    try {
-      await File(receipt.localPath).delete();
-      await ref.read(copypartyReceiptRepositoryProvider).markSourceDeleted(receipt.id!);
-    } catch (_) {
+    // Same deleter as auto-delete: a plain delete, then the folder permission Android granted when the
+    // folder was picked (removable cards often refuse the plain delete).
+    final result = await CopypartySourceDeleter().delete(receipt.localPath);
+    if (!result.ok) {
       return (deleted: false, partialsRemoved: 0, partialsFailed: 0);
     }
+    try {
+      await ref.read(copypartyReceiptRepositoryProvider).markSourceDeleted(receipt.id!);
+    } catch (_) {}
     var removed = 0;
     var failed = 0;
     if (_verify[receipt.id]?.strayPartial ?? false) {

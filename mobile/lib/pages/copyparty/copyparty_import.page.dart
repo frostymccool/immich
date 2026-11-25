@@ -130,6 +130,12 @@ class _UploadStateBanner extends StatelessWidget {
       background = scheme.errorContainer;
       foreground = scheme.onErrorContainer;
       icon = Icon(Icons.wifi_off_rounded, color: foreground, size: 20);
+    } else if (session.notice != null) {
+      title = 'Originals are being kept';
+      body = session.notice!;
+      background = scheme.secondaryContainer;
+      foreground = scheme.onSecondaryContainer;
+      icon = Icon(Icons.sd_card_alert_outlined, color: foreground, size: 20);
     } else if (session.paused && session.step == ImportSessionStep.uploading) {
       title = 'Paused by you';
       body = 'Tap Resume to continue. Files already sent are not sent again.';
@@ -2396,12 +2402,11 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
                         ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · skipped'
                         : isDone
                         ? (file.alreadyOnServer
-                                  ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · already on server (hash verified)'
-                                  : _doneTimingSuffix(file) != null
-                                  // total · elapsed · avg speed — read from the model (item 2)
-                                  ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · ${_doneTimingSuffix(file)}'
-                                  : '${formatHumanReadableBytes(file.sizeBytes, 1)} · Done') +
-                              (file.sourceNote == null ? '' : '\n${file.sourceNote}')
+                              ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · already on server (hash verified)'
+                              : _doneTimingSuffix(file) != null
+                              // total · elapsed · avg speed — read from the model (item 2)
+                              ? '${formatHumanReadableBytes(file.sizeBytes, 1)} · ${_doneTimingSuffix(file)}'
+                              : '${formatHumanReadableBytes(file.sizeBytes, 1)} · Done')
                         : isCopying
                         // Copying to phone (staging, batch item 4) % on the full
                         // bar so a large file being staged isn't a frozen 0%.
@@ -2438,6 +2443,18 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
+                  // Whether the original was deleted, in full (never cut off).
+                  if (file.sourceNote != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      file.sourceNote!,
+                      style: context.textTheme.bodySmall?.copyWith(
+                        color: file.sourceNote!.startsWith('Original kept')
+                            ? context.colorScheme.tertiary
+                            : context.colorScheme.onSurface.withValues(alpha: 0.7),
+                      ),
+                    ),
+                  ],
                   if (isActive && file.sizeBytes > 0) ...[
                     const SizedBox(height: 8),
                     ClipRRect(

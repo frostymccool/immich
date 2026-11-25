@@ -19,6 +19,7 @@ import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_foreground_service.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_network_watch.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_source_delete.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_staging.service.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 import 'package:immich_mobile/services/copyparty/immich_bridge_status.service.dart';
@@ -212,6 +213,9 @@ class ImportSessionState {
   /// means "Needs attention".
   final bool networkWaiting;
 
+  /// A one-time note for the whole run (for example: originals cannot be deleted from this card).
+  final String? notice;
+
   /// When the next automatic reachability check runs while [networkWaiting].
   final DateTime? nextNetworkCheckAt;
 
@@ -248,6 +252,7 @@ class ImportSessionState {
     this.cacheUsedBytes = 0,
     this.connectionProblem,
     this.networkWaiting = false,
+    this.notice,
     this.nextNetworkCheckAt,
   });
 
@@ -267,6 +272,8 @@ class ImportSessionState {
     bool clearConnectionProblem = false,
     bool? networkWaiting,
     DateTime? nextNetworkCheckAt,
+    String? notice,
+    bool clearNotice = false,
   }) => ImportSessionState(
     step: step ?? this.step,
     directoryPath: directoryPath ?? this.directoryPath,
@@ -281,6 +288,7 @@ class ImportSessionState {
     cacheUsedBytes: cacheUsedBytes ?? this.cacheUsedBytes,
     connectionProblem: clearConnectionProblem ? null : (connectionProblem ?? this.connectionProblem),
     networkWaiting: clearConnectionProblem ? false : (networkWaiting ?? this.networkWaiting),
+    notice: clearNotice ? null : (notice ?? this.notice),
     nextNetworkCheckAt: clearConnectionProblem || networkWaiting == false
         ? null
         : (nextNetworkCheckAt ?? this.nextNetworkCheckAt),
@@ -402,6 +410,12 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
 
   /// Network watchdog hooks for the file in flight (null between files).
   Future<void> Function({bool networkChanged})? _checkStall;
+
+  final _sourceDeleter = CopypartySourceDeleter();
+
+  /// Set when deleting originals failed (or cannot work) in this run: later files skip the attempt and
+  /// keep their original, and the notice says it once instead of on every file.
+  String? _deleteBlocked;
 
   /// Per file: how many times the network "came back" without that file making any progress, and
   /// the bytes it had then. Stops an endless stall-and-retry loop when small requests work but
@@ -554,6 +568,18 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     // A new run (Start, Resume or Retry) gives every file fresh stall retries and source checks.
     _noProgressRetries.clear();
     _sourceChecks.clear();
+    _deleteBlocked = null;
+    state = state.copyWith(clearNotice: true);
+    // Auto-delete on: check once, up front, that this card's originals can be deleted at all, so a
+    // read-only card is reported before the batch rather than on every file.
+    if (_ref.read(appConfigProvider).copyparty.autoDeleteAfterVerify) {
+      final folder = state.directoryPath;
+      if (folder != null && !await _sourceDeleter.canDeleteIn(folder)) {
+        _deleteBlocked = 'the card folder is read-only to the app';
+        state = state.copyWith(notice: originalsKeptNotice(_deleteBlocked!));
+        _log.log('AUTO-DELETE UNAVAILABLE for $folder: originals will be kept');
+      }
+    }
 
     // Watch the phone's network for the whole session: a change re-checks the file in flight at
     // once, and wakes a "Waiting for network" wait early.
@@ -1062,20 +1088,26 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                   }
                 }
               }
-              if (safeToRemove) {
-                try {
-                  await File(file.localPath).delete();
+              if (safeToRemove && _deleteBlocked != null) {
+                file.sourceNote =
+                    'Original kept on the card: this card cannot be changed by the app (see the note above).';
+              } else if (safeToRemove) {
+                final deleted = await _sourceDeleter.delete(file.localPath);
+                if (deleted.ok) {
                   file.sourceNote = staged != null
                       ? 'Original deleted from the card (checked: it matched the upload).'
                       : 'Original deleted from the card.';
-                  await _receiptRepo.markSourceDeleted(receiptId);
+                  try {
+                    await _receiptRepo.markSourceDeleted(receiptId);
+                  } catch (_) {}
                   // This file just left Pending Cleanup (auto-deleted) — keep
                   // the badge count in sync the same way a fresh receipt does.
                   _ref.invalidate(pendingCleanupProvider);
-                } catch (e) {
-                  if (File(file.localPath).existsSync()) {
-                    file.sourceNote = 'Original kept on the card: deleting it failed ($e).';
-                  }
+                } else {
+                  // Say it once for the run, keep this and every later original, and stop trying.
+                  _deleteBlocked = deleted.reason;
+                  file.sourceNote = 'Original kept on the card: deleting it failed (${deleted.reason}).';
+                  state = state.copyWith(notice: originalsKeptNotice(deleted.reason ?? 'unknown'));
                 }
               }
               _log.log('SOURCE ${file.filename}: ${file.sourceNote}');
@@ -2101,6 +2133,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       cacheUsedBytes: state.cacheUsedBytes,
       connectionProblem: state.connectionProblem,
       networkWaiting: state.networkWaiting,
+      notice: state.notice,
       nextNetworkCheckAt: state.nextNetworkCheckAt,
     );
   }

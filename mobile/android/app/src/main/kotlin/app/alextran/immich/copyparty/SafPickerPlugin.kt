@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.storage.StorageManager
 import android.provider.DocumentsContract
 import app.alextran.immich.core.ImmichPlugin
@@ -27,6 +29,11 @@ import io.flutter.plugin.common.PluginRegistry
  *
  * Channel: immich/saf_picker
  * Method:  pickDirectory() → String? (filesystem path, or null if cancelled)
+ * Method:  deleteFile({path}) → {ok: Boolean, error: String?}
+ *          Deletes a file through the folder grant the picker took (persisted tree URI with write
+ *          access). On Android 11+ a plain File.delete() on a removable SD card or USB drive is
+ *          often refused even with "All files access", while the tree grant allows it.
+ * Method:  canDelete({path}) → Boolean (a persisted writable folder grant covers this path)
  */
 class SafPickerPlugin(private val appContext: Context)
     : ImmichPlugin(), ActivityAware, PluginRegistry.ActivityResultListener {
@@ -56,6 +63,23 @@ class SafPickerPlugin(private val appContext: Context)
     private fun handleCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "pickDirectory" -> pickDirectory(result)
+            "deleteFile" -> {
+                val path = call.argument<String>("path")
+                if (path == null) {
+                    result.error("ARG", "path is required", null)
+                } else {
+                    // Off the main thread: a delete on a slow card must not block the UI.
+                    Thread {
+                        val outcome = deleteViaTree(path)
+                        // Flutter results must be delivered on the main thread.
+                        Handler(Looper.getMainLooper()).post { completeWhenActive(result::success, outcome) }
+                    }.start()
+                }
+            }
+            "canDelete" -> {
+                val path = call.argument<String>("path")
+                result.success(path != null && writableTreeFor(path) != null)
+            }
             else -> result.notImplemented()
         }
     }
@@ -130,6 +154,38 @@ class SafPickerPlugin(private val appContext: Context)
             if (relPath.isEmpty()) volumeRoot else "$volumeRoot/$relPath"
         } catch (_: Exception) {
             null
+        }
+    }
+
+    /** The persisted writable folder grant whose folder contains [path], with that folder's path. */
+    private fun writableTreeFor(path: String): Pair<Uri, String>? {
+        val grants = appContext.contentResolver.persistedUriPermissions.filter { it.isWritePermission }
+        var best: Pair<Uri, String>? = null
+        for (grant in grants) {
+            val root = resolveToFilesystemPath(grant.uri) ?: continue
+            val inside = path == root || path.startsWith(root.trimEnd('/') + "/")
+            if (inside && (best == null || root.length > best.second.length)) {
+                best = grant.uri to root
+            }
+        }
+        return best
+    }
+
+    private fun deleteViaTree(path: String): Map<String, Any?> {
+        return try {
+            val (treeUri, root) = writableTreeFor(path)
+                ?: return mapOf(
+                    "ok" to false,
+                    "error" to "no folder permission covers this file (pick the folder again in Import)",
+                )
+            val treeDocId = DocumentsContract.getTreeDocumentId(treeUri)
+            val rel = path.removePrefix(root.trimEnd('/')).trimStart('/')
+            val docId = if (treeDocId.endsWith(":")) "$treeDocId$rel" else "$treeDocId/$rel"
+            val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+            val ok = DocumentsContract.deleteDocument(appContext.contentResolver, docUri)
+            mapOf("ok" to ok, "error" to if (ok) null else "the storage provider refused the delete")
+        } catch (e: Exception) {
+            mapOf("ok" to false, "error" to (e.message ?: e.javaClass.simpleName))
         }
     }
 
