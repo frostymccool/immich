@@ -52,6 +52,7 @@ class CopypartySettings extends ConsumerWidget {
           // "Recreate folder structure" is a set-once, whole-server layout choice
           // (like File Matching below) — it lives on the GLOBAL settings page
           // only; the backup-entry upload page stays simple.
+          const _AutoFoldersTile(),
           if (showServerConfig) const _RecreateFolderStructureTile(),
           const _DefaultDestinationTile(),
           const _AutoDeleteTile(),
@@ -562,6 +563,30 @@ class _SortSmallestFirstTile extends ConsumerWidget {
         trailing: Switch(
           value: value,
           onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartySortSmallestFirst, v),
+        ),
+      ),
+    );
+  }
+}
+
+class _AutoFoldersTile extends ConsumerWidget {
+  const _AutoFoldersTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final value = ref.watch(appConfigProvider.select((c) => c.copyparty.autoFolders));
+    return Padding(
+      padding: const EdgeInsets.only(left: 8.0),
+      child: SettingListTile(
+        title: 'Name folders automatically',
+        subtitle:
+            'Card and camera imports go into one folder per day and camera, named '
+            'place, date and camera (for example "Lisbon 2026-05-02 X4"). The camera is read from '
+            'the files, the place from their GPS or the phone\'s location. You can change the '
+            'names before uploading. Replaces "Recreate folder structure" for these imports.',
+        trailing: Switch(
+          value: value,
+          onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyAutoFolders, v),
         ),
       ),
     );

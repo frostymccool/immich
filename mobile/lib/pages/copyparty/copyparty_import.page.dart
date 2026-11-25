@@ -9,6 +9,7 @@ import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/providers/api.provider.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_auto_folder.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
@@ -294,6 +295,22 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
         if (override != null) {
           file.destination = override;
         }
+      }
+    }
+    // Automatic folders apply to added folders too (no editing step here: the names are shown on the cards'
+    // destination after upload and in the log).
+    if (ref.read(appConfigProvider).copyparty.autoFolders) {
+      try {
+        final plan = await ref.read(autoFolderServiceProvider).plan(sets);
+        final base = ref.read(appConfigProvider).copyparty.uploadPath;
+        for (final set in sets) {
+          final name = plan.folderBySet[set.id];
+          for (final f in set.files) {
+            f.uploadPathOverride = name == null ? null : autoFolderUploadPath(base, name);
+          }
+        }
+      } catch (e) {
+        ref.read(copypartyLoggerProvider).log('auto folders: planning failed ($e); using the upload path');
       }
     }
     await ref.read(importSessionProvider.notifier).appendSelectedSets(sets, Set.of(_selectedPaths));
@@ -611,6 +628,12 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
   bool _disposed = false;
   int _verifyGeneration = 0;
 
+  // Automatic destination folders ("<Place> <YYYY-MM-DD> <Camera>"): the proposal, whether it is still
+  // being worked out, and the user's renames (proposed name → chosen name).
+  AutoFolderPlan? _folderPlan;
+  bool _planningFolders = false;
+  final Map<String, String> _folderRenames = {};
+
   @override
   void dispose() {
     _disposed = true;
@@ -624,8 +647,91 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     // status lazily against the server. Default selection is refined once
     // verification lands (unless the user has already changed it).
     _selectedPaths = _allPaths(widget.session.uploadSets);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _verify());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _planFoldersThenVerify());
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkLocalCache());
+  }
+
+  /// With "Name folders automatically" on, work out each set's folder first (a few small reads per set
+  /// and at most two short lookups), so the server check below looks in the right folders.
+  Future<void> _planFoldersThenVerify() async {
+    if (ref.read(appConfigProvider).copyparty.autoFolders) {
+      setState(() => _planningFolders = true);
+      AutoFolderPlan? plan;
+      try {
+        plan = await ref.read(autoFolderServiceProvider).plan(widget.session.uploadSets);
+      } catch (e) {
+        ref.read(copypartyLoggerProvider).log('auto folders: planning failed ($e); using the upload path');
+      }
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _folderPlan = plan;
+        _planningFolders = false;
+      });
+    }
+    await _verify();
+  }
+
+  AutoFolderPlan? get _effectivePlan => _folderPlan?.renamed(_folderRenames);
+
+  /// The automatic folder (full server path) for a file, or null when automatic folders are off.
+  String? _autoFolderPathFor(UploadFile f) {
+    final plan = _effectivePlan;
+    if (plan == null) {
+      return null;
+    }
+    for (final set in widget.session.uploadSets) {
+      if (set.files.contains(f)) {
+        final name = plan.folderBySet[set.id];
+        return name == null ? null : autoFolderUploadPath(ref.read(appConfigProvider).copyparty.uploadPath, name);
+      }
+    }
+    return null;
+  }
+
+  Future<void> _renameFolder(String proposed) async {
+    final current = _folderRenames[proposed] ?? proposed;
+    final controller = TextEditingController(text: current);
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Folder name'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(helperText: 'Also the album name in Immich'),
+          onSubmitted: (v) => Navigator.of(ctx).pop(v),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(controller.text), child: const Text('Save')),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (chosen == null || !mounted) {
+      return;
+    }
+    final clean = sanitizeFolderName(chosen);
+    if (clean.isEmpty) {
+      return;
+    }
+    setState(() => _folderRenames[proposed] = clean);
+    ref.read(copypartyLoggerProvider).log('auto folder renamed by user: "$proposed" -> "$clean"');
+    unawaited(_verify());
+  }
+
+  /// Sends every file of each set to its automatic folder (or clears that when automatic folders are off).
+  void _applyFolders() {
+    final plan = _effectivePlan;
+    final base = ref.read(appConfigProvider).copyparty.uploadPath;
+    for (final set in widget.session.uploadSets) {
+      final name = plan?.folderBySet[set.id];
+      for (final f in set.files) {
+        f.uploadPathOverride = name == null ? null : autoFolderUploadPath(base, name);
+      }
+    }
   }
 
   /// Purely local, no-network check for whether each file already has bytes
@@ -687,9 +793,11 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     // Each file's expected server folder — the mirrored sub-path when "recreate
     // folder structure" is on, else the flat base. Verifying against the base
     // when a file was uploaded into a subfolder wrongly reports it "missing".
-    String targetFolder(UploadFile f) => config.recreateFolderStructure
-        ? mirroredUploadPath(config.uploadPath, rootDir, f.localPath)
-        : config.uploadPath;
+    String targetFolder(UploadFile f) =>
+        _autoFolderPathFor(f) ??
+        (config.recreateFolderStructure
+            ? mirroredUploadPath(config.uploadPath, rootDir, f.localPath)
+            : config.uploadPath);
     String password = '';
     try {
       password = await ref.read(copypartyPasswordProvider.future);
@@ -1268,12 +1376,18 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 // Q1: show where these files will be uploaded before starting.
-                const _DestinationBanner(),
+                _DestinationBanner(
+                  planning: _planningFolders,
+                  plan: _folderPlan,
+                  renames: _folderRenames,
+                  onRename: _renameFolder,
+                ),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
-                    onPressed: selectedCount > 0
+                    onPressed: selectedCount > 0 && !_planningFolders
                         ? () {
+                            _applyFolders();
                             _applyDestinations();
                             unawaited(
                               ref
@@ -1718,7 +1832,12 @@ String? _folderDisplay(String? folderUrl) {
 
 /// Q1: shows where the selected files will be uploaded, before starting.
 class _DestinationBanner extends ConsumerWidget {
-  const _DestinationBanner();
+  final bool planning;
+  final AutoFolderPlan? plan;
+  final Map<String, String> renames;
+  final void Function(String proposed)? onRename;
+
+  const _DestinationBanner({this.planning = false, this.plan, this.renames = const {}, this.onRename});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1743,7 +1862,32 @@ class _DestinationBanner extends ConsumerWidget {
               children: [
                 Text('Uploading to', style: context.textTheme.labelSmall),
                 Text('$host$path', style: context.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600)),
-                if (cp.recreateFolderStructure)
+                if (planning)
+                  Text(
+                    'Naming folders from the camera, date and place…',
+                    style: context.textTheme.labelSmall?.copyWith(color: context.colorScheme.primary),
+                  )
+                else if (plan != null)
+                  for (final e in plan!.folders.entries)
+                    InkWell(
+                      onTap: onRename == null ? null : () => onRename!(e.key),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '/${renames[e.key] ?? e.key}  (${e.value} group${e.value == 1 ? '' : 's'})',
+                                style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.primary),
+                              ),
+                            ),
+                            if (onRename != null)
+                              Icon(Icons.edit_outlined, size: 16, color: context.colorScheme.primary),
+                          ],
+                        ),
+                      ),
+                    )
+                else if (cp.recreateFolderStructure)
                   Text(
                     '+ recreating folder structure',
                     style: context.textTheme.labelSmall?.copyWith(color: context.colorScheme.primary),

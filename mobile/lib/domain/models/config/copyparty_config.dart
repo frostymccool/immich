@@ -51,6 +51,12 @@ class CopypartyConfig {
   /// server runs with `--usernames`. The password itself stays in secure storage, never here.
   final String username;
 
+  /// When true (the default), a memory-card or camera import goes into one folder per shooting day and
+  /// camera directly under [uploadPath], named `<Place> <YYYY-MM-DD> <Camera>` (place left out when
+  /// unknown). The import page shows the names and lets the user change them. Overrides
+  /// [recreateFolderStructure] for those imports.
+  final bool autoFolders;
+
   const CopypartyConfig({
     this.hostUrl = '',
     this.uploadPath = '/uploads',
@@ -67,6 +73,7 @@ class CopypartyConfig {
     this.defaultDestination = 'both',
     this.bridgeUrl = '',
     this.username = '',
+    this.autoFolders = true,
   });
 
   CopypartyConfig copyWith({
@@ -85,6 +92,7 @@ class CopypartyConfig {
     String? defaultDestination,
     String? bridgeUrl,
     String? username,
+    bool? autoFolders,
   }) => CopypartyConfig(
     hostUrl: hostUrl ?? this.hostUrl,
     uploadPath: uploadPath ?? this.uploadPath,
@@ -101,6 +109,7 @@ class CopypartyConfig {
     defaultDestination: defaultDestination ?? this.defaultDestination,
     bridgeUrl: bridgeUrl ?? this.bridgeUrl,
     username: username ?? this.username,
+    autoFolders: autoFolders ?? this.autoFolders,
   );
 
   @override
@@ -121,7 +130,8 @@ class CopypartyConfig {
           other.cacheSizeMb == cacheSizeMb &&
           other.defaultDestination == defaultDestination &&
           other.bridgeUrl == bridgeUrl &&
-          other.username == username);
+          other.username == username &&
+          other.autoFolders == autoFolders);
 
   @override
   int get hashCode => Object.hash(
@@ -140,6 +150,7 @@ class CopypartyConfig {
     defaultDestination,
     bridgeUrl,
     username,
+    autoFolders,
   );
 
   @override
@@ -151,7 +162,7 @@ class CopypartyConfig {
       'recreateFolderStructure: $recreateFolderStructure, '
       'sortSmallestFirst: $sortSmallestFirst, debugMode: $debugMode, '
       'stageToLocalBeforeUpload: $stageToLocalBeforeUpload, cacheSizeMb: $cacheSizeMb, '
-      'defaultDestination: $defaultDestination, bridgeUrl: $bridgeUrl, username: $username)';
+      'defaultDestination: $defaultDestination, bridgeUrl: $bridgeUrl, username: $username, autoFolders: $autoFolders)';
 
   static bool _listEquals(List<String> a, List<String> b) {
     if (a.length != b.length) {

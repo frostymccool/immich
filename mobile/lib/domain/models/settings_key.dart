@@ -91,6 +91,7 @@ enum SettingsKey<T> {
   copypartyDefaultDestination<String>(),
   copypartyBridgeUrl<String>(),
   copypartyUsername<String>(),
+  copypartyAutoFolders<bool>(),
 
   // Slideshow
   slideshowRepeat<bool>(),

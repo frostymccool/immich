@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:crypto/crypto.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
@@ -14,6 +15,8 @@ import 'package:immich_mobile/providers/infrastructure/db.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/repositories/secure_storage.repository.dart';
 import 'package:immich_mobile/repositories/upload.repository.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_auto_folder.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_camera_info.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_error_advice.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_foreground_service.dart';
@@ -79,6 +82,45 @@ class _DigestSink implements Sink<Digest> {
 /// Shared diagnostic logger — single instance so the settings screen can read
 /// the same file the uploader writes to.
 final copypartyLoggerProvider = Provider<CopypartyLogger>((ref) => CopypartyLogger.instance);
+
+/// Names import folders `<Place> <YYYY-MM-DD> <Camera>`. The place comes from the user's OWN Immich server
+/// (`/map/reverse-geocode`, the offline geodata Immich already uses), so no location goes to a third party.
+final autoFolderServiceProvider = Provider<AutoFolderService>((ref) {
+  final log = ref.watch(copypartyLoggerProvider);
+  return AutoFolderService(
+    readInfo: CameraInfoReader().read,
+    reverseGeocode: (lat, lon) async {
+      final hits = await ref.read(apiServiceProvider).mapApi.reverseGeocode(lat, lon);
+      final hit = hits?.firstOrNull;
+      return hit?.city ?? hit?.state ?? hit?.country;
+    },
+    phoneLocation: _phoneLocationForImport,
+    log: log.log,
+  );
+});
+
+/// The phone's position for naming an import folder: a recent last-known fix, else a quick coarse one.
+/// Asks for location permission once if it was never asked; returns null when it is refused or off.
+Future<(double, double)?> _phoneLocationForImport() async {
+  if (!await Geolocator.isLocationServiceEnabled()) {
+    return null;
+  }
+  var permission = await Geolocator.checkPermission();
+  if (permission == LocationPermission.denied) {
+    permission = await Geolocator.requestPermission();
+  }
+  if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+    return null;
+  }
+  final last = await Geolocator.getLastKnownPosition();
+  if (last != null && DateTime.now().difference(last.timestamp) < const Duration(hours: 2)) {
+    return (last.latitude, last.longitude);
+  }
+  final pos = await Geolocator.getCurrentPosition(
+    locationSettings: const LocationSettings(accuracy: LocationAccuracy.low, timeLimit: Duration(seconds: 10)),
+  );
+  return (pos.latitude, pos.longitude);
+}
 
 final copypartyUploaderProvider = Provider<CopypartyUploaderService>((ref) {
   final allowSelfSigned = ref.watch(appConfigProvider.select((c) => c.copyparty.allowSelfSignedCert));
@@ -1633,9 +1675,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       final listings = <String, Map<String, int>>{};
       for (final set in sets) {
         for (final file in set.files) {
-          final folder = config.recreateFolderStructure
-              ? mirroredUploadPath(config.uploadPath, set.rootPath ?? state.directoryPath, file.localPath)
-              : config.uploadPath;
+          final folder =
+              file.uploadPathOverride ??
+              (config.recreateFolderStructure
+                  ? mirroredUploadPath(config.uploadPath, set.rootPath ?? state.directoryPath, file.localPath)
+                  : config.uploadPath);
           if (!listings.containsKey(folder)) {
             try {
               listings[folder] = await uploader.listUploadFolder(config.hostUrl, folder, password);
