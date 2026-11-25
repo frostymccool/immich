@@ -8,6 +8,10 @@ enum UploadFileStatus {
   handshaking,
   uploading,
   confirmed,
+
+  /// Re-reading the ORIGINAL file to check it matches what was uploaded, before the automatic
+  /// delete of the source. Can take minutes for a large file on a memory card, so it is shown.
+  verifyingSource,
   immichUploading,
   receiptWritten,
   failed,

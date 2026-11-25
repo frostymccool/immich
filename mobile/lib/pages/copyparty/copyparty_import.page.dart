@@ -2211,6 +2211,7 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
       UploadFileStatus.hashing => 'hash',
       UploadFileStatus.uploading => 'up',
       UploadFileStatus.immichUploading => 'immich',
+      UploadFileStatus.verifyingSource => 'verify',
       _ => null,
     };
   }
@@ -2269,6 +2270,11 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
       UploadFileStatus.uploading ||
       UploadFileStatus.confirmed => ('Copyparty', Icons.sd_card_rounded, context.colorScheme.primary),
       UploadFileStatus.immichUploading => ('Immich', Icons.cloud_upload_rounded, context.colorScheme.tertiary),
+      UploadFileStatus.verifyingSource => (
+        'Checking original before delete',
+        Icons.fact_check_rounded,
+        context.colorScheme.tertiary,
+      ),
       _ => ('', Icons.circle, context.colorScheme.primary),
     };
     if (label.isEmpty) {
@@ -2418,6 +2424,9 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
                         : isHashing
                         ? '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · hashing '
                               '${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}% · $_speed'
+                        : file.status == UploadFileStatus.verifyingSource
+                        ? '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · on copyparty ✓ · re-reading the '
+                              'original before deleting it ${(file.progress * 100).clamp(0, 100).toStringAsFixed(0)}%'
                         // transferred / total · speed
                         : '${_pairBytes(file.uploadedBytes, file.sizeBytes)} · $_speed',
                     style: context.textTheme.labelLarge?.copyWith(

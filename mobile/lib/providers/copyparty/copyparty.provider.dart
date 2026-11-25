@@ -1007,7 +1007,20 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                   _log.log('AUTO-DELETE SKIPPED for ${file.filename}: source gone — nothing to verify against');
                 } else {
                   try {
-                    final srcHash = await _wholeFileSha512(file.localPath);
+                    // Visible, with progress: a large file on a card can take minutes, and before this
+                    // the card showed as finished at 100% while the app was still reading.
+                    file.status = UploadFileStatus.verifyingSource;
+                    file.uploadedBytes = 0;
+                    _notify();
+                    final srcHash = await _wholeFileSha512(
+                      file.localPath,
+                      onProgress: (done) {
+                        file.uploadedBytes = done;
+                        _notify();
+                      },
+                      cancelToken: fileToken,
+                    );
+                    file.uploadedBytes = file.sizeBytes;
                     safeToRemove = srcHash == file.sha512;
                     if (!safeToRemove) {
                       _log.log(
@@ -1928,11 +1941,21 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
 
   /// Streams the whole-file SHA-512 of [path] (hex) — used to cross-check a
   /// staged upload against the source before an irreversible auto-delete.
-  Future<String> _wholeFileSha512(String path) async {
+  Future<String> _wholeFileSha512(
+    String path, {
+    void Function(int bytesRead)? onProgress,
+    Completer<void>? cancelToken,
+  }) async {
     final sink = _DigestSink();
     final input = sha512.startChunkedConversion(sink);
+    var read = 0;
     await for (final chunk in File(path).openRead()) {
+      if (cancelToken?.isCompleted ?? false) {
+        throw const CopypartyCancelledException();
+      }
       input.add(chunk);
+      read += chunk.length;
+      onProgress?.call(read);
     }
     input.close();
     return sink.value!.toString();
