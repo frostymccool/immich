@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -312,26 +313,25 @@ class CopypartyUploaderService {
         }
         final chunkExpected = (fileSize - bytesRead).clamp(0, chunkSize);
 
-        // Accumulate into a full chunk — read() may return fewer bytes than
-        // requested (especially on FAT32/exFAT USB drives via SAF).
-        final chunkBuf = BytesBuilder(copy: false);
-        while (chunkBuf.length < chunkExpected) {
-          final toRead = chunkExpected - chunkBuf.length;
-          final slice = await handle.read(toRead);
+        // Read the chunk in small slices and hash it as it streams, so a 32 MiB chunk is never held
+        // in memory. read() may return fewer bytes than requested (FAT32/exFAT via SAF).
+        final chunkHasher = ChunkIdHasher();
+        var got = 0;
+        while (got < chunkExpected) {
+          final slice = await handle.read(min(chunkExpected - got, _readSliceBytes));
           if (slice.isEmpty) {
             break;
           }
-          chunkBuf.add(slice);
+          chunkHasher.add(slice);
           fileHasher.add(slice);
+          got += slice.length;
         }
-
-        final chunkBytes = chunkBuf.takeBytes();
-        if (chunkBytes.isEmpty) {
+        if (got == 0) {
           break;
         }
 
-        chunkHashes.add(_chunkId(chunkBytes));
-        bytesRead += chunkBytes.length;
+        chunkHashes.add(chunkHasher.close());
+        bytesRead += got;
         onProgress?.call(bytesRead, fileSize);
       }
     } finally {
@@ -794,7 +794,9 @@ class CopypartyUploaderService {
     Uri chunkUri,
     String wark,
     String chunkHash,
-    Uint8List chunkBytes,
+    String filePath,
+    int start,
+    int length,
     int chunkIdx,
     String password, {
     Completer<void>? cancelToken,
@@ -809,12 +811,14 @@ class CopypartyUploaderService {
     // don't vary per chunk (already logged once at handshake) so nothing
     // diagnostically useful is lost. Failures still get their own full log
     // line below/in the retry loop regardless of this. (jank fix)
-    _log?.log('>>> chunk #$chunkIdx (${chunkBytes.length}B) hash=$chunkHash');
+    _log?.log('>>> chunk #$chunkIdx (${length}B) hash=$chunkHash');
 
-    final request = http.Request('POST', chunkUri);
+    // Streamed straight from the file (64 KiB reads, paced by the socket): a 32 MiB chunk is never
+    // held in memory. Holding it, plus the copies the HTTP/TLS layers made, pushed the app to ~2 GB
+    // during multi-GB uploads and Android killed it.
+    final request = _FileRangeRequest('POST', chunkUri, () => File(filePath).openRead(start, start + length), length);
     request.headers.addAll(headers);
     request.headers.addAll(_authHeaders(password));
-    request.bodyBytes = chunkBytes;
 
     // A stuck socket (bad hotel/airport wifi) can hang a chunk POST forever.
     // Bound it with a stall timeout AND let the user cancel mid-flight: race
@@ -844,7 +848,12 @@ class CopypartyUploaderService {
       response = await sendFuture;
     }
     final statusCode = response.statusCode;
-    final respBody = await response.stream.bytesToString();
+    // The status line arrived; the short body ("thank") must follow promptly. Bound it so a socket
+    // that dies right here cannot hang the upload forever.
+    final respBody = await response.stream.bytesToString().timeout(
+      const Duration(seconds: 30),
+      onTimeout: () => throw const CopypartyUploadException('Chunk response stalled (no body in 30s)', stalled: true),
+    );
     // Compact form (see the matching request log above) — response headers
     // for a chunk POST carry nothing beyond what the handshake already logged.
     _log?.log(
@@ -935,7 +944,6 @@ class CopypartyUploaderService {
         }
         final start = chunkIdx * file.chunkSizeBytes;
         final end = (start + file.chunkSizeBytes).clamp(0, file.totalBytes);
-        final chunkBytes = await _readChunk(file.path, start, end - start);
         // Retry transient chunk failures (stall timeout, dropped socket, 5xx)
         // with a short backoff before failing the whole file — the reference
         // u2c.py client retries chunks rather than aborting. A user cancel is
@@ -947,7 +955,9 @@ class CopypartyUploaderService {
               chunkUri,
               wark,
               file.chunkHashes[chunkIdx],
-              chunkBytes,
+              file.path,
+              start,
+              end - start,
               chunkIdx,
               password,
               cancelToken: cancelToken,
@@ -1432,6 +1442,15 @@ class CopypartyUploaderService {
     // Append when resuming (the partial's already-written bytes must survive);
     // truncate when starting clean (a stale partial must not leave trailing
     // bytes past what we write now).
+    if (resumeOffset > 0 && dest.existsSync() && dest.lengthSync() > resumeOffset) {
+      // Drop any partly written chunk past the last complete one before appending.
+      final trim = await dest.open(mode: FileMode.append);
+      try {
+        await trim.truncate(resumeOffset);
+      } finally {
+        await trim.close();
+      }
+    }
     final writeHandle = await dest.open(mode: resumeOffset > 0 ? FileMode.writeOnlyAppend : FileMode.writeOnly);
     var ok = false;
     var cancelledCleanly = false;
@@ -1455,36 +1474,39 @@ class CopypartyUploaderService {
           throw const CopypartyCancelledException();
         }
         final chunkExpected = (fileSize - bytesRead).clamp(0, chunkSize);
-        final chunkBuf = BytesBuilder(copy: false);
-        while (chunkBuf.length < chunkExpected) {
-          final toRead = chunkExpected - chunkBuf.length;
+        // Copy in small slices, hashing and writing each as it arrives: a 32 MiB chunk is never held
+        // in memory. A resume trims the copy back to the last COMPLETE chunk first (see above), so
+        // a partly written chunk left by a cancel is harmless.
+        final chunkHasher = ChunkIdHasher();
+        var got = 0;
+        while (got < chunkExpected) {
           readSw.start();
-          final slice = await readHandle.read(toRead);
+          final slice = await readHandle.read(min(chunkExpected - got, _readSliceBytes));
           readSw.stop();
           if (slice.isEmpty) {
             break;
           }
-          chunkBuf.add(slice);
           hashSw.start();
           fileHasher.add(slice);
+          chunkHasher.add(slice);
           hashSw.stop();
+          writeSw.start();
+          await writeHandle.writeFrom(slice);
+          sinceFlush += slice.length;
+          if (sinceFlush >= flushEvery) {
+            await writeHandle.flush();
+            sinceFlush = 0;
+          }
+          writeSw.stop();
+          got += slice.length;
         }
-        final chunkBytes = chunkBuf.takeBytes();
-        if (chunkBytes.isEmpty) {
+        if (got == 0) {
           break;
         }
-        writeSw.start();
-        await writeHandle.writeFrom(chunkBytes);
-        sinceFlush += chunkBytes.length;
-        if (sinceFlush >= flushEvery) {
-          await writeHandle.flush();
-          sinceFlush = 0;
-        }
-        writeSw.stop();
         hashSw.start();
-        chunkHashes.add(_chunkId(chunkBytes));
+        chunkHashes.add(chunkHasher.close());
         hashSw.stop();
-        bytesRead += chunkBytes.length;
+        bytesRead += got;
         onProgress?.call(bytesRead, fileSize, false);
       }
       await writeHandle.flush();
@@ -1562,6 +1584,12 @@ class CopypartyUploaderService {
 
   /// Copyparty chunk ID: SHA-512 of chunk bytes, first 33 bytes, URL-safe base64.
   /// Matches the cid format used by copyparty's up2k protocol.
+  /// Size of each read while hashing or copying: small, so whole chunks are never buffered.
+  static const _readSliceBytes = 1024 * 1024;
+
+  /// The chunk id of a whole chunk held in memory (the reference the incremental hasher must match).
+  static String chunkIdOf(List<int> bytes) => _chunkId(bytes);
+
   static String _chunkId(List<int> bytes) {
     final digest = sha512.convert(bytes);
     final truncated = Uint8List.fromList(digest.bytes.sublist(0, 33));
@@ -1610,27 +1638,6 @@ class CopypartyUploaderService {
       params['pw'] = password;
     }
     return base.replace(queryParameters: params);
-  }
-
-  Future<Uint8List> _readChunk(String filePath, int start, int length) async {
-    final file = File(filePath);
-    final handle = await file.open(mode: FileMode.read);
-    try {
-      await handle.setPosition(start);
-      final buf = BytesBuilder(copy: false);
-      while (buf.length < length) {
-        final slice = await handle.read(length - buf.length);
-        if (slice.isEmpty) {
-          break;
-        }
-        buf.add(slice);
-      }
-      return buf.takeBytes();
-    } finally {
-      try {
-        await handle.close();
-      } catch (_) {}
-    }
   }
 }
 
@@ -1697,4 +1704,45 @@ class CopypartyCancelledException implements Exception {
 
   @override
   String toString() => 'CopypartyCancelledException: $message';
+}
+
+/// A POST whose body is streamed from a file region on demand: the HTTP client pulls bytes only as
+/// fast as the socket takes them, so memory stays at a few read buffers whatever the chunk size.
+class _FileRangeRequest extends http.BaseRequest {
+  final Stream<List<int>> Function() _open;
+
+  _FileRangeRequest(super.method, super.url, this._open, int length) {
+    contentLength = length;
+  }
+
+  @override
+  http.ByteStream finalize() {
+    super.finalize();
+    return http.ByteStream(_open());
+  }
+}
+
+/// copyparty's chunk id (base64url of the first 33 bytes of the chunk's SHA-512), computed
+/// incrementally so the chunk never has to be in memory at once. Same result as [CopypartyUploaderService.chunkIdOf].
+class ChunkIdHasher {
+  // ignore: close_sinks -- only captures the digest; nothing to release
+  final _sink = _DigestCapture();
+  late final ByteConversionSink _input = sha512.startChunkedConversion(_sink);
+
+  void add(List<int> bytes) => _input.add(bytes);
+
+  String close() {
+    _input.close();
+    return base64Url.encode(Uint8List.fromList(_sink.digest!.bytes.sublist(0, 33)));
+  }
+}
+
+class _DigestCapture implements Sink<Digest> {
+  Digest? digest;
+
+  @override
+  void add(Digest data) => digest = data;
+
+  @override
+  void close() {}
 }
