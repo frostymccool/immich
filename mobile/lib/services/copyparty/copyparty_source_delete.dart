@@ -67,13 +67,14 @@ class CopypartySourceDeleter {
     return SourceDeleteResult.failed('$plainError; with the folder permission: $treeError');
   }
 
-  /// Best-effort check before a batch: can originals in [folder] be deleted at all? True when a
-  /// writable folder permission covers it, or a tiny test file can be created and removed there.
-  Future<bool> canDeleteIn(String folder) async {
+  /// Best-effort check before a batch: can originals in [folder] be deleted at all? Returns null when
+  /// they can (a writable folder permission covers it, or a tiny test file can be created and removed
+  /// there), otherwise the system's reason (for example "Read-only file system").
+  Future<String?> deleteBlockedReason(String folder) async {
     if (_android) {
       try {
         if (await _treeCanDelete(folder)) {
-          return true;
+          return null;
         }
       } catch (_) {}
     }
@@ -81,20 +82,82 @@ class CopypartySourceDeleter {
     try {
       await probe.writeAsString('');
       await probe.delete();
-      return true;
-    } catch (_) {
+      return null;
+    } catch (e) {
       try {
         if (probe.existsSync()) {
           probe.deleteSync();
         }
       } catch (_) {}
-      return false;
+      return e is FileSystemException ? (e.osError?.message ?? e.message) : '$e';
     }
   }
 }
 
+/// Why originals could not be deleted, in plain words, and what to do about it.
+class DeleteFailureExplanation {
+  /// One short sentence: the cause.
+  final String cause;
+
+  /// What the user should do.
+  final String action;
+
+  /// The system's own text, kept for the log and support.
+  final String detail;
+
+  const DeleteFailureExplanation(this.cause, this.action, this.detail);
+
+  /// Turns the system reason (errno text from the plain delete and/or the folder-permission delete)
+  /// into a cause the user recognises.
+  factory DeleteFailureExplanation.of(String reason) {
+    final r = reason.toLowerCase();
+    if (r.contains('read-only file system') || r.contains('erofs') || r.contains('errno = 30')) {
+      return DeleteFailureExplanation(
+        'The memory card is read-only (write-protected), so nothing on it can be deleted.',
+        'Check the lock switch on the card, its adapter or the card reader and slide it to unlocked. '
+            'If there is no switch, the card may have file-system errors: repair it on a computer '
+            '(Disk Utility → First Aid on a Mac, chkdsk on Windows). Do not format it until every file is '
+            'uploaded. Then use "Free up space" to delete the originals.',
+        reason,
+      );
+    }
+    if (r.contains('no folder permission')) {
+      return DeleteFailureExplanation(
+        'Android has not given the app permission to delete on this card.',
+        'Go to Import from Memory Card, pick the card folder again and allow access when Android asks, '
+            'then use "Free up space".',
+        reason,
+      );
+    }
+    if (r.contains('permission denied') ||
+        r.contains('eacces') ||
+        r.contains('errno = 13') ||
+        r.contains('operation not permitted')) {
+      return DeleteFailureExplanation(
+        'Android refused the app permission to delete files on this card.',
+        'Go to Import from Memory Card, pick the card folder again and allow access when Android asks, '
+            'then use "Free up space". If it still fails, the card may be locked or read-only: check its '
+            'lock switch.',
+        reason,
+      );
+    }
+    if (r.contains('no such file') || r.contains('enoent')) {
+      return DeleteFailureExplanation(
+        'The original is no longer on the card (the card may have been removed or changed).',
+        'Re-insert the card and try again, or remove the entry from Pending Cleanup if the file is gone.',
+        reason,
+      );
+    }
+    return DeleteFailureExplanation(
+      'The app could not delete the original from the card.',
+      'Try again with "Free up space". If it keeps failing, use Save log in Copyparty settings and send the log.',
+      reason,
+    );
+  }
+}
+
 /// What the user sees once when originals cannot be deleted from this card.
-String originalsKeptNotice(String reason) =>
-    'Auto-delete is on, but the app cannot delete files on this card, so every original is kept '
-    '(uploads are not affected). To fix it: go back, pick the card folder again and allow access when '
-    'Android asks, then use "Free up space" in Copyparty settings. Reason: $reason';
+String originalsKeptNotice(String reason) {
+  final x = DeleteFailureExplanation.of(reason);
+  return '${x.cause} Every original is kept; uploads are not affected.\n${x.action}\n(System message: ${x.detail})';
+}

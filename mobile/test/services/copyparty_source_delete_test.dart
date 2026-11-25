@@ -59,24 +59,58 @@ void main() {
       expect(r.ok, isFalse);
       expect(f.existsSync(), isTrue);
       expect(r.reason, contains('with the folder permission: no folder permission'));
-      expect(originalsKeptNotice(r.reason!), contains('every original is kept'));
+      expect(originalsKeptNotice(r.reason!), contains('Every original is kept'));
     });
 
     test('the up-front check reports the folder as not deletable', () async {
       final d = CopypartySourceDeleter(android: true, treeCanDelete: (_) async => false);
-      expect(await d.canDeleteIn(dir.path), isFalse);
+      expect(await d.deleteBlockedReason(dir.path), isNotNull);
       expect(dir.listSync().map((e) => e.path.split('/').last), ['a.mp4'], reason: 'no probe file is left behind');
     });
 
     test('a writable folder permission makes it deletable without probing', () async {
       final d = CopypartySourceDeleter(android: true, treeCanDelete: (_) async => true);
-      expect(await d.canDeleteIn(dir.path), isTrue);
+      expect(await d.deleteBlockedReason(dir.path), isNull);
     });
   });
 
   test('the up-front check on a writable folder leaves nothing behind', () async {
     final d = CopypartySourceDeleter(android: false);
-    expect(await d.canDeleteIn(dir.path), isTrue);
+    expect(await d.deleteBlockedReason(dir.path), isNull);
     expect(dir.listSync(), isEmpty);
+  });
+
+  group('the reason is said in plain words with the right fix', () {
+    test('a read-only card says so and points at the lock switch and repair, not at permissions', () {
+      final x = DeleteFailureExplanation.of(
+        'Read-only file system, errno = 30; with the folder permission: the storage provider refused the delete',
+      );
+      expect(x.cause, 'The memory card is read-only (write-protected), so nothing on it can be deleted.');
+      expect(x.action, contains('lock switch'));
+      expect(x.action, contains('Do not format it'));
+      expect(originalsKeptNotice(x.detail), startsWith('The memory card is read-only'));
+      expect(originalsKeptNotice(x.detail), contains('(System message: Read-only file system'));
+    });
+
+    test('a missing folder permission says to pick the folder again', () {
+      final x = DeleteFailureExplanation.of(
+        'Permission denied; with the folder permission: no folder permission covers this file (pick the folder again in Import)',
+      );
+      expect(x.cause, 'Android has not given the app permission to delete on this card.');
+      expect(x.action, contains('pick the card folder again'));
+    });
+
+    test('a plain permission refusal', () {
+      expect(
+        DeleteFailureExplanation.of('Permission denied, errno = 13').cause,
+        contains('refused the app permission'),
+      );
+    });
+
+    test('anything else still says what to do', () {
+      final x = DeleteFailureExplanation.of('something odd');
+      expect(x.action, contains('Save log'));
+      expect(x.detail, 'something odd');
+    });
   });
 }

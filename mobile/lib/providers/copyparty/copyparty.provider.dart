@@ -574,9 +574,10 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     // read-only card is reported before the batch rather than on every file.
     if (_ref.read(appConfigProvider).copyparty.autoDeleteAfterVerify) {
       final folder = state.directoryPath;
-      if (folder != null && !await _sourceDeleter.canDeleteIn(folder)) {
-        _deleteBlocked = 'the card folder is read-only to the app';
-        state = state.copyWith(notice: originalsKeptNotice(_deleteBlocked!));
+      final blocked = folder == null ? null : await _sourceDeleter.deleteBlockedReason(folder);
+      if (blocked != null) {
+        _deleteBlocked = blocked;
+        state = state.copyWith(notice: originalsKeptNotice(blocked));
         _log.log('AUTO-DELETE UNAVAILABLE for $folder: originals will be kept');
       }
     }
@@ -1089,8 +1090,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                 }
               }
               if (safeToRemove && _deleteBlocked != null) {
-                file.sourceNote =
-                    'Original kept on the card: this card cannot be changed by the app (see the note above).';
+                file.sourceNote = 'Original kept on the card: ${DeleteFailureExplanation.of(_deleteBlocked!).cause}';
               } else if (safeToRemove) {
                 final deleted = await _sourceDeleter.delete(file.localPath);
                 if (deleted.ok) {
@@ -1106,7 +1106,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                 } else {
                   // Say it once for the run, keep this and every later original, and stop trying.
                   _deleteBlocked = deleted.reason;
-                  file.sourceNote = 'Original kept on the card: deleting it failed (${deleted.reason}).';
+                  file.sourceNote =
+                      'Original kept on the card: ${DeleteFailureExplanation.of(deleted.reason ?? '').cause}';
                   state = state.copyWith(notice: originalsKeptNotice(deleted.reason ?? 'unknown'));
                 }
               }

@@ -471,13 +471,17 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       builder: (ctx) => AlertDialog(
         title: Text('${failures.length} file${failures.length == 1 ? '' : 's'} could not be deleted from the card'),
         content: SingleChildScrollView(
-          child: SelectableText(
-            'They are verified and stay safely on the card. Android refused the delete:\n\n'
-            '${first.name}: ${first.reason}'
-            '${failures.length > 1 ? '\n(and ${failures.length - 1} more, see the diagnostic log)' : ''}\n\n'
-            'To fix it: go to Import from Memory Card, pick the card folder again and allow access when '
-            'Android asks, then try again here. If it still fails, use Save log in Copyparty settings and '
-            'send the log.',
+          child: Builder(
+            builder: (_) {
+              final x = DeleteFailureExplanation.of(first.reason);
+              return SelectableText(
+                '${x.cause}\n\n'
+                'The files are verified on copyparty and stay safely on the card.\n\n'
+                'What to do: ${x.action}\n\n'
+                'System message (${first.name}'
+                '${failures.length > 1 ? ' and ${failures.length - 1} more' : ''}): ${x.detail}',
+              );
+            },
           ),
         ),
         actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
