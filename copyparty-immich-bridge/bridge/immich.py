@@ -240,6 +240,12 @@ class ImmichClient:
         if resp.status_code != 200:
             raise ImmichError(f"Immich answered HTTP {resp.status_code}: {resp.text[:200]}")
 
+    def stacked_asset_ids(self) -> set[str]:
+        """Every asset already in a stack (GET /stacks, permission stack.read): search results do not say."""
+        resp = self._session.get(self._base + "/api/stacks", timeout=self._timeout)
+        self._explain(resp, "read stacks (stack.read)")
+        return {a["id"] for s in resp.json() for a in s.get("assets") or []}
+
     def create_stack(self, asset_ids: list[str]) -> dict:
         """POST /stacks (permissions stack.create + asset.update): the first id becomes the cover."""
         resp = self._session.post(self._base + "/api/stacks", json={"assetIds": asset_ids}, timeout=self._timeout)

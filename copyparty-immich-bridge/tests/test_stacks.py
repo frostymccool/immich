@@ -24,7 +24,11 @@ class Lib:
                  and body.get("originalFileName", "").lower() in a["originalFileName"].lower()]
         size, page = body["size"], body["page"]
         chunk = items[(page - 1) * size: page * size]
+        chunk = [{k: v for k, v in a.items() if k != "stack"} for a in chunk]  # like Immich: search does not say
         return {"assets": {"items": chunk, "nextPage": str(page + 1) if page * size < len(items) else None}}
+
+    def stacked_asset_ids(self):
+        return {a["id"] for a in self.assets if a.get("stack")}
 
     def create_stack(self, ids):
         if self.fail:
@@ -61,6 +65,12 @@ def test_the_first_sweep_stacks_every_pair_in_the_library_and_leaves_the_rest(tm
     assert lib.stacks == [["a2", "a1"], ["a7", "a6"]] and got["stacked"] == 2
     assert "createdAfter" not in lib.bodies[0] and lib.bodies[0]["withStacked"] is True and len(lib.bodies) == 2
     assert s.describe()["stacked"] == 2 and s.run_once()["stacked"] == 0  # once per pair
+
+
+def test_a_raw_already_in_a_stack_made_elsewhere_is_left_alone_although_search_does_not_say(tmp_path):
+    lib = Lib([asset(1, "IMG_1.dng", stack={"id": "mine"}), asset(2, "IMG_1.jpg"), asset(3, "IMG_7.jpg")])
+    s = stacker(tmp_path, lib)
+    assert s.run_once()["stacked"] == 0 and lib.stacks == []
 
 
 def test_a_later_sweep_finds_the_partner_of_a_new_upload_even_when_it_came_long_before(tmp_path):

@@ -46,9 +46,9 @@ def pair_key(asset: dict) -> tuple[str, str] | None:
     return os.path.dirname(asset.get("originalPath") or ""), stem
 
 
-def stack_order(members: list[dict]) -> list[str] | None:
+def stack_order(members: list[dict], stacked: set[str] = frozenset()) -> list[str] | None:
     """The ids to stack, cover first, or None when these files are not one RAW with its JPG/HEIC."""
-    if any(m.get("stack") or m.get("isTrashed") for m in members):
+    if any(m["id"] in stacked or m.get("stack") or m.get("isTrashed") for m in members):
         return None  # already stacked (a burst, or by hand): left as it is
     raws = [m for m in members if _split(m["originalFileName"])[1] in RAW_EXT]
     covers = [m for m in members if _split(m["originalFileName"])[1] in COVER_EXT]
@@ -97,9 +97,10 @@ class RawStacker:
                 for a in self._search({"originalFileName": stem}):
                     if pair_key(a) == (folder, stem):
                         members[a["id"]] = a
+        stacked = self._client.stacked_asset_ids()  # Immich's search does not say what is in a stack
         out = []
         for (_, stem), members in sorted(groups.items()):
-            ids = stack_order(list(members.values()))
+            ids = stack_order(list(members.values()), stacked)
             if ids:
                 out.append((next(m["originalFileName"] for m in members.values() if m["id"] == ids[-1]), ids))
         return out

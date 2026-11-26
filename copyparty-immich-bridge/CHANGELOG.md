@@ -3,6 +3,13 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.12.1 - RAW stacking really leaves existing stacks alone
+
+- Immich's search does not say whether a photo is in a stack, so 0.12.0 could not see existing stacks: a RAW already
+  stacked elsewhere would have been merged into its JPG's stack. The bridge now reads `GET /stacks` (`stack.read`) each
+  sweep and leaves every pair with a member in any stack alone. (On the first real library sweep only one pair was
+  already stacked, by the same rule, so nothing changed for it.)
+
 ## 0.12.0 - shared-link imports show every stage; RAW stacked behind its JPG
 
 - Each camera RAW (dng nef nrw orf arw cr2 cr3 rw2 raf raw pef srw) is stacked behind the JPG/HEIC with the same name in
