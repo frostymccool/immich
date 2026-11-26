@@ -740,6 +740,18 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     unawaited(_verify());
   }
 
+  void _pickFolderName(String proposed, String chosen) {
+    setState(() {
+      if (chosen == proposed) {
+        _folderRenames.remove(proposed);
+      } else {
+        _folderRenames[proposed] = chosen;
+      }
+    });
+    ref.read(copypartyLoggerProvider).log('auto folder chosen by user: "$proposed" -> "$chosen"');
+    unawaited(_verify());
+  }
+
   /// Sends every file of each set to its automatic folder (or clears that when automatic folders are off).
   void _applyFolders() {
     final plan = _effectivePlan;
@@ -1421,6 +1433,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                   plan: _folderPlan,
                   renames: _folderRenames,
                   onRename: _renameFolder,
+                  onPick: _pickFolderName,
                 ),
                 SizedBox(
                   width: double.infinity,
@@ -1892,13 +1905,74 @@ String? _folderDisplay(String? folderUrl) {
 }
 
 /// Q1: shows where the selected files will be uploaded, before starting.
+/// One automatic folder on the banner: tap for a menu of ready-made names (other place names, no place),
+/// with typing a name as the last choice.
+class _FolderChoice extends StatelessWidget {
+  final String proposed;
+  final String current;
+  final int groups;
+  final List<String> choices;
+  final void Function(String proposed, String chosen)? onPick;
+  final void Function(String proposed)? onType;
+
+  static const _typeIt = '\u0000type';
+
+  const _FolderChoice({
+    required this.proposed,
+    required this.current,
+    required this.groups,
+    required this.choices,
+    this.onPick,
+    this.onType,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = context.colorScheme.primary;
+    final options = [...choices, if (!choices.contains(current)) current];
+    return PopupMenuButton<String>(
+      tooltip: 'Choose a folder name',
+      enabled: onPick != null || onType != null,
+      onSelected: (v) => v == _typeIt ? onType?.call(proposed) : onPick?.call(proposed, v),
+      itemBuilder: (_) => [
+        for (final o in options) CheckedPopupMenuItem<String>(value: o, checked: o == current, child: Text(o)),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: _typeIt,
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.edit_outlined),
+            title: Text('Type a name…'),
+          ),
+        ),
+      ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '/$current  ($groups group${groups == 1 ? '' : 's'})',
+                style: context.textTheme.bodySmall?.copyWith(color: primary),
+              ),
+            ),
+            Icon(Icons.arrow_drop_down_rounded, size: 22, color: primary),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _DestinationBanner extends ConsumerWidget {
   final bool planning;
   final AutoFolderPlan? plan;
   final Map<String, String> renames;
   final void Function(String proposed)? onRename;
+  final void Function(String proposed, String chosen)? onPick;
 
-  const _DestinationBanner({this.planning = false, this.plan, this.renames = const {}, this.onRename});
+  const _DestinationBanner({this.planning = false, this.plan, this.renames = const {}, this.onRename, this.onPick});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1930,23 +2004,13 @@ class _DestinationBanner extends ConsumerWidget {
                   )
                 else if (plan != null)
                   for (final e in plan!.folders.entries)
-                    InkWell(
-                      onTap: onRename == null ? null : () => onRename!(e.key),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 2),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                '/${renames[e.key] ?? e.key}  (${e.value} group${e.value == 1 ? '' : 's'})',
-                                style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.primary),
-                              ),
-                            ),
-                            if (onRename != null)
-                              Icon(Icons.edit_outlined, size: 16, color: context.colorScheme.primary),
-                          ],
-                        ),
-                      ),
+                    _FolderChoice(
+                      proposed: e.key,
+                      current: renames[e.key] ?? e.key,
+                      groups: e.value,
+                      choices: plan!.alternatives[e.key] ?? [e.key],
+                      onPick: onPick,
+                      onType: onRename,
                     )
                 else if (cp.recreateFolderStructure)
                   Text(

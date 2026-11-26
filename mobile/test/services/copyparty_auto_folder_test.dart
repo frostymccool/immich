@@ -347,9 +347,11 @@ void main() {
           '/card/VID_20260410_100000_00_003.insv' => const CameraFileInfo(model: 'Insta360 X4', day: '2026-04-10'),
           _ => CameraFileInfo.empty,
         },
-        reverseGeocode: (lat, lon) async {
+        placeNames: (lat, lon) async {
           lookups.add('$lat,$lon');
-          return lat == 10 ? 'Málaga' : 'Testville';
+          return lat == 10
+              ? ['Málaga', 'malaga', 'Test County']
+              : ['Testville', 'Test District', 'Test State', 'Test Country', 'Fifth'];
         },
         phoneLocation: () async {
           phoneAsked++;
@@ -365,12 +367,26 @@ void main() {
       expect(plan.folderBySet, {'s1': 'Malaga 2026-05-02 X4', 's2': 'Testville 2026-05-03 X4', 's3': '2026-04-10 X4'});
       expect(phoneAsked, 1);
       expect(lookups, ['10.0,20.0', '1.0,2.0']);
+      // Ready-made alternatives: each other place name (accents dropped, duplicates removed, at most 4) and none.
+      expect(plan.alternatives['Malaga 2026-05-02 X4'], [
+        'Malaga 2026-05-02 X4',
+        'Test County 2026-05-02 X4',
+        '2026-05-02 X4',
+      ]);
+      expect(plan.alternatives['Testville 2026-05-03 X4'], [
+        'Testville 2026-05-03 X4',
+        'Test District 2026-05-03 X4',
+        'Test State 2026-05-03 X4',
+        'Test Country 2026-05-03 X4',
+        '2026-05-03 X4',
+      ]);
+      expect(plan.alternatives['2026-04-10 X4'], ['2026-04-10 X4']);
     });
 
     test('a failing place lookup leaves the place out', () async {
       final svc = AutoFolderService(
         readInfo: (_) async => const CameraFileInfo(model: 'Insta360 X4', day: '2026-05-03'),
-        reverseGeocode: (_, _) async => throw const SocketException('offline'),
+        placeNames: (_, _) async => throw const SocketException('offline'),
         phoneLocation: () async => (1.0, 2.0),
         now: () => DateTime(2026, 5, 3),
       );
@@ -383,7 +399,7 @@ void main() {
     test('without a date in the files or names, the modification day is used', () async {
       final svc = AutoFolderService(
         readInfo: (_) async => CameraFileInfo.empty,
-        reverseGeocode: (_, _) async => null,
+        placeNames: (_, _) async => const [],
         phoneLocation: () async => null,
         now: () => DateTime(2026, 6, 1),
       );

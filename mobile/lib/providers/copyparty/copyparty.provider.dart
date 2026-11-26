@@ -88,28 +88,36 @@ const _placeNameChannel = MethodChannel('immich/place_name');
 
 /// Names import folders `<Place> <YYYY-MM-DD> <Camera>`. The place is the CITY from Android's built-in geocoder
 /// (the user chose this: Immich's own geodata names only the nearest small place, e.g. a district instead of the
-/// city). Only a position rounded to about 1 km is sent, once per day of footage. When the phone has no
-/// geocoder or no answer, the user's own Immich server (`/map/reverse-geocode`) is asked instead.
+/// city). Only a position rounded to about 1 km is sent, once per day of footage. The user's own Immich server
+/// (`/map/reverse-geocode`) is asked too: its nearest place is offered as an alternative and stands in when
+/// the phone has no geocoder.
 final autoFolderServiceProvider = Provider<AutoFolderService>((ref) {
   final log = ref.watch(copypartyLoggerProvider);
   return AutoFolderService(
     readInfo: CameraInfoReader().read,
-    reverseGeocode: (lat, lon) async {
+    placeNames: (lat, lon) async {
       final rLat = double.parse(lat.toStringAsFixed(2));
       final rLon = double.parse(lon.toStringAsFixed(2));
+      Map<String, Object?>? phone;
       try {
-        final r = await _placeNameChannel.invokeMapMethod<String, Object?>('cityAt', {'lat': rLat, 'lon': rLon});
-        final city = r?['city'] as String?;
-        if (city != null && city.trim().isNotEmpty) {
-          return city;
-        }
-        log.log('auto folders: phone geocoder gave no city; asking Immich');
+        phone = await _placeNameChannel.invokeMapMethod<String, Object?>('cityAt', {'lat': rLat, 'lon': rLon});
       } catch (e) {
-        log.log('auto folders: phone geocoder unavailable ($e); asking Immich');
+        log.log('auto folders: phone geocoder unavailable ($e)');
       }
-      final hits = await ref.read(apiServiceProvider).mapApi.reverseGeocode(rLat, rLon);
-      final hit = hits?.firstOrNull;
-      return hit?.city ?? hit?.state ?? hit?.country;
+      MapReverseGeocodeResponseDto? immich;
+      try {
+        immich = (await ref.read(apiServiceProvider).mapApi.reverseGeocode(rLat, rLon))?.firstOrNull;
+      } catch (e) {
+        log.log('auto folders: Immich place lookup failed ($e)');
+      }
+      // Best first: the city, Immich's nearest place, the district, the county, the state.
+      return [
+        phone?['city'],
+        immich?.city,
+        phone?['district'],
+        phone?['county'],
+        phone?['area'] ?? immich?.state,
+      ].whereType<String>().where((n) => n.trim().isNotEmpty).toList();
     },
     phoneLocation: _phoneLocationForImport,
     log: log.log,

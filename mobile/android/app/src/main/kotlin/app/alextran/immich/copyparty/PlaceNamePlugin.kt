@@ -17,8 +17,9 @@ import java.util.Locale
  * The caller rounds the position (about 1 km) before calling.
  *
  * Channel: immich/place_name
- * Method:  cityAt({lat, lon}) -> {city: String?, area: String?, country: String?} or null when the phone
- *          has no geocoder or it gave no answer. city = Address.locality, else subAdminArea.
+ * Method:  cityAt({lat, lon}) -> {city, district, county, area, country} (each String?) or null when the
+ *          phone has no geocoder or it gave no answer. city = Address.locality, else subAdminArea;
+ *          district = subLocality; county = subAdminArea; area = adminArea (state or province).
  */
 class PlaceNamePlugin(private val appContext: Context) : ImmichPlugin() {
     companion object {
@@ -60,6 +61,8 @@ class PlaceNamePlugin(private val appContext: Context) : ImmichPlugin() {
         val map = address?.let {
             mapOf(
                 "city" to (it.locality ?: it.subAdminArea),
+                "district" to it.subLocality,
+                "county" to it.subAdminArea,
                 "area" to it.adminArea,
                 "country" to it.countryName,
             )

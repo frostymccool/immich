@@ -21,7 +21,11 @@ class AutoFolderPlan {
   /// How each place was found, for the log: day → 'photo GPS' / 'phone location' / 'none'.
   final Map<String, String> placeSource;
 
-  const AutoFolderPlan(this.folderBySet, [this.placeSource = const {}]);
+  /// Ready-made names the user can pick instead of typing, per PROPOSED folder name: the same day and camera
+  /// with each other place name found (city, nearest place, county, state…) and without a place.
+  final Map<String, List<String>> alternatives;
+
+  const AutoFolderPlan(this.folderBySet, [this.placeSource = const {}, this.alternatives = const {}]);
 
   /// The distinct folder names, in first-seen order, with their set counts.
   Map<String, int> get folders {
@@ -33,9 +37,11 @@ class AutoFolderPlan {
   }
 
   /// The same plan with folders renamed by the user ([renames]: proposed name → chosen name).
-  AutoFolderPlan renamed(Map<String, String> renames) => AutoFolderPlan({
-    for (final e in folderBySet.entries) e.key: sanitizeFolderName(renames[e.value] ?? e.value),
-  }, placeSource);
+  AutoFolderPlan renamed(Map<String, String> renames) => AutoFolderPlan(
+    {for (final e in folderBySet.entries) e.key: sanitizeFolderName(renames[e.value] ?? e.value)},
+    placeSource,
+    alternatives,
+  );
 }
 
 /// `Insta360 X4` → `X4`, `Insta360 Luna Ultra` → `GO Ultra`, `GoPro HERO9 Black` → `HERO9 Black`, other makers'
@@ -134,8 +140,12 @@ AutoFolderPlan planFolders(List<SetFacts> sets, Map<String, String?> placeByDay)
 class AutoFolderService {
   final Future<CameraFileInfo> Function(String path) readInfo;
 
-  /// Coordinates → town or city, or null.
-  final Future<String?> Function(double lat, double lon) reverseGeocode;
+  /// Coordinates → place names, best first (for example the city, the nearest place, the county, the state).
+  /// The first is used; the others are offered as alternatives.
+  final Future<List<String>> Function(double lat, double lon) placeNames;
+
+  /// At most this many place names are offered per day.
+  static const maxPlaceOptions = 4;
 
   /// The phone's current position, or null (no permission, no fix).
   final Future<(double, double)?> Function() phoneLocation;
@@ -151,7 +161,7 @@ class AutoFolderService {
 
   AutoFolderService({
     required this.readInfo,
-    required this.reverseGeocode,
+    required this.placeNames,
     required this.phoneLocation,
     DateTime Function()? now,
     this.log,
@@ -212,22 +222,29 @@ class AutoFolderService {
       facts.add(SetFacts(setId: set.id, day: info.day ?? _dayOfMs(now().millisecondsSinceEpoch), info: info));
     }
 
-    final placeByDay = <String, String?>{};
+    final optionsByDay = <String, List<String>>{};
     final source = <String, String>{};
-    final cache = <String, String?>{};
-    Future<String?> geocode(double lat, double lon) async {
+    final cache = <String, List<String>>{};
+    Future<List<String>> geocode(double lat, double lon) async {
       final key = '${lat.toStringAsFixed(2)},${lon.toStringAsFixed(2)}';
-      if (cache.containsKey(key)) {
-        return cache[key];
+      final cached = cache[key];
+      if (cached != null) {
+        return cached;
       }
-      String? name;
+      var names = const <String>[];
       try {
-        name = await reverseGeocode(lat, lon).timeout(lookupTimeout);
+        names = await placeNames(lat, lon).timeout(lookupTimeout);
       } catch (e) {
         log?.call('auto folders: place lookup failed ($e)');
       }
-      final p = name == null ? null : placeForFolder(name);
-      return cache[key] = (p == null || p.isEmpty) ? null : p;
+      final out = <String>[];
+      for (final n in names) {
+        final p = placeForFolder(n);
+        if (p.isNotEmpty && !out.any((o) => o.toLowerCase() == p.toLowerCase())) {
+          out.add(p);
+        }
+      }
+      return cache[key] = out.take(maxPlaceOptions).toList();
     }
 
     final days = facts.map((f) => f.day).toSet();
@@ -235,8 +252,8 @@ class AutoFolderService {
     for (final day in days) {
       final gps = facts.where((f) => f.day == day && f.info.hasGps).map((f) => f.info).firstOrNull;
       if (gps != null) {
-        placeByDay[day] = await geocode(gps.lat!, gps.lon!);
-        source[day] = placeByDay[day] == null ? 'photo GPS, no place name' : 'photo GPS';
+        optionsByDay[day] = await geocode(gps.lat!, gps.lon!);
+        source[day] = optionsByDay[day]!.isEmpty ? 'photo GPS, no place name' : 'photo GPS';
       } else {
         needPhone.add(day);
       }
@@ -253,24 +270,41 @@ class AutoFolderService {
       } catch (e) {
         log?.call('auto folders: phone location unavailable ($e)');
       }
-      final place = here == null ? null : await geocode(here.$1, here.$2);
+      final places = here == null ? const <String>[] : await geocode(here.$1, here.$2);
       for (final day in recent) {
-        placeByDay[day] = place;
-        source[day] = place == null ? 'phone location unavailable' : 'phone location';
+        optionsByDay[day] = places;
+        source[day] = places.isEmpty ? 'phone location unavailable' : 'phone location';
       }
     }
     for (final day in needPhone.where((d) => !recent.contains(d))) {
       source[day] = 'no GPS, too old for the phone location';
     }
 
-    final plan = planFolders(facts, placeByDay);
+    final plan = planFolders(facts, {for (final e in optionsByDay.entries) e.key: e.value.firstOrNull});
+    // Alternatives: the same "<day> <camera>" with each place name, and without a place.
+    final noPlace = planFolders(facts, const {});
+    final alternatives = <String, List<String>>{};
     for (final f in facts) {
+      final proposed = plan.folderBySet[f.setId]!;
+      final base = noPlace.folderBySet[f.setId]!;
+      final list = alternatives.putIfAbsent(proposed, () => [proposed]);
+      for (final name in [
+        for (final place in optionsByDay[f.day] ?? const <String>[]) sanitizeFolderName('$place $base'),
+        base,
+      ]) {
+        if (!list.contains(name)) {
+          list.add(name);
+        }
+      }
       log?.call(
         'auto folder: set ${f.setId.substring(0, 8)} model=${f.info.model ?? '-'} day=${f.day} '
-        'place=${source[f.day] ?? '-'} -> "${plan.folderBySet[f.setId]}"',
+        'place=${source[f.day] ?? '-'} -> "$proposed"',
       );
     }
-    return AutoFolderPlan(plan.folderBySet, source);
+    for (final e in alternatives.entries) {
+      log?.call('auto folder: "${e.key}" alternatives: ${e.value.skip(1).map((n) => '"$n"').join(', ')}');
+    }
+    return AutoFolderPlan(plan.folderBySet, source, alternatives);
   }
 }
 
