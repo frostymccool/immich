@@ -256,6 +256,8 @@ void main() {
     test('camera names are shortened', () {
       expect(shortCameraName('Insta360 X4'), 'X4');
       expect(shortCameraName('Insta360 GO Ultra'), 'GO Ultra');
+      expect(shortCameraName('Insta360 Luna Ultra'), 'GO Ultra', reason: 'the GO Ultra writes its code name');
+      expect(shortCameraName('Luna Ultra'), 'GO Ultra');
       expect(shortCameraName('HERO9 Black'), 'HERO9 Black');
       expect(shortCameraName('GoPro HERO12 Black'), 'HERO12 Black');
       expect(shortCameraName(null), isNull);

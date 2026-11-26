@@ -206,10 +206,30 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
   // revising it once server verification landed, unlike the initial picker.)
   bool _userTouched = false;
 
+  // Automatic folders for the added groups, worked out right after the scan (null while working, or off).
+  AutoFolderPlan? _folderPlan;
+  Future<AutoFolderPlan?>? _planning;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _scan());
+  }
+
+  Future<AutoFolderPlan?> _plan(List<UploadSet> sets) async {
+    if (!ref.read(appConfigProvider).copyparty.autoFolders) {
+      return null;
+    }
+    try {
+      final plan = await ref.read(autoFolderServiceProvider).plan(sets);
+      if (mounted) {
+        setState(() => _folderPlan = plan);
+      }
+      return plan;
+    } catch (e) {
+      ref.read(copypartyLoggerProvider).log('auto folders: planning failed ($e); using the upload path');
+      return null;
+    }
   }
 
   Future<void> _scan() async {
@@ -218,6 +238,7 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
       if (!mounted) {
         return;
       }
+      _planning = _plan(sets);
       setState(() {
         _sets = sets;
         // Default: everything selected (this is a deliberate "add" action).
@@ -299,18 +320,14 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
     }
     // Automatic folders apply to added folders too (no editing step here: the names are shown on the cards'
     // destination after upload and in the log).
-    if (ref.read(appConfigProvider).copyparty.autoFolders) {
-      try {
-        final plan = await ref.read(autoFolderServiceProvider).plan(sets);
-        final base = ref.read(appConfigProvider).copyparty.uploadPath;
-        for (final set in sets) {
-          final name = plan.folderBySet[set.id];
-          for (final f in set.files) {
-            f.uploadPathOverride = name == null ? null : autoFolderUploadPath(base, name);
-          }
+    final plan = await (_planning ?? _plan(sets));
+    if (plan != null) {
+      final base = ref.read(appConfigProvider).copyparty.uploadPath;
+      for (final set in sets) {
+        final name = plan.folderBySet[set.id];
+        for (final f in set.files) {
+          f.uploadPathOverride = name == null ? null : autoFolderUploadPath(base, name);
         }
-      } catch (e) {
-        ref.read(copypartyLoggerProvider).log('auto folders: planning failed ($e); using the upload path');
       }
     }
     await ref.read(importSessionProvider.notifier).appendSelectedSets(sets, Set.of(_selectedPaths));
@@ -398,6 +415,7 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
               onToggleGroup: (select) => _toggleGroup(sets[i], select),
               onToggleFile: _toggleFile,
               onDestinationChange: (path, dest) => setState(() => _destinationOverrides[path] = dest),
+              destFolder: _folderPlan?.folderBySet[sets[i].id],
             ),
           ),
         ),
@@ -965,14 +983,35 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     });
   }
 
+  /// The destination "Send all to" currently stands at: the one shared by every Immich-capable file
+  /// (ticked ones, or all when none is ticked); other files are always copyparty only. Null when mixed.
+  UploadDestination? _currentDestinationForAll() {
+    final all = widget.session.uploadSets.expand((s) => s.files).toList();
+    final ticked = all.where((f) => _selectedPaths.contains(f.localPath)).toList();
+    final pool = (ticked.isEmpty ? all : ticked).where((f) => f.isNativeImmichFile).map(_destinationFor).toSet();
+    if (pool.isEmpty) {
+      return UploadDestination.copypartyOnly;
+    }
+    return pool.length == 1 ? pool.first : null;
+  }
+
   Widget _destAllButton(BuildContext context, String label, UploadDestination dest) {
-    return TextButton(
-      style: TextButton.styleFrom(
-        visualDensity: VisualDensity.compact,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-      ),
-      onPressed: () => _setDestinationForAll(dest),
-      child: Text(label),
+    final active = _currentDestinationForAll() == dest;
+    const style = ButtonStyle(
+      visualDensity: VisualDensity.compact,
+      padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 10)),
+      minimumSize: WidgetStatePropertyAll(Size(0, 32)),
+    );
+    return Padding(
+      padding: const EdgeInsets.only(right: 4),
+      child: active
+          ? FilledButton.tonalIcon(
+              style: style,
+              onPressed: () => _setDestinationForAll(dest),
+              icon: const Icon(Icons.check_rounded, size: 16),
+              label: Text(label),
+            )
+          : TextButton(style: style, onPressed: () => _setDestinationForAll(dest), child: Text(label)),
     );
   }
 
@@ -1366,6 +1405,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
               onDestinationChange: _setDestination,
               expansionKey: ValueKey('${sets[i].id}-$_expandGen'),
               initiallyExpanded: _expandAll,
+              destFolder: _effectivePlan?.folderBySet[sets[i].id],
             ),
           ),
         ),
@@ -1461,6 +1501,9 @@ class _SelectableUploadSetTile extends StatelessWidget {
   final Key? expansionKey;
   final bool initiallyExpanded;
 
+  /// The automatic destination folder for this group (shown under the source folder), or null.
+  final String? destFolder;
+
   const _SelectableUploadSetTile({
     required this.set,
     required this.rootPath,
@@ -1471,7 +1514,22 @@ class _SelectableUploadSetTile extends StatelessWidget {
     required this.onDestinationChange,
     this.expansionKey,
     this.initiallyExpanded = false,
+    this.destFolder,
   });
+
+  Widget _destLine(BuildContext context, String folder) => Row(
+    children: [
+      Icon(Icons.subdirectory_arrow_right_rounded, size: 14, color: context.colorScheme.primary),
+      const SizedBox(width: 4),
+      Flexible(
+        child: Text(
+          '/$folder',
+          style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.primary, fontWeight: FontWeight.w600),
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    ],
+  );
 
   Widget _relPathLine(BuildContext context, String relPath) => Text(
     relPath,
@@ -1496,6 +1554,8 @@ class _SelectableUploadSetTile extends StatelessWidget {
         children: [
           if (relPath.isNotEmpty)
             Padding(padding: const EdgeInsets.only(left: 16, top: 6), child: _relPathLine(context, relPath)),
+          if (destFolder != null)
+            Padding(padding: const EdgeInsets.only(left: 16, top: 2), child: _destLine(context, destFolder!)),
           _SelectableFileTile(
             file: f,
             selected: selectedPaths.contains(f.localPath),
@@ -1520,6 +1580,7 @@ class _SelectableUploadSetTile extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (relPath.isNotEmpty) _relPathLine(context, relPath),
+          if (destFolder != null) _destLine(context, destFolder!),
           Text(formatHumanReadableBytes(set.totalBytes, 1)),
           // Item 1: rolled-up status so it's visible without expanding.
           _GroupSummary(set: set),

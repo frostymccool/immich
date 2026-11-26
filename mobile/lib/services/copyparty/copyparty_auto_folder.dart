@@ -38,16 +38,21 @@ class AutoFolderPlan {
   }, placeSource);
 }
 
-/// `Insta360 X4` → `X4`, `GoPro HERO9 Black` → `HERO9 Black`, other makers' models as they are.
+/// `Insta360 X4` → `X4`, `Insta360 Luna Ultra` → `GO Ultra`, `GoPro HERO9 Black` → `HERO9 Black`, other makers'
+/// models as they are.
 String? shortCameraName(String? model) {
   if (model == null) {
     return null;
   }
   var m = model.replaceAll(RegExp(r'\s+'), ' ').trim();
   m = m.replaceFirst(RegExp(r'^(insta360|arashi vision|gopro)\s+', caseSensitive: false), '').trim();
+  // Insta360 writes some models under their internal code name: the GO Ultra's files say "Luna Ultra".
+  m = _codeNames[m.toLowerCase()] ?? m;
   m = sanitizeFolderName(m);
   return m.isEmpty ? null : m;
 }
+
+const _codeNames = {'luna ultra': 'GO Ultra'};
 
 /// A folder name copyparty and every OS accept: no slashes or reserved characters, no leading dot,
 /// single spaces, at most 100 characters.
