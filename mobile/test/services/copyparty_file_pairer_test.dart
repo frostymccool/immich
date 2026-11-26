@@ -70,6 +70,31 @@ void main() {
       expect(sets.single.files, hasLength(2));
     });
 
+    test('XMP sidecars join their photo and are matched to it', () {
+      final sets = pairer.pairFiles([
+        _f('DSC_0042.JPG'),
+        _f('DSC_0042.NEF'),
+        _f('DSC_0042.NEF.xmp'),
+        _f('P1010001.ORF'),
+        _f('P1010001.xmp'),
+      ]);
+      expect(sets, hasLength(2));
+      final nikon = sets.firstWhere((s) => s.files.any((f) => f.filename == 'DSC_0042.NEF'));
+      expect(nikon.files, hasLength(3));
+      UploadFile named(UploadSet s, String n) => s.files.firstWhere((f) => f.filename == n);
+      expect(
+        CopypartyFilePairer.xmpSidecarFor(nikon.files, named(nikon, 'DSC_0042.NEF'))?.filename,
+        'DSC_0042.NEF.xmp',
+      );
+      expect(
+        CopypartyFilePairer.xmpSidecarFor(nikon.files, named(nikon, 'DSC_0042.JPG')),
+        isNull,
+        reason: 'DSC_0042.NEF.xmp belongs to the NEF only',
+      );
+      final oly = sets.firstWhere((s) => s.files.any((f) => f.filename == 'P1010001.ORF'));
+      expect(CopypartyFilePairer.xmpSidecarFor(oly.files, named(oly, 'P1010001.ORF'))?.filename, 'P1010001.xmp');
+    });
+
     test('hidden files and folders are ignored', () {
       expect(pairer.pairFiles([_f('._DSC_0042.JPG'), _f('x.jpg', dir: '/sd/.thumbnails')]), isEmpty);
     });

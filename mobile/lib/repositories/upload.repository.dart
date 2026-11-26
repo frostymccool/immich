@@ -65,6 +65,7 @@ class UploadRepository {
     void Function(int bytes, int totalBytes)? onProgress,
     required String logContext,
     Client? httpClient,
+    List<int>? sidecarXmp,
   }) async {
     final String savedEndpoint = Store.get(StoreKey.serverEndpoint);
 
@@ -77,6 +78,10 @@ class UploadRepository {
       );
       request.fields.addAll(fields);
       request.files.add(MultipartFile("assetData", file.openRead(), file.lengthSync(), filename: originalFileName));
+      if (sidecarXmp != null) {
+        // Immich reads rating, title, description, keywords, GPS and date from it (custom fork: camera XMP).
+        request.files.add(MultipartFile.fromBytes("sidecarData", sidecarXmp, filename: '$originalFileName.xmp'));
+      }
       return request;
     }
 
