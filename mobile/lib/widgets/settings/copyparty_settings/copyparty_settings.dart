@@ -54,6 +54,7 @@ class CopypartySettings extends ConsumerWidget {
           // (like File Matching below) — it lives on the GLOBAL settings page
           // only; the backup-entry upload page stays simple.
           const _AutoFoldersTile(),
+          const _StackRawJpgTile(),
           if (showServerConfig) const _RecreateFolderStructureTile(),
           const _DefaultDestinationTile(),
           const _AutoDeleteTile(),
@@ -589,6 +590,28 @@ class _AutoFoldersTile extends ConsumerWidget {
         trailing: Switch(
           value: value,
           onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyAutoFolders, v),
+        ),
+      ),
+    );
+  }
+}
+
+class _StackRawJpgTile extends ConsumerWidget {
+  const _StackRawJpgTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final value = ref.watch(appConfigProvider.select((c) => c.copyparty.stackRawJpg));
+    return Padding(
+      padding: const EdgeInsets.only(left: 8.0),
+      child: SettingListTile(
+        title: 'Stack RAW with its JPG',
+        subtitle:
+            'A RAW photo and the JPG the camera saved with it (same name, for example DSC_0042.NEF and '
+            'DSC_0042.JPG) are stacked in Immich after upload, with the JPG in front.',
+        trailing: Switch(
+          value: value,
+          onChanged: (v) => ref.read(settingsProvider).write(SettingsKey.copypartyStackRawJpg, v),
         ),
       ),
     );

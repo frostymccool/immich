@@ -154,4 +154,44 @@ void main() {
       }
     });
   });
+
+  group('stack RAW with its JPG', () {
+    test('a NEF and its JPG stack with the JPG as the cover', () {
+      expect(rawJpgStack([(filename: 'DSC_0042.NEF', assetId: 'raw'), (filename: 'DSC_0042.JPG', assetId: 'jpg')]), [
+        'jpg',
+        'raw',
+      ]);
+    });
+
+    test('not until both are in Immich', () {
+      expect(
+        rawJpgStack([(filename: 'P1010001.ORF', assetId: 'raw'), (filename: 'P1010001.JPG', assetId: null)]),
+        isNull,
+      );
+    });
+
+    test('nothing to stack without a RAW, or without a JPG', () {
+      expect(rawJpgStack([(filename: 'IMG_0001.JPG', assetId: 'a')]), isNull);
+      expect(rawJpgStack([(filename: 'DSC_0001.ARW', assetId: 'a')]), isNull);
+      expect(
+        rawJpgStack([(filename: 'VID_0001.MP4', assetId: 'v'), (filename: 'VID_0001.LRF', assetId: null)]),
+        isNull,
+      );
+    });
+
+    test('side files do not hold the stack back', () {
+      expect(
+        rawJpgStack([
+          (filename: 'DSC_0042.NEF', assetId: 'raw'),
+          (filename: 'DSC_0042.JPG', assetId: 'jpg'),
+          (filename: 'DSC_0042.NEF.xmp', assetId: null),
+        ]),
+        ['jpg', 'raw'],
+      );
+    });
+
+    test('the same asset twice (Immich already had it) is listed once', () {
+      expect(rawJpgStack([(filename: 'A.DNG', assetId: 'same'), (filename: 'A.JPG', assetId: 'same')]), isNull);
+    });
+  });
 }

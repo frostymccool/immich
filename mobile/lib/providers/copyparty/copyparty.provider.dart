@@ -1287,6 +1287,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                 if (receiptId != null && result.remoteAssetId != null) {
                   await _receiptRepo.markImmichUploaded(receiptId, result.remoteAssetId!);
                 }
+                unawaited(_stackRawWithJpg(set));
               } else if (result.isCancelled || fileToken.isCompleted) {
                 // Cancelled during the Immich upload → stop like a copyparty cancel.
                 throw const CopypartyCancelledException();
@@ -1579,6 +1580,31 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
           state = state.copyWith(step: ImportSessionStep.complete, cancelled: cancelled);
         }
       }
+    }
+  }
+
+  /// Sets already stacked in Immich this session (by set id), so a stack is made once.
+  final Set<String> _stackedSets = {};
+
+  /// Stacks a RAW photo with the JPG/HEIC the camera saved next to it, JPG as the cover, once every one of them
+  /// is in Immich (setting "Stack RAW with its JPG", on by default). Best effort: a failure is only logged.
+  Future<void> _stackRawWithJpg(UploadSet set) async {
+    if (!_ref.read(appConfigProvider).copyparty.stackRawJpg || _stackedSets.contains(set.id)) {
+      return;
+    }
+    final ids = rawJpgStack([
+      for (final f in set.files) (filename: f.filename, assetId: f.immichAssetId ?? f.existingReceipt?.immichAssetId),
+    ]);
+    if (ids == null) {
+      return;
+    }
+    _stackedSets.add(set.id);
+    try {
+      await _ref.read(apiServiceProvider).stacksApi.createStack(StackCreateDto(assetIds: ids));
+      _log.log('STACKED in Immich: ${set.files.map((f) => f.filename).join(' + ')} (cover ${ids.first})');
+    } catch (e) {
+      _stackedSets.remove(set.id);
+      _log.log('could not stack ${set.files.map((f) => f.filename).join(' + ')} in Immich: $e');
     }
   }
 

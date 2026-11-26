@@ -80,3 +80,38 @@ StopAction stopActionFor({required bool running, required bool onProgressPage}) 
     : onProgressPage
     ? StopAction.finishPaused
     : StopAction.nothing;
+
+/// Camera RAW photo types.
+const rawPhotoExtensions = {'dng', 'nef', 'nrw', 'orf', 'arw', 'cr2', 'cr3', 'rw2', 'raf', 'raw', 'pef', 'srw'};
+
+/// Types the camera saves next to a RAW that make a good stack cover.
+const stackCoverExtensions = {'jpg', 'jpeg', 'heic', 'heif'};
+
+String _extOf(String name) {
+  final dot = name.lastIndexOf('.');
+  return dot < 0 ? '' : name.substring(dot + 1).toLowerCase();
+}
+
+/// The Immich asset ids to stack for one capture (files with the same name in the same folder), cover first,
+/// or null when there is nothing to stack yet: it needs a RAW and a JPG/HEIC, and every one of those must
+/// already be in Immich, so the stack is made once, complete. Immich makes the first id the cover.
+List<String>? rawJpgStack(List<({String filename, String? assetId})> files) {
+  final covers = files.where((f) => stackCoverExtensions.contains(_extOf(f.filename))).toList()
+    ..sort((a, b) => a.filename.compareTo(b.filename));
+  final raws = files.where((f) => rawPhotoExtensions.contains(_extOf(f.filename))).toList()
+    ..sort((a, b) => a.filename.compareTo(b.filename));
+  if (covers.isEmpty || raws.isEmpty) {
+    return null;
+  }
+  final all = [...covers, ...raws];
+  if (all.any((f) => f.assetId == null)) {
+    return null;
+  }
+  final ids = <String>[];
+  for (final f in all) {
+    if (!ids.contains(f.assetId)) {
+      ids.add(f.assetId!);
+    }
+  }
+  return ids.length < 2 ? null : ids;
+}

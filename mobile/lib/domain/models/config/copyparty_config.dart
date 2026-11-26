@@ -57,6 +57,10 @@ class CopypartyConfig {
   /// [recreateFolderStructure] for those imports.
   final bool autoFolders;
 
+  /// When true (the default), a camera RAW photo and the JPG/HEIC the camera saved with it (same name, same
+  /// folder) are stacked in Immich after upload, with the JPG as the cover.
+  final bool stackRawJpg;
+
   const CopypartyConfig({
     this.hostUrl = '',
     this.uploadPath = '/uploads',
@@ -74,6 +78,7 @@ class CopypartyConfig {
     this.bridgeUrl = '',
     this.username = '',
     this.autoFolders = true,
+    this.stackRawJpg = true,
   });
 
   CopypartyConfig copyWith({
@@ -93,6 +98,7 @@ class CopypartyConfig {
     String? bridgeUrl,
     String? username,
     bool? autoFolders,
+    bool? stackRawJpg,
   }) => CopypartyConfig(
     hostUrl: hostUrl ?? this.hostUrl,
     uploadPath: uploadPath ?? this.uploadPath,
@@ -110,6 +116,7 @@ class CopypartyConfig {
     bridgeUrl: bridgeUrl ?? this.bridgeUrl,
     username: username ?? this.username,
     autoFolders: autoFolders ?? this.autoFolders,
+    stackRawJpg: stackRawJpg ?? this.stackRawJpg,
   );
 
   @override
@@ -131,7 +138,8 @@ class CopypartyConfig {
           other.defaultDestination == defaultDestination &&
           other.bridgeUrl == bridgeUrl &&
           other.username == username &&
-          other.autoFolders == autoFolders);
+          other.autoFolders == autoFolders &&
+          other.stackRawJpg == stackRawJpg);
 
   @override
   int get hashCode => Object.hash(
@@ -151,6 +159,7 @@ class CopypartyConfig {
     bridgeUrl,
     username,
     autoFolders,
+    stackRawJpg,
   );
 
   @override
@@ -162,7 +171,7 @@ class CopypartyConfig {
       'recreateFolderStructure: $recreateFolderStructure, '
       'sortSmallestFirst: $sortSmallestFirst, debugMode: $debugMode, '
       'stageToLocalBeforeUpload: $stageToLocalBeforeUpload, cacheSizeMb: $cacheSizeMb, '
-      'defaultDestination: $defaultDestination, bridgeUrl: $bridgeUrl, username: $username, autoFolders: $autoFolders)';
+      'defaultDestination: $defaultDestination, bridgeUrl: $bridgeUrl, username: $username, autoFolders: $autoFolders, stackRawJpg: $stackRawJpg)';
 
   static bool _listEquals(List<String> a, List<String> b) {
     if (a.length != b.length) {
