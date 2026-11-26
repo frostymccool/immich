@@ -2389,6 +2389,7 @@ class _ProgressSetSection extends StatelessWidget {
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
+                    _DestFolderLine(set: set),
                   ],
                 ),
               ),
@@ -3334,6 +3335,7 @@ class _CompletionSetSection extends StatelessWidget {
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
+              _DestFolderLine(set: set),
             ],
           ),
         ),
@@ -3495,6 +3497,36 @@ class _CompletionFileTile extends StatelessWidget {
 /// folder's own name so it matches where the file lands on the server under
 /// FB9 (e.g. root "trips" + subfolder "city walk" → "trips/city
 /// walk"). (item 4)
+/// The server folder a group goes to (its automatic folder, or the original folder of a re-upload), shown under
+/// the card folder on the progress and completion screens. Nothing when the group uses the plain upload path.
+class _DestFolderLine extends StatelessWidget {
+  final UploadSet set;
+  const _DestFolderLine({required this.set});
+
+  @override
+  Widget build(BuildContext context) {
+    final path = set.files.map((f) => f.uploadPathOverride).whereType<String>().firstOrNull;
+    final name = path?.split('/').where((p) => p.isNotEmpty).lastOrNull;
+    if (name == null) {
+      return const SizedBox.shrink();
+    }
+    final color = context.colorScheme.primary;
+    return Row(
+      children: [
+        Icon(Icons.subdirectory_arrow_right_rounded, size: 14, color: color),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Text(
+            '/$name',
+            style: context.textTheme.labelSmall?.copyWith(color: color, fontWeight: FontWeight.w600),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 String _relPathUtil(String? root, String? dir) {
   if (dir == null) {
     return '';
