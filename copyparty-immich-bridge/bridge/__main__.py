@@ -13,6 +13,7 @@ import time
 from bridge import __version__
 from bridge.config import Config, ConfigError
 from bridge.autofix import AutoFix
+from bridge.links import LinkImports, Person
 from bridge.mqtt import MqttPublisher
 from bridge.pressure import PRESSURE
 from bridge.geofix import GeoFix, clip_embedder
@@ -23,7 +24,8 @@ from bridge.router import Router
 from bridge.server import serve
 from bridge.settings import SettingsStore
 from bridge.state import StateStore
-from bridge.users import UsersError, UsersStore
+from bridge.scanner import is_within_dirs
+from bridge.users import MAIN_ID, UsersError, UsersStore
 from bridge.worker import ImportWorker
 
 log = logging.getLogger("bridge")
@@ -177,7 +179,32 @@ def main() -> int:
         mqtt.refresh()
 
     PRESSURE.listeners.append(on_backoff)
-    httpd = serve(cfg, state, worker, settings, logs, scan_now=wake_sweep.set, manager=manager, geofix=geofix)
+    # Shared albums pasted as a link: downloaded into the person's own folder, imported, then the NAS copy is tidied
+    def link_person(uid: str) -> Person | None:
+        rt = manager.runtime(uid)
+        if rt is None:
+            return None
+        folders = manager.router.folders_of(uid)
+        prio = [d for d in (rt.view.priority_dirs or []) if is_within_dirs(d, folders)] if uid == MAIN_ID else []
+        folder = (prio or folders or [""])[0]
+        return Person(uid, folder, lambda path, source: manager.enqueue(path, source), rt.client, rt.state)
+
+    def corrections_done(uid: str, asset_id: str) -> bool:
+        if uid != MAIN_ID or not cfg.auto_fix:
+            return True  # nothing will correct it later, so the NAS copy is no longer needed
+        return autofix.status_of(asset_id) in ("applied", "has_place")
+
+    links = LinkImports(os.path.join(data_dir, "links.db"), link_person, corrections_done)
+
+    def link_cleanup_loop() -> None:
+        while not stop_event.wait(600):
+            try:
+                links.cleanup()
+            except Exception:
+                log.exception("shared-link tidy-up failed")
+
+    threading.Thread(target=link_cleanup_loop, name="link-cleanup", daemon=True).start()
+    httpd = serve(cfg, state, worker, settings, logs, scan_now=wake_sweep.set, manager=manager, geofix=geofix, links=links)
 
     def shutdown(signum, frame) -> None:
         log.info("signal %d — shutting down", signum)

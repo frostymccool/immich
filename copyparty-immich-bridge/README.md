@@ -98,6 +98,7 @@ starts the bridge, asks only for the Immich API key). The manual steps below are
 | `GEOFIX_SHOT_INTERVAL_S` | `90` | Seconds a shot assumed when dating an undated file from its file number and only one dated neighbour |
 | `AUTO_FIX` | `false` | After import, set place and local time from the account's own geotagged photos, on strong evidence only (also editable through `PUT /api/config` as `auto_fix`). Main account only |
 | `AUTO_FIX_WINDOW_S` | `1800` | How far in time a geotagged photo may be from a file to count as evidence |
+| `LINK_KEEP_DAYS` | `7` | Days a file saved from a shared link stays on the NAS when automatic correction has not finished with it; once it is in Immich and corrected it is deleted at once. |
 | `XMP_WAIT_S` | `45` | Seconds a RAW photo (or a photo in a folder with XMP files) waits for its camera sidecar to arrive before it is imported; 0 = never wait. The sidecar goes to Immich with the photo. |
 | `AUTO_FIX_PAUSE_S` | `6` | Seconds to wait after each automatic change (at most 50 every 5 minutes), so Immich never gets a burst. |
 | `BACKOFF_LOAD` / `BACKOFF_LOAD_OK` | `3.0` / `1.5` | Load per CPU at which the bridge backs off, and under which it resumes |
@@ -132,6 +133,12 @@ only what is mounted (the installer mounts copyparty's whole data root). To add 
 somewhere else, add a volume mount and re-run the installer. To change the port re-run the
 installer with `BRIDGE_PORT=9000`. `move`/`delete` after import also need the data mounted
 read-write (installer option `WRITABLE=1`); the page refuses them while it is read-only.
+
+**Add photos from a shared link** (Status tab): paste a Google Photos shared album or Google Drive folder link, pick
+one of the suggested album names (or type one) and press Import. The originals are saved to a new folder inside the
+person's upload folder, imported into an album of that name, corrected like any upload, and the NAS copy is deleted
+once Immich has the same bytes and correction has finished (or after `LINK_KEEP_DAYS`, default 7). Needs
+`WRITABLE=1`.
 
 ## Fix locations (missing GPS / time zone)
 
@@ -177,6 +184,7 @@ within 5 km of each other, or one within 10 minutes). Everything else is left al
   `xiu` batch hooks). Needs the token when `BRIDGE_TOKEN` is set
 - `GET /status` — open: totals only (counters by status, queue depth, `paused`, backlog, `users`, `backoff`); the per-person keys (`watch_dirs`, `priority_dirs`, `albums`, `recent`, `active`) are present but empty. With the bridge token (`X-Bridge-Token`) it adds watch/priority dirs, album health (`albums`: key permission check, added/failed counts, last error, back-fill progress), the 20 most recent items and `extras` (auto-correct counts, MQTT); `?user=<id>` (token) is one person's view
 - `GET /status/me` — the phone app's own view: header `X-Immich-Token: <the app's Immich access token>`. The bridge asks Immich (`/api/users/me`) whose token it is and answers that person's `?user=` view plus `me` and `immich_user`. 401 = no or wrong token, 404 = an Immich user with no bridge account, 503 = Immich could not be asked (try later). Answers are remembered 5 min (60 s for a wrong token), keyed by a hash; the token is never logged. Send it over https only
+- `POST /api/links/inspect` `{"url"}` — reads a shared album: title, photo/video counts, days, `suggestions` (first = default); `POST /api/links/import` `{"url", "name"?}` — starts the download + import (202 with the job); `GET /api/links` — recent jobs with `kept_on_nas`. Bridge token (`user` = person), or `X-Immich-Token` (always the signed-in person)
 - `GET /healthz` — liveness (open)
 - `GET /` — the web page (the page itself is public; all data behind it needs the token)
 - `GET|PUT /api/config`, `POST /api/config/reset`, `GET /api/fs?path=`, `GET /api/logs`,

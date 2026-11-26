@@ -53,6 +53,13 @@
   td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
   td.path { word-break: break-all; }
+  .lk-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .lk-row input { flex: 1; min-width: 0; }
+  .lk-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+  .lk-chips button { padding: 4px 12px; border-radius: 99px; font-size: 14px; }
+  .lk-chips button.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .lk-job { padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; }
+  .lk-job .progbar { margin-top: 4px; }
   .pill { font-size: 12px; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); }
   .pill.imported { color: var(--ok); } .pill.duplicate { color: var(--muted); } .pill.failed { color: var(--bad); } .pill.skipped { color: var(--warn); }
   .row { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
@@ -173,6 +180,20 @@
           <summary>Where files come from and go to</summary>
           <dl class="kv" id="moreKv"></dl>
         </details>
+      </div>
+      <div class="card" id="linkCard">
+        <h2>Add photos from a shared link</h2>
+        <p class="muted" style="margin-top:0">Paste a Google Photos shared album or Google Drive folder link. The photos are saved to the NAS,
+          imported into an album, corrected like any upload, and the NAS copy is deleted once it is safely in Immich.</p>
+        <div class="lk-row"><input id="lkUrl" type="url" placeholder="https://photos.app.goo.gl/..." autocomplete="off">
+          <button id="lkLook">Look</button></div>
+        <div id="lkMsg" class="muted" style="margin-top:6px"></div>
+        <div id="lkPick" class="hidden">
+          <div class="lk-chips" id="lkChips"></div>
+          <div class="lk-row"><input id="lkName" type="text" aria-label="Album name">
+            <button id="lkGo" class="primary">Import</button></div>
+        </div>
+        <div id="lkJobs" style="margin-top:8px"></div>
       </div>
       <div class="card">
         <h2>Recent files</h2>
@@ -1530,6 +1551,72 @@
 
   // ---- polling -----------------------------------------------------------------
   var bfRunning = false;
+  // ---- shared-album links ---------------------------------------------------------
+  var lkInfo = null, lkUrlSeen = '', lkBusy = false;
+  function lkUser() { return viewUser || ((people && people.users.length > 1) ? '' : 'main'); }
+  function lkBody(b) { var u = lkUser(); if (u) { b.user = u; } return b; }
+  function lkMsg(t, bad) { $('lkMsg').textContent = t || ''; $('lkMsg').style.color = bad ? 'var(--bad)' : ''; }
+  function lkLook() {
+    var url = $('lkUrl').value.trim();
+    if (!url || lkBusy) { return; }
+    if (!lkUser()) { lkMsg('Pick a person at the top first: the photos go into their Immich.', true); return; }
+    lkBusy = true; lkUrlSeen = url; lkInfo = null; $('lkPick').classList.add('hidden'); lkMsg('Reading the album…');
+    api('POST', '/api/links/inspect', lkBody({ url: url })).then(function (r) {
+      lkInfo = r;
+      var bits = [r.photos + ' photo' + (r.photos === 1 ? '' : 's')];
+      if (r.videos) { bits.push(r.videos + ' video' + (r.videos === 1 ? '' : 's')); }
+      if (r.days.length) { bits.push(r.days.length > 1 ? r.days[0] + ' to ' + r.days[r.days.length - 1] : r.days[0]); }
+      lkMsg((r.title ? '“' + r.title + '” · ' : '') + bits.join(' · ') + ' · from ' + r.source + '. Pick a name or type your own:');
+      var box = $('lkChips'); box.textContent = '';
+      r.suggestions.forEach(function (n, i) {
+        var b = el('button', { type: 'button', 'class': i === 0 ? 'on' : '' }, n);
+        b.onclick = function () { $('lkName').value = n; lkMark(); };
+        box.appendChild(b);
+      });
+      $('lkName').value = r.suggestions[0] || '';
+      $('lkPick').classList.remove('hidden'); $('lkGo').focus();
+    }).catch(function (e) { if (e.message !== 'auth') { lkMsg(e.message, true); } })
+      .then(function () { lkBusy = false; });
+  }
+  function lkMark() {
+    var v = $('lkName').value.trim();
+    Array.prototype.forEach.call($('lkChips').children, function (b) { b.classList.toggle('on', b.textContent === v); });
+  }
+  function lkGo() {
+    var name = $('lkName').value.trim();
+    if (!name) { lkMsg('Give the album a name.', true); return; }
+    $('lkGo').disabled = true;
+    api('POST', '/api/links/import', lkBody({ url: lkUrlSeen, name: name })).then(function (j) {
+      lkMsg('Importing ' + j.total + ' files into “' + j.name + '”. You can close this page; it carries on.');
+      $('lkPick').classList.add('hidden'); $('lkUrl').value = ''; lkInfo = null; lkJobs();
+    }).catch(function (e) { if (e.message !== 'auth') { lkMsg(e.message, true); } })
+      .then(function () { $('lkGo').disabled = false; });
+  }
+  function lkJobs() {
+    var u = lkUser();
+    if (!u) { $('lkJobs').textContent = ''; return Promise.resolve(); }
+    return api('GET', '/api/links?user=' + encodeURIComponent(u)).then(function (r) {
+      var box = $('lkJobs'); box.textContent = '';
+      (r.jobs || []).slice(0, 5).forEach(function (j) {
+        var got = j.done + j.skipped, pct = j.total ? Math.round(100 * (got + j.failed) / j.total) : 100;
+        var line = j.state === 'running' ? 'downloading ' + got + ' of ' + j.total
+          : j.state === 'finished' ? got + ' of ' + j.total + ' saved' + (j.kept_on_nas ? ' · ' + j.kept_on_nas + ' still on the NAS until Immich has them and corrections are done' : ' · NAS copy tidied away')
+          : (j.error || j.state);
+        if (j.failed) { line += ' · ' + j.failed + ' could not be downloaded'; }
+        var row = el('div', { 'class': 'lk-job' });
+        row.appendChild(el('b', {}, j.name)); row.appendChild(el('span', { 'class': 'muted' }, ' · ' + line + ' · ' + ago(j.created)));
+        if (j.state === 'running') { var bar = el('div', { 'class': 'progbar' }); var f = el('i'); f.style.width = pct + '%'; bar.appendChild(f); row.appendChild(bar); }
+        box.appendChild(row);
+      });
+    });
+  }
+  $('lkLook').onclick = lkLook;
+  $('lkGo').onclick = lkGo;
+  $('lkName').oninput = lkMark;
+  $('lkName').onkeydown = function (e) { if (e.key === 'Enter') { lkGo(); } };
+  $('lkUrl').onkeydown = function (e) { if (e.key === 'Enter') { lkLook(); } };
+  $('lkUrl').onpaste = function () { setTimeout(lkLook, 0); };  // pasting is enough: no button to find
+
   function refresh() {
     clearTimeout(pollT);
     if (!token) { return; }
@@ -1541,6 +1628,7 @@
       return;
     }
     if (tab === 'status') {
+      lkJobs().catch(function () { /* no link imports on this bridge */ });
       job = statusJson().then(renderStatus).then(function () {
         return api('GET', '/api/config' + uq()).then(function (c) { renderIdentity(c.readonly); });  // account + album links need the token
       });

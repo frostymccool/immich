@@ -26,7 +26,10 @@ APP_FOLDER="${APP_FOLDER:-}"
 # The wider folder WIDE=1 watches instead; default: the folder containing APP_FOLDER.
 BASE_FOLDER="${BASE_FOLDER:-}"
 WIDE="${WIDE:-0}"
-WRITABLE="${WRITABLE:-0}"   # 1 = mount the data read-write so the page can enable move/delete after import
+# 1 = mount the data read-write: needed for move/delete after import and for albums pasted as links (saved to the
+# NAS first). Remembered by re-runs (update-bridge.sh); WRITABLE=0 makes it read-only again.
+WRITABLE_GIVEN="${WRITABLE:-}"
+WRITABLE="${WRITABLE:-0}"
 HOOK="${HOOK:-1}"
 BRIDGE_PORT="${BRIDGE_PORT:-8099}"
 # More copyparty containers whose data folders the bridge should also see (read-only unless WRITABLE=1), as a
@@ -208,6 +211,9 @@ PRIORITY_LINE="      # PRIORITY_DIRS: not set (the whole data folder is watched,
 if [ "$APP_FOLDER" != "." ]; then
   PRIORITY="$(under_mount "$APP_FOLDER")"
   PRIORITY_LINE="      PRIORITY_DIRS: $PRIORITY"
+fi
+if [ -z "$WRITABLE_GIVEN" ] && [ -f "$OVERRIDE" ] && grep -qE ":${MOUNT_DEST}:rw([[:space:]\"']|$)" "$OVERRIDE"; then
+  WRITABLE=1  # an earlier install chose read-write; an update keeps it
 fi
 if [ "$WRITABLE" = "1" ]; then MOUNT_MODE=rw; else MOUNT_MODE=ro; fi
 if [ -n "$PEOPLE_ROOT" ]; then

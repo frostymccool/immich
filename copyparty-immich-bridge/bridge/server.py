@@ -35,6 +35,7 @@ from bridge.config import Config
 from bridge.geofix import GeoFix, GeoFixError
 from bridge.immich import ImmichError
 from bridge.logbuffer import RingLogHandler
+from bridge.links import LinkError, LinkImports
 from bridge.manager import UserManager
 from bridge.pressure import PRESSURE
 from bridge.scanner import is_within_dirs
@@ -156,6 +157,12 @@ GET {page}/healthz      liveness and version
 GET {page}/status       totals, queue, backoff (per-person detail needs the token)
 GET {page}/status/me    one person's own status; header X-Immich-Token = their Immich access token (https only)
 GET {page}/llms.txt     this text
+
+## Shared albums (token, or X-Immich-Token for the signed-in person only)
+POST {page}/api/links/inspect  {{"url"}} -> title, counts, days, name suggestions (first = default)
+POST {page}/api/links/import   {{"url", "name"?}} -> job; downloads into the person's folder, imports, then deletes
+                               the NAS copy once Immich has the same bytes and correction is done
+GET  {page}/api/links          recent jobs
 """
 
 
@@ -168,6 +175,7 @@ def make_handler(
     scan_now: Callable[[], None] | None = None,
     manager: UserManager | None = None,
     geofix: GeoFix | None = None,
+    links: LinkImports | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     tokens = TokenCheck(lambda: cfg.immich_url, lambda: cfg.verify_tls)
 
@@ -310,19 +318,19 @@ def make_handler(
             finally:
                 self._send_json = real  # type: ignore[method-assign]
 
-        def _send_status_me(self) -> None:
-            """The phone app's own view: the signed-in Immich user's bridge status, nobody else's."""
+        def _immich_caller(self):
+            """(bridge uid, Immich user) of the X-Immich-Token sender; sends the error itself and returns None."""
             token = self.headers.get("X-Immich-Token", "").strip()
             if not token:
                 self._send_json(401, {"error": "no token"})
-                return
+                return None
             verdict, who = tokens.check(token)
             if verdict == "down":
                 self._send_json(503, {"error": "immich unreachable"})
-                return
+                return None
             if verdict != "ok" or who is None:
                 self._send_json(401, {"error": "token not accepted"})
-                return
+                return None
             uid = None
             if manager is None:
                 if (worker.immich_user or {}).get("id", "").lower() == who["id"]:
@@ -338,7 +346,57 @@ def make_handler(
                         break
             if uid is None:
                 self._send_json(404, {"error": "not a bridge user"})
+                return None
+            return uid, who
+
+        def _link_caller(self, query: dict | None = None, body: dict | None = None) -> str | None:
+            """Who a shared-link request is for: the page (bridge token, ?user= / {"user"}, default main) or the
+            phone app (X-Immich-Token: only ever the signed-in person themselves)."""
+            if self.headers.get("X-Immich-Token") and not self.headers.get("X-Bridge-Token"):
+                caller = self._immich_caller()
+                return caller[0] if caller else None
+            if not self._require_api():
+                return None
+            uid = ((query or {}).get("user") or [None])[0] or (body or {}).get("user") or MAIN_ID
+            if not isinstance(uid, str) or (manager is not None and manager.runtime(uid) is None) or (manager is None and uid != MAIN_ID):
+                self._no_user()
+                return None
+            return uid
+
+        def _links_post(self) -> None:
+            assert links is not None
+            body = self._read_json_body()
+            if body is None:
                 return
+            uid = self._link_caller(body=body)
+            if uid is None:
+                return
+            url = body.get("url")
+            if not isinstance(url, str) or not url.strip():
+                self._send_json(400, {"error": "paste the album link"})
+                return
+            try:
+                if self.path == "/api/links/inspect":
+                    self._send_json(200, links.inspect(url, uid))
+                else:
+                    name = body.get("name")
+                    if name is None or (isinstance(name, str) and not name.strip()):
+                        name = links.inspect(url, uid)["suggestions"][0]  # nothing chosen = the first suggestion
+                    if not isinstance(name, str):
+                        self._send_json(400, {"error": "name must be text"})
+                        return
+                    self._send_json(202, links.start(url, name, uid))
+            except LinkError as ex:
+                self._send_json(ex.status, {"error": str(ex)})
+            except requests.RequestException as ex:
+                self._send_json(502, {"error": f"the album could not be read: {type(ex).__name__}"})
+
+        def _send_status_me(self) -> None:
+            """The phone app's own view: the signed-in Immich user's bridge status, nobody else's."""
+            caller = self._immich_caller()
+            if caller is None:
+                return
+            uid, who = caller
             name = (manager.describe(uid) or {}).get("name", "") if manager else who["name"]
             self._send_status({}, me=uid, extra={"me": {"bridge_user": uid, "name": name}, "immich_user": who})
 
@@ -542,6 +600,10 @@ def make_handler(
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            elif route == "/api/links" and links is not None:
+                uid = self._link_caller(query)
+                if uid is not None:
+                    self._send_json(200, {"jobs": links.jobs(uid)})
             elif route == "/api/users" and manager is not None:
                 if self._require_api():
                     self._send_json(200, manager.describe_all())
@@ -706,6 +768,9 @@ def make_handler(
                 return
             if manager is not None and self.path.startswith("/api/users"):
                 self._users_post()
+                return
+            if self.path in ("/api/links/inspect", "/api/links/import") and links is not None:
+                self._links_post()
                 return
             if self.path.startswith("/api/geofix") and geofix is not None:
                 if self._require_api():
@@ -876,8 +941,9 @@ def serve(
     scan_now: Callable[[], None] | None = None,
     manager: UserManager | None = None,
     geofix: GeoFix | None = None,
+    links: LinkImports | None = None,
 ) -> ThreadingHTTPServer:
-    handler = make_handler(cfg, state, worker, settings, logs, scan_now, manager, geofix)
+    handler = make_handler(cfg, state, worker, settings, logs, scan_now, manager, geofix, links)
     httpd = ThreadingHTTPServer((cfg.bind_host, cfg.bind_port), handler)
     log.info("listening on %s:%d", cfg.bind_host, cfg.bind_port)
     return httpd

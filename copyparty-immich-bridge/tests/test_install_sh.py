@@ -388,3 +388,15 @@ def test_immichs_image_recognition_is_found_and_the_bridge_joins_its_network(box
         assert r.returncode == 0, r.stdout + r.stderr
         text = box.override.read_text()
         assert "IMMICH_ML_URL: http" not in text and "immich-ml" not in text
+
+
+def test_writable_is_remembered_by_an_update_and_zero_turns_it_off(box):
+    r = box.run(env={"APP_FOLDER": "Work", "WRITABLE": "1"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert ":/w:rw" in box.override.read_text()
+    again = box.run()  # update-bridge.sh: no variables
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert ":/w:rw" in box.override.read_text()
+    off = box.run(env={"WRITABLE": "0"})
+    assert off.returncode == 0 and ":/w:ro" in box.override.read_text()
+    assert box.run().returncode == 0 and ":/w:ro" in box.override.read_text()

@@ -269,7 +269,7 @@ The bridge itself only speaks plain HTTP on its port. If you put a LAN reverse p
 | Uninstall | same command ending `\| bash -s -- --uninstall` |
 | Choose the app folder without being asked | prefix `APP_FOLDER=Trips/Other` (`APP_FOLDER=.` = everything); `BASE_FOLDER=Trips` overrides what `WIDE=1` watches |
 | Skip the instant hook | prefix `HOOK=0` |
-| Let the page enable move/delete after import | prefix `WRITABLE=1` (mounts the data read-write) |
+| Let the page enable move/delete after import, and save shared-album links | prefix `WRITABLE=1` (mounts the data read-write; remembered by later runs and updates, `WRITABLE=0` turns it off) |
 | Change the port | prefix `BRIDGE_PORT=9000` |
 | Non-default paths | `COPYPARTY_DIR=/path` `CONTAINER=name` `IMMICH_URL=http://host:2283` |
 | Key without a prompt | prefix `IMMICH_API_KEY=xxxx` |

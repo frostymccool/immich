@@ -161,6 +161,11 @@ class AutoFix:
             log.info("auto-fix pass: %s", json.dumps(counts, sort_keys=True))
         return counts
 
+    def status_of(self, asset_id: str) -> str | None:
+        with self._lock:
+            row = self._db.execute("SELECT status FROM autofix WHERE asset_id=?", (asset_id,)).fetchone()
+        return row[0] if row else None
+
     def describe(self, limit: int = 200) -> dict:
         with self._lock:
             counts = dict(self._db.execute("SELECT status,count(*) FROM autofix GROUP BY status").fetchall())

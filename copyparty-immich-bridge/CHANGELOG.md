@@ -3,6 +3,29 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.10.0 - add photos from a shared album link
+
+- New card on the Status tab, "Add photos from a shared link": paste a Google Photos shared album link
+  (photos.app.goo.gl / photos.google.com/share) or a Google Drive folder link. Pasting is enough: the bridge reads the
+  album and shows how many photos and videos it holds, their days, and up to 4 album names, the first already
+  chosen: `<town> <date>` (the town of your own geotagged Immich photos taken at the same time), the same with the
+  camera, the album's own title with its date, and its plain title. Tap another, or edit the name, then Import.
+- The originals (full quality, Google's download, file names as the owner uploaded them) are saved into a new
+  folder with that name inside the person's own upload folder, and each is imported as soon as it lands. The folder
+  name becomes the Immich album, and the usual corrections apply (Fix locations, automatic place and time).
+- Once Immich has the same bytes (checked by asset or checksum) and automatic correction has finished with the file,
+  or `LINK_KEEP_DAYS` (7) days have passed, the NAS copy is deleted; the folder goes too once it is empty. Only files
+  the bridge downloaded itself are ever deleted, never anything else in that folder. A file changed on the NAS after
+  the import, or missing from Immich, is kept.
+- Nothing is overwritten: a file already there with the same bytes is skipped (pasting a link twice is harmless), a
+  different file with the same name is saved under a new name. Only https links to Google's own hosts are read, and
+  downloads only follow redirects that stay on them.
+- Needs the data mounted read-write: run the installer once with `WRITABLE=1`. The installer now remembers
+  `WRITABLE=1` on later runs and updates (`WRITABLE=0` turns it off again).
+- API: `POST /api/links/inspect`, `POST /api/links/import` (`name` optional: the first suggestion), `GET /api/links`.
+  With the bridge token (`user` picks the person), or with `X-Immich-Token`, which always acts for that signed-in
+  person only, so the phone app can offer the same.
+
 ## 0.9.0 - camera XMP sidecars go to Immich with their photo
 
 - When a photo has an XMP sidecar next to it (from the camera, Lightroom, darktable...), the bridge sends it with
