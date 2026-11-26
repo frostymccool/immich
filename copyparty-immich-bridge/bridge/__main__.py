@@ -130,7 +130,7 @@ def main() -> int:
                     embed=clip_embedder(os.environ.get("IMMICH_ML_URL", ""), clip_model), embed_model=clip_model)
     ImportWorker.geofix = geofix
     # Main account only: other people's libraries are never changed without their own say-so
-    autofix = AutoFix(os.path.join(data_dir, "autofix.db"), geofix, state, client)
+    autofix = AutoFix(os.path.join(data_dir, "autofix.db"), geofix, state, client, embed=geofix._embed)
     geofix.autofix = autofix
     autofix.enabled = lambda: cfg.auto_fix
 

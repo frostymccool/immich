@@ -66,7 +66,8 @@ def status_extras(geofix) -> dict:
     auto = getattr(geofix, "autofix", None)
     if auto is not None:
         try:
-            out["autofix"] = {"on": bool(getattr(auto, "enabled", lambda: False)()), "counts": auto.describe(0)["counts"]}
+            out["autofix"] = {"on": bool(getattr(auto, "enabled", lambda: False)()), "counts": auto.describe(0)["counts"],
+                              "clocks_set": auto.describe(0).get("clock_counts", {}).get("decided", 0)}
         except Exception:
             pass
     mq = getattr(geofix, "mqtt", None)

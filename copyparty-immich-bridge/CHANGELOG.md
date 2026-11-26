@@ -3,6 +3,26 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.11.0 - automatic correction of wrong camera clocks
+
+- Automatic correction (`AUTO_FIX`) now also corrects the TIME, not only the place, when the evidence is strong:
+  - The file proves its clock: GoPro HERO11 and later store their zone and a UTC clock (read without scanning the
+    video), which Immich reads as a local time and shows hours off; Insta360 names + tags as before. The instant, and
+    the zone Immich shows it in, are corrected even without a place, including for files that already have one.
+  - A clip exported without the zone tag follows the clips numbered within 5 of it whose UTC clock their files prove.
+  - A camera whose clock is wrong or has no zone (DSLRs, compacts): its pictures in a folder are matched with
+    pictures of the same moment from devices with a trusted clock, using Immich's own image model
+    (`IMMICH_ML_URL`). At least 3 pairs must agree within 3 minutes; the offset then applies to every file of that
+    camera in that folder. Found on a real trip: a DSLR left on another zone, 8 h 11 min behind UTC, from 13 shots
+    matching a GoPro's.
+- The place of an outing: when no geotagged photo is within 30 minutes, geotagged photos within 3 hours that look like
+  that camera's pictures, all agreeing on one spot, give the place.
+- Every change goes to a `changes` log (asset, field, old, new, why); `GET /api/geofix/auto` lists each camera's clock
+  decision (`clocks`). A file whose time or place was guessed is never used as evidence for another guess.
+- After updating, every file waiting for review, or marked as already placed, is looked at again once.
+- New settings: `AUTO_FIX_SAME_MOMENT` (0.85), `AUTO_FIX_LOOKS_LIKE` (0.75). The bridge reads metadata again
+  (`READER_VERSION` 6).
+
 ## 0.10.0 - add photos from a shared album link
 
 - New card on the Status tab, "Add photos from a shared link": paste a Google Photos shared album link

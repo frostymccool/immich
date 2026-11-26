@@ -532,8 +532,8 @@
       'Checked every 30 s. The bridge holds off by itself at 3 per CPU or a 5 s answer, and resumes under 1.5.');
     if (x.autofix) {
       var c = x.autofix.counts || {};
-      part(x.autofix.on, true, 'Auto-correct ' + (x.autofix.on ? 'on' : 'off') + ' · ' + (c.applied || 0) + ' fixed · ' + (c.review || 0) + ' waiting for evidence',
-        'Place and time zone set from your own geotagged photos, on strong evidence only. Waiting files are checked again every 6 hours.');
+      part(x.autofix.on, true, 'Auto-correct ' + (x.autofix.on ? 'on' : 'off') + ' · ' + (c.applied || 0) + ' fixed · ' + (c.review || 0) + ' waiting for evidence' + (x.autofix.clocks_set ? ' · ' + x.autofix.clocks_set + ' camera clock' + (x.autofix.clocks_set === 1 ? '' : 's') + ' set' : ''),
+        'Place, time and time zone set from your own photos (wrong camera clocks too), on strong evidence only. Waiting files are checked again every 6 hours.');
     }
     if (x.mqtt && x.mqtt.on) {
       part(x.mqtt.connected, false, 'MQTT ' + (x.mqtt.connected ? 'connected' : 'not connected'), x.mqtt.error || 'State under ImmichBridge/');

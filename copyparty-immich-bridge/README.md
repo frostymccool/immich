@@ -97,6 +97,7 @@ starts the bridge, asks only for the Immich API key). The manual steps below are
 | `GEOFIX_LOOK_ALIKE` | `0.80` | How alike (CLIP cosine similarity, 0-1) two groups' frames must be to be joined |
 | `GEOFIX_SHOT_INTERVAL_S` | `90` | Seconds a shot assumed when dating an undated file from its file number and only one dated neighbour |
 | `AUTO_FIX` | `false` | After import, set place and local time from the account's own geotagged photos, on strong evidence only (also editable through `PUT /api/config` as `auto_fix`). Main account only |
+| `AUTO_FIX_SAME_MOMENT` / `AUTO_FIX_LOOKS_LIKE` | `0.85` / `0.75` | Image similarity (Immich's CLIP model) for two shots of the same moment (sets a camera's clock), and for the same scene (gives the place of an outing). Needs `IMMICH_ML_URL` |
 | `AUTO_FIX_WINDOW_S` | `1800` | How far in time a geotagged photo may be from a file to count as evidence |
 | `LINK_KEEP_DAYS` | `7` | Days a file saved from a shared link stays on the NAS when automatic correction has not finished with it; once it is in Immich and corrected it is deleted at once. |
 | `XMP_WAIT_S` | `45` | Seconds a RAW photo (or a photo in a folder with XMP files) waits for its camera sidecar to arrive before it is imported; 0 = never wait. The sidecar goes to Immich with the photo. |
@@ -175,6 +176,20 @@ How files are grouped and dated (0.5.0):
 against the account's geotagged photos. A change needs a known true instant and agreeing photos within 30 minutes (two
 within 5 km of each other, or one within 10 minutes). Everything else is left alone and listed with its reason at
 `GET /api/geofix/auto`; `POST /api/geofix/auto/run` starts a pass now. Each change is logged with the values it replaced.
+
+It also corrects wrong camera clocks:
+
+- **Proven by the file**: a GoPro HERO11 or later stores its zone and keeps its clock in UTC, an Insta360 name holds the
+  wall clock next to a UTC tag. When Immich shows a different instant, or the right instant in the wrong zone, the time is
+  corrected even without a place. A clip exported without the zone tag follows the clips numbered within 5 of it.
+- **Found from pictures**: for a camera with no zone (most compact and DSLR cameras), pictures of that camera in a
+  folder are compared with pictures from devices whose clock is trusted (your phone, clips corrected above) using the
+  image model of Immich's own machine-learning service. Shots of the SAME MOMENT (similarity of at least
+  `AUTO_FIX_SAME_MOMENT`) give the camera's clock offset; at least 3 pairs must agree within 3 minutes, otherwise nothing
+  changes. Example: a camera left on another zone and 12 minutes adrift is found to be "8 h 11 min behind UTC" from
+  13 shots that match a GoPro's.
+- **The place of an outing**: when no geotagged photo is within 30 minutes, your geotagged photos from 3 hours before to
+  3 hours after that camera's outing that look like it (`AUTO_FIX_LOOKS_LIKE`) give the place, only if they all agree on one spot.
 
 ![Fix locations tab](docs/ui-fix-locations.png)
 

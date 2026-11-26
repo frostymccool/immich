@@ -70,7 +70,8 @@ NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
 REVERSE_GEOCODE = os.environ.get("GEOFIX_REVERSE_GEOCODE", "osm").strip().lower() not in ("off", "0", "no", "false", "none")
 MARK = "copyparty-immich-bridge location fix"
 EXIF_TAGS = ["-DateTimeOriginal", "-CreateDate", "-MediaCreateDate", "-OffsetTimeOriginal", "-OffsetTime",
-             "-Composite:GPSLatitude", "-Composite:GPSLongitude", "-Make", "-Model", "-Duration"]
+             "-Composite:GPSLatitude", "-Composite:GPSLongitude", "-Make", "-Model", "-Duration",
+             "-GoPro:TimeZone"]
 # A clock that was never set: cameras start at a round New Year midnight (2012-01-01 00:00:00 on an Olympus, a
 # Nikon or GoPro default year on others), so ANY Jan 1 00:00:00 is read as "no date"; so is a date before the model
 # existed, or one in the future. (Not "suspicious": a real shot at exactly that second is vanishingly rare.)
@@ -101,7 +102,7 @@ VIDEO_EXT = {"mp4", "mov", "insv", "lrv", "360", "m4v", "avi", "mts", "mkv"}
 # not always the zone the camera was really in), so for a zone-less match the name is the trustworthy local clock.
 INSTA360_NAME = re.compile(r"^(?:VID|LRV|IMG)_(\d{8}_\d{6})(?:_\d{2})?_\d{3}\.", re.I)
 QUICKTIME_KEYS = ("CreateDate", "MediaCreateDate")
-READER_VERSION = 5  # bump whenever a change to reading metadata must invalidate the cached files table
+READER_VERSION = 6  # bump whenever a change to reading metadata must invalidate the cached files table
 
 
 class GeoFixError(Exception):
@@ -675,6 +676,11 @@ class GeoFix:
                     if wall is not None:
                         offset = clock_offset(wall, taken)
                         taken = wall
+                    elif isinstance(t.get("TimeZone"), (int, float)) and abs(t["TimeZone"]) <= 14 * 60:
+                        # GoPro HERO11 and later store the camera's zone (GPMF TZON, read without scanning the video) and
+                        # then CreateDate is the true instant in UTC; Immich reads it as a wall clock, hours off
+                        offset = int(t["TimeZone"])
+                        taken = taken + timedelta(minutes=offset)
                 if offset is None:
                     offset = parse_offset(t.get("OffsetTimeOriginal"))
                 if offset is None:

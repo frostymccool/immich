@@ -72,14 +72,17 @@ def test_a_clip_with_a_known_instant_gets_the_place_and_keeps_its_instant(rig, a
 def test_a_clock_with_no_zone_is_left_for_review(rig, auto):  # noqa: F811
     fix, imported, _ = auto
     imported(rig.add("Trip/GX010001.MP4", {"CreateDate": "2026:05:01 14:03:22", "Model": "HERO11 Black"}))
-    assert fix.run_once() == {"review": 1}
+    assert fix.run_once() == {"review": 1, "clock review": 1}  # no image model in this rig: the clock stays unknown
     assert not rig.stub.__dict__.get("asset_updates")
     assert "no time zone" in fix.describe()["review"][0]["reason"]
+    assert "no image model" in fix.describe()["clocks"][0]["reason"]
 
 
 def test_an_asset_that_already_has_a_place_is_never_touched(rig, auto):  # noqa: F811
     fix, imported, _ = auto
-    imported(rig.add("Trip/VID_20260501_012000_002.mp4", {"CreateDate": "2026:05:01 05:20:00"}), {"latitude": 1.0, "longitude": 2.0})
+    imported(rig.add("Trip/VID_20260501_012000_002.mp4", {"CreateDate": "2026:05:01 05:20:00"}),
+             {"latitude": KYOTO[0], "longitude": KYOTO[1], "dateTimeOriginal": "2026-05-01T05:20:00.000Z"})
+    rig.stub.assets[-1].update(fileCreatedAt="2026-05-01T05:20:00.000Z", localDateTime="2026-05-01T14:20:00.000Z")  # as Immich shows it
     assert fix.run_once() == {"has_place": 1}
     assert not rig.stub.__dict__.get("asset_updates")
 

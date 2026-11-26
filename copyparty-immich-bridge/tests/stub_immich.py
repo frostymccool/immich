@@ -169,6 +169,17 @@ class StubImmich:
                 if one:
                     fields = json.loads(body)
                     stub.__dict__.setdefault("asset_updates", []).append((one.group(1), fields))
+                    for a in stub.assets:  # like Immich: the edit shows in the asset's exif and its dates
+                        if a["id"] == one.group(1):
+                            exif = a.setdefault("exifInfo", {})
+                            if "latitude" in fields:
+                                exif["latitude"], exif["longitude"] = fields["latitude"], fields["longitude"]
+                            if "dateTimeOriginal" in fields:
+                                from datetime import datetime as _dt, timezone as _tz
+                                t = _dt.fromisoformat(fields["dateTimeOriginal"])
+                                utc = t.astimezone(_tz.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                                exif["dateTimeOriginal"] = a["fileCreatedAt"] = utc
+                                a["localDateTime"] = t.strftime("%Y-%m-%dT%H:%M:%S.000Z")
                     self._json(200, {"id": one.group(1)})
                 elif m and m.group(1) in stub.removed_albums:
                     self._json(404, {"message": "Not found or no album.update access"})
