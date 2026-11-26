@@ -585,6 +585,14 @@ class AutoFix:
             row = self._db.execute("SELECT status FROM autofix WHERE asset_id=?", (asset_id,)).fetchone()
         return row[0] if row else None
 
+    def stage_of(self, asset_id: str) -> str:
+        """'done' (corrected, or nothing to correct), 'checked' (looked at; no evidence strong enough yet) or 'waiting'."""
+        with self._lock:
+            row = self._db.execute("SELECT status, checked_at FROM autofix WHERE asset_id=?", (asset_id,)).fetchone()
+        if row is None or not row[1]:
+            return "waiting"
+        return "done" if row[0] in ("applied", "has_place") else "checked"
+
     def describe(self, limit: int = 200) -> dict:
         with self._lock:
             counts = dict(self._db.execute("SELECT status,count(*) FROM autofix GROUP BY status").fetchall())

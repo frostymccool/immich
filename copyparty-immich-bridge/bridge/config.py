@@ -81,6 +81,9 @@ class Config:
     # After import, correct place and time zone from the account's own geotagged photos, on strong evidence only.
     auto_fix: bool = False
 
+    # Stack each camera RAW with the JPG/HEIC saved next to it (JPG as the cover), the whole library included.
+    stack_raw: bool = True
+
     # MQTT state/events (mqtt://[user:pass@]host:1883, empty = off) and the URL others reach this page at (for llms.txt)
     mqtt_url: str = ""
     public_url: str = ""
@@ -198,6 +201,7 @@ class Config:
             album_name=e.get("IMMICH_ALBUM_NAME", "").strip(),
             album_from_folder=e.get("ALBUM_FROM_FOLDER", "true").strip().lower() not in ("0", "false", "no", "off"),
             auto_fix=e.get("AUTO_FIX", "false").strip().lower() in ("1", "true", "yes", "on"),
+            stack_raw=e.get("STACK_RAW", "true").strip().lower() not in ("0", "false", "no", "off"),
             mqtt_url=e.get("MQTT_URL", "").strip(),
             public_url=e.get("PUBLIC_URL", "").strip().rstrip("/"),
             include_extensions=include_extensions,

@@ -240,6 +240,14 @@ class ImmichClient:
         if resp.status_code != 200:
             raise ImmichError(f"Immich answered HTTP {resp.status_code}: {resp.text[:200]}")
 
+    def create_stack(self, asset_ids: list[str]) -> dict:
+        """POST /stacks (permissions stack.create + asset.update): the first id becomes the cover."""
+        resp = self._session.post(self._base + "/api/stacks", json={"assetIds": asset_ids}, timeout=self._timeout)
+        if resp.status_code in (200, 201):
+            return resp.json()
+        self._explain(resp, "stack photos (stack.create, asset.update)")
+        raise ImmichError(f"Immich answered HTTP {resp.status_code}: {resp.text[:200]}")  # 2xx other than 200/201
+
     def search_metadata(self, body: dict) -> dict:
         """POST /search/metadata (permission asset.read): the account's assets in a time window, with EXIF."""
         resp = self._session.post(self._base + "/api/search/metadata", json=body, timeout=self._timeout)

@@ -85,12 +85,12 @@ def files_for_page():
 
 
 class FakeClient:
-    def __init__(self, cities=(), assets=None):
-        self.cities, self.assets, self.searches = list(cities), assets or {}, []
+    def __init__(self, cities=(), assets=None, found=()):
+        self.cities, self.assets, self.found, self.searches = list(cities), assets or {}, list(found), []
 
     def search_metadata(self, body):
         self.searches.append(body)
-        return {"assets": {"items": [{"exifInfo": {"city": c}} for c in self.cities]}}
+        return {"assets": {"items": [{"exifInfo": {"city": c}} for c in self.cities] + self.found}}
 
     def get_asset(self, asset_id):
         return self.assets[asset_id]
@@ -99,13 +99,13 @@ class FakeClient:
         return None
 
 
-def rig(tmp_path, session, client=None, state=None, done=lambda uid, a: True, clock=time.time):
+def rig(tmp_path, session, client=None, state=None, done=lambda uid, a: True, clock=time.time, stage=lambda uid, a: None):
     folder = tmp_path / "watch" / "sam-0000"  # inside the test worker's watched folder
     folder.mkdir(parents=True)
     queued = []
     person = Person("main", str(folder), lambda p, s: queued.append(p) or True, client or FakeClient(), state)
     li = LinkImports(str(tmp_path / "links.db"), lambda uid: person if uid == "main" else None, done,
-                     session_factory=lambda: session, clock=clock)
+                     session_factory=lambda: session, clock=clock, correction_of=stage)
     return li, person, queued
 
 
@@ -196,6 +196,7 @@ def test_pasting_the_same_link_again_skips_what_is_there_and_never_overwrites(tm
     dest = os.path.join(person.folder, "Trip")
     with open(os.path.join(dest, "IMG_0002.JPG"), "wb") as fh:  # someone else's different file with the same name
         fh.write(b"\xff\xd8\xffother")
+    li = LinkImports(str(tmp_path / "older.db"), lambda uid: person, session_factory=lambda: g)  # no record of the first import
     job = wait_job(li, li.start(url, "Trip", "main")["id"])
     assert (job["done"], job["skipped"]) == (1, 2)
     assert open(os.path.join(dest, "IMG_0002.JPG"), "rb").read() == b"\xff\xd8\xffother"  # untouched
@@ -224,11 +225,17 @@ def test_a_read_only_folder_says_how_to_allow_saving(tmp_path):
 
 
 def test_a_download_cut_short_by_a_restart_is_reported_not_left_running(tmp_path):
-    li, _, _ = rig(tmp_path, FakeGoogle(files=files_for_page()))
-    li._db.execute("INSERT INTO jobs VALUES ('j1','main','u','s','n','f',1,'running',3,1,0,0,0,NULL)")
-    li._db.commit()
+    import sqlite3
+    db = sqlite3.connect(str(tmp_path / "links.db"))  # written by 0.11 (no 'earlier' or 'key' columns yet)
+    db.execute("""CREATE TABLE jobs (id TEXT PRIMARY KEY, uid TEXT, url TEXT, source TEXT, name TEXT, folder TEXT, created REAL,
+        state TEXT, total INTEGER, done INTEGER, skipped INTEGER, failed INTEGER, bytes INTEGER, error TEXT)""")
+    db.execute("CREATE TABLE files (path TEXT PRIMARY KEY, job TEXT, uid TEXT, size INTEGER, sha1 TEXT, added REAL, deleted_at REAL)")
+    db.execute("INSERT INTO jobs VALUES ('j1','main','u','s','n','f',1,'running',3,1,0,0,0,NULL)")
+    db.commit()
+    db.close()
     li2 = LinkImports(str(tmp_path / "links.db"), lambda uid: None)
-    assert li2.job("j1")["state"] == "stopped" and "paste the link again" in li2.job("j1")["error"]
+    j = li2.job("j1")
+    assert j["state"] == "stopped" and "paste the link again" in j["error"] and j["earlier"] == 0
 
 
 # ---------------------------------------------------------------------------------------------- tidying up
@@ -295,6 +302,63 @@ def test_a_changed_or_missing_asset_keeps_the_copy(tmp_path):
             fh.write(b"edited")  # changed on the NAS after the import -> keep
         stub.assets.append({"id": state.get(queued[0]).asset_id})
         assert li.cleanup() == 0 and os.path.exists(queued[0])
+
+
+def test_what_came_in_through_the_same_link_before_is_counted_and_not_downloaded_again(tmp_path):
+    g = FakeGoogle(files=files_for_page())
+    li, person, queued = rig(tmp_path, g)
+    url = "https://photos.app.goo.gl/abc"
+    wait_job(li, li.start(url, "Trip", "main")["id"])
+    assert li.inspect(url, "main")["imported_before"] == 3
+    calls = len(g.calls)
+    job = wait_job(li, li.start(url, "Another name", "main")["id"])
+    assert (job["earlier"], job["done"], job["skipped"]) == (3, 0, 0)
+    assert not [c for c in g.calls[calls:] if "googleusercontent" in c]  # nothing downloaded again
+
+
+def test_pasting_a_link_says_how_many_look_like_photos_already_in_the_library(tmp_path):
+    same_second = {"type": "IMAGE", "fileCreatedAt": "2026-11-25T09:46:40.000Z"}  # = DAY_MS, the album's first photo
+    video_then = {"type": "VIDEO", "fileCreatedAt": "2026-11-25T09:47:40Z"}  # the second item is a photo: no match
+    other = {"type": "IMAGE", "fileCreatedAt": "2026-11-25T09:00:00Z", "originalFileName": "IMG_9.JPG"}
+    li, _, _ = rig(tmp_path, FakeGoogle(), client=FakeClient(found=[same_second, video_then, other]))
+    info = li.inspect("https://photos.app.goo.gl/abc", "main")
+    assert (info["look_alikes"], info["imported_before"]) == (1, 0)
+    drive = Album("Google Drive", "", [Item("k1", "u", name="img_9.jpg"), Item("k2", "u", name="IMG_10.JPG")])
+    assert links.look_alikes_in_library(drive, [other]) == 1  # Drive gives names, not times
+
+
+def test_each_file_of_an_import_is_followed_to_immich_and_through_correction(tmp_path):
+    with StubImmich() as stub:
+        worker, state, cfg = make_worker(tmp_path, stub)
+        worker._allowed = {"jpg"}  # the clip is a type this Immich does not take
+        client = ImmichClient(cfg.immich_url, cfg.api_key, cfg.device_id)
+        stage = {}
+        li, person, queued = rig(tmp_path, FakeGoogle(files=files_for_page()), client=client, state=state,
+                                 done=lambda uid, a: stage.get(a) == "done", stage=lambda uid, a: stage.get(a, "waiting"))
+        wait_job(li, li.start("https://photos.app.goo.gl/abc", "Trip", "main")["id"])
+        s = li.jobs("main")[0]["stages"]
+        assert (s["downloaded"], s["on_nas"], s["uploading"], s["in_immich"], s["corrects"]) == (3, 3, 3, 0, True)
+        for p in queued:
+            os.utime(p, (time.time() - 120, time.time() - 120))
+            worker._process(p)
+        s = li.jobs("main")[0]["stages"]
+        assert (s["uploading"], s["in_immich"], s["not_taken"], s["waiting"]) == (0, 2, 1, 2)
+        assert s["not_taken_reason"] == "Immich does not take .mp4 files; kept on the NAS"
+        ids = [state.get(p).asset_id for p in queued if p.endswith(".JPG")]
+        stub.assets.extend({"id": a} for a in ids)
+        stage[ids[0]], stage[ids[1]] = "done", "checked"
+        s = li.jobs("main")[0]["stages"]
+        assert (s["corrected"], s["checked"], s["waiting"]) == (1, 1, 0)
+        stage[ids[1]] = "done"
+        assert li.cleanup() == 2
+        s = li.jobs("main")[0]["stages"]
+        assert (s["on_nas"], s["in_immich"], s["corrected"]) == (1, 2, 2)  # only the refused clip stays on the NAS
+
+
+def test_without_automatic_correction_the_stages_stop_at_immich(tmp_path):
+    li, _, _ = rig(tmp_path, FakeGoogle(files=files_for_page()))
+    wait_job(li, li.start("https://photos.app.goo.gl/abc", "Trip", "main")["id"])
+    assert li.jobs("main")[0]["stages"]["corrects"] is False
 
 
 # ---------------------------------------------------------------------------------------------- the API

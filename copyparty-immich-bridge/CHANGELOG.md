@@ -3,6 +3,22 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.12.0 - shared-link imports show every stage; RAW stacked behind its JPG
+
+- Each camera RAW (dng nef nrw orf arw cr2 cr3 rw2 raf raw pef srw) is stacked behind the JPG/HEIC with the same name in
+  the same Immich folder, the JPG as the cover, the same rules as the phone app. The first sweep covers the whole library,
+  later ones (every 10 min) what Immich received since plus their older partners. Pairs already in a stack are left
+  alone; each pair is asked once and a refusal is only logged; a busy or unreachable Immich is tried next sweep.
+  `STACK_RAW` (default on); main account only; counts in `/status` extras as `raw_stacks`.
+
+- Each import from a shared link shows where its files are, live: at the link, downloaded, uploading (and whether
+  Immich is busy), in Immich, not taken by Immich (with the reason), corrected, looked at but not settled, waiting for
+  correction, and how many are still on the NAS. A bar runs until every file has reached its last stage.
+- Pasting a link says how many items came in through that link before (now skipped instead of downloaded again) and
+  how many look like photos already in the library (same second or file name).
+- `GET /api/links` jobs carry `stages` (and `earlier`), the response carries `backoff`; `POST /api/links/inspect`
+  returns `imported_before` and `look_alikes`.
+
 ## 0.11.1 - newest uploads corrected first; plainer skip reason
 
 - Automatic correction takes the newest imports first (still in import order within a pass), so what was just

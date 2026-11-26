@@ -178,25 +178,58 @@ def suggest_names(album: Album, place: str = "", today: str | None = None) -> li
     return out[:4]
 
 
-def place_from_library(client, album: Album) -> str:
-    """The town of the person's own geotagged Immich photos taken during the album's time, or ''."""
-    stamps = [i.ts - i.tz for i in album.items if i.ts]  # roughly UTC; a zone-less camera can be hours off
+def library_around(client, album: Album) -> list[dict]:
+    """The person's own Immich assets taken from 12 hours before to 12 hours after the album ([] when unknown)."""
+    stamps = [i.ts for i in album.items if i.ts]  # the instant the service stores (a zone-less camera can be hours off)
     if not stamps or client is None:
-        return ""
+        return []
     start = datetime.fromtimestamp(min(stamps) / 1000, timezone.utc) - timedelta(hours=12)
     end = datetime.fromtimestamp(max(stamps) / 1000, timezone.utc) + timedelta(hours=12)
+    out: list[dict] = []
     try:
-        body = client.search_metadata({"takenAfter": start.isoformat(), "takenBefore": end.isoformat(),
-                                       "withExif": True, "size": 1000})
-    except Exception as ex:  # noqa: BLE001 - a name suggestion is never worth failing for
-        log.info("no place suggestion (Immich search failed: %s)", ex)
-        return ""
+        for page in range(1, 6):
+            body = client.search_metadata({"takenAfter": start.isoformat(), "takenBefore": end.isoformat(),
+                                           "withExif": True, "size": 1000, "page": page})
+            got = body.get("assets") or {}
+            out += got.get("items") or []
+            if not got.get("nextPage"):
+                break
+    except Exception as ex:  # noqa: BLE001 - a suggestion or an estimate is never worth failing for
+        log.info("could not look at the library around a shared album: %s", ex)
+    return out
+
+
+def place_from_library(client, album: Album, around: list[dict] | None = None) -> str:
+    """The town of the person's own geotagged Immich photos taken during the album's time, or ''."""
     towns = collections.Counter()
-    for a in (body.get("assets") or {}).get("items") or []:
+    for a in library_around(client, album) if around is None else around:
         ex = a.get("exifInfo") or {}
         if ex.get("city"):
             towns[ex["city"]] += 1
     return towns.most_common(1)[0][0] if towns else ""
+
+
+def _second(value) -> int | None:
+    try:
+        return int(datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp())
+    except (TypeError, ValueError):
+        return None
+
+
+def look_alikes_in_library(album: Album, around: list[dict]) -> int:
+    """How many album items look like an asset the person already has: the same photo/video kind taken at the same
+    second, or the same file name. Only an estimate: Immich itself recognises exact copies by their bytes."""
+    seconds, names = set(), set()
+    for a in around:
+        video = a.get("type") == "VIDEO"
+        for v in (a.get("fileCreatedAt"), (a.get("exifInfo") or {}).get("dateTimeOriginal")):
+            s = _second(v)
+            if s is not None:
+                seconds.add((video, s))
+        if a.get("originalFileName"):
+            names.add(a["originalFileName"].lower())
+    return sum(1 for i in album.items
+               if (i.ts and (i.video, i.ts // 1000) in seconds) or (i.name and i.name.lower() in names))
 
 
 # ---------------------------------------------------------------------------------------------- jobs
@@ -214,9 +247,11 @@ class Person:
 
 class LinkImports:
     def __init__(self, db_path: str, person: Callable[[str], Person | None], corrections_done: Callable[[str, str], bool] = lambda uid, asset: True,
-                 session_factory: Callable[[], requests.Session] = requests.Session, clock: Callable[[], float] = time.time):
+                 session_factory: Callable[[], requests.Session] = requests.Session, clock: Callable[[], float] = time.time,
+                 correction_of: Callable[[str, str], str | None] = lambda uid, asset: None):
         self._person = person
         self._corrections_done = corrections_done
+        self._correction_of = correction_of  # 'done' | 'checked' | 'waiting', or None when nothing corrects this person's files
         self._session = session_factory
         self._clock = clock
         self._lock = threading.Lock()
@@ -226,6 +261,9 @@ class LinkImports:
             error TEXT)""")
         self._db.execute("""CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, job TEXT, uid TEXT, size INTEGER,
             sha1 TEXT, added REAL, deleted_at REAL)""")
+        for table, col in (("jobs", "earlier INTEGER DEFAULT 0"), ("files", "key TEXT")):
+            if col.split()[0] not in {r[1] for r in self._db.execute(f"PRAGMA table_info({table})")}:
+                self._db.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
         self._db.execute("UPDATE jobs SET state='stopped', error='the bridge restarted during the download; paste the link again to finish' WHERE state='running'")
         self._db.commit()
         self._looked: dict[tuple[str, str], tuple[float, Album]] = {}
@@ -246,11 +284,22 @@ class LinkImports:
         if p is None:
             raise LinkError("unknown person", 404)
         album = self._album(url, uid)
-        names = suggest_names(album, place_from_library(p.client, album))
+        around = library_around(p.client, album)
+        names = suggest_names(album, place_from_library(p.client, album, around))
         days = album_days(album)
+        before = self._imported_keys(uid, album)
+        fresh = Album(album.source, album.title, [i for i in album.items if i.key not in before])
         return {"source": album.source, "title": album.title, "photos": sum(not i.video for i in album.items),
                 "videos": sum(i.video for i in album.items), "days": sorted(days), "suggestions": names,
-                "folder": os.path.basename(p.folder.rstrip("/")) if p.folder else ""}
+                "folder": os.path.basename(p.folder.rstrip("/")) if p.folder else "",
+                "imported_before": len(before), "look_alikes": look_alikes_in_library(fresh, around)}
+
+    def _imported_keys(self, uid: str, album: Album) -> set[str]:
+        """The album items this person already got through a link (they are skipped, not downloaded again)."""
+        keys = [i.key for i in album.items]
+        with self._lock:
+            got = {r[0] for r in self._db.execute("SELECT DISTINCT key FROM files WHERE uid=? AND key IS NOT NULL", (uid,))}
+        return {k for k in keys if k in got}
 
     # -- importing -------------------------------------------------------------------------------------
 
@@ -272,8 +321,8 @@ class LinkImports:
             raise LinkError("that name is not allowed")
         jid = uuid.uuid4().hex[:12]
         with self._lock:
-            self._db.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                             (jid, uid, url.strip(), album.source, name, dest, self._clock(), "running", len(album.items), 0, 0, 0, 0, None))
+            self._db.execute(f"INSERT INTO jobs ({','.join(self._COLS)}) VALUES ({','.join('?' * len(self._COLS))})",
+                             (jid, uid, url.strip(), album.source, name, dest, self._clock(), "running", len(album.items), 0, 0, 0, 0, None, 0))
             self._db.commit()
         threading.Thread(target=self._run, args=(jid, album, dest, p), name=f"link-{jid}", daemon=True).start()
         log.info("link import %s for %s: %d files from %s into %s", jid, uid, len(album.items), album.source, name)
@@ -287,9 +336,13 @@ class LinkImports:
 
     def _run(self, jid: str, album: Album, dest: str, p: Person) -> None:
         s = self._session()
+        before = self._imported_keys(p.uid, album)
         try:
             os.makedirs(dest, exist_ok=True)
             for it in album.items:
+                if it.key in before:
+                    self._bump(jid, earlier=1)  # came in through this link before
+                    continue
                 try:
                     got = self._download(s, it, dest)
                 except Exception as ex:  # noqa: BLE001 - one bad file never stops the album
@@ -301,7 +354,8 @@ class LinkImports:
                     continue
                 path, size, sha1 = got
                 with self._lock:
-                    self._db.execute("INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?,NULL)", (path, jid, p.uid, size, sha1, self._clock()))
+                    self._db.execute("INSERT OR REPLACE INTO files (path, job, uid, size, sha1, added, deleted_at, key) "
+                                     "VALUES (?,?,?,?,?,?,NULL,?)", (path, jid, p.uid, size, sha1, self._clock(), it.key))
                     self._db.commit()
                 self._bump(jid, done=1, bytes=size)
                 p.enqueue(path, "shared link")
@@ -349,24 +403,50 @@ class LinkImports:
 
     # -- reporting -------------------------------------------------------------------------------------
 
-    _COLS = ("id", "uid", "url", "source", "name", "folder", "created", "state", "total", "done", "skipped", "failed", "bytes", "error")
+    _COLS = ("id", "uid", "url", "source", "name", "folder", "created", "state", "total", "done", "skipped", "failed", "bytes",
+             "error", "earlier")
 
     def job(self, jid: str) -> dict:
         with self._lock:
-            row = self._db.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
+            row = self._db.execute(f"SELECT {','.join(self._COLS)} FROM jobs WHERE id=?", (jid,)).fetchone()
         return self._view(row) if row else {}
 
     def jobs(self, uid: str | None = None, limit: int = 10) -> list[dict]:
         with self._lock:
-            q = "SELECT * FROM jobs" + (" WHERE uid=?" if uid else "") + " ORDER BY created DESC LIMIT ?"
+            q = f"SELECT {','.join(self._COLS)} FROM jobs" + (" WHERE uid=?" if uid else "") + " ORDER BY created DESC LIMIT ?"
             rows = self._db.execute(q, ((uid, limit) if uid else (limit,))).fetchall()
-            left = dict(self._db.execute("SELECT job, COUNT(*) FROM files WHERE deleted_at IS NULL GROUP BY job").fetchall())
         out = []
         for r in rows:
             v = self._view(r)
-            v["kept_on_nas"] = left.get(v["id"], 0)
+            v["stages"] = self.stages(v["id"], v["uid"])
+            v["kept_on_nas"] = v["stages"]["on_nas"]
             out.append(v)
         return out
+
+    def stages(self, jid: str, uid: str) -> dict:
+        """Where each downloaded file of one import is now: on the NAS, uploading, in Immich (or refused), corrected."""
+        with self._lock:
+            files = self._db.execute("SELECT path, deleted_at FROM files WHERE job=?", (jid,)).fetchall()
+        st = dict.fromkeys(("downloaded", "on_nas", "uploading", "in_immich", "not_taken", "corrected", "checked", "waiting"), 0)
+        st["not_taken_reason"] = ""
+        p = self._person(uid)
+        for path, deleted_at in files:
+            st["downloaded"] += 1
+            st["on_nas"] += deleted_at is None
+            rec = p.state.get(path) if p is not None and p.state is not None else None
+            if rec is None or rec.status not in ("imported", "duplicate", "failed", "skipped"):
+                st["uploading"] += 1
+                continue
+            if rec.status in ("failed", "skipped"):
+                st["not_taken"] += 1
+                st["not_taken_reason"] = st["not_taken_reason"] or (rec.error or "")
+                continue
+            st["in_immich"] += 1
+            stage = self._correction_of(uid, rec.asset_id or "")
+            if stage in ("done", "checked", "waiting"):
+                st["corrected" if stage == "done" else stage] += 1
+        st["corrects"] = self._correction_of(uid, "") is not None  # does anything correct this person's files?
+        return st
 
     def _view(self, row) -> dict:
         v = dict(zip(self._COLS, row))

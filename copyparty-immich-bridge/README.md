@@ -98,6 +98,7 @@ starts the bridge, asks only for the Immich API key). The manual steps below are
 | `GEOFIX_SHOT_INTERVAL_S` | `90` | Seconds a shot assumed when dating an undated file from its file number and only one dated neighbour |
 | `AUTO_FIX` | `false` | After import, set place and local time from the account's own geotagged photos, on strong evidence only (also editable through `PUT /api/config` as `auto_fix`). Main account only |
 | `AUTO_FIX_SAME_MOMENT` / `AUTO_FIX_LOOKS_LIKE` | `0.85` / `0.75` | Image similarity (Immich's CLIP model) for two shots of the same moment (sets a camera's clock), and for the same scene (gives the place of an outing). Needs `IMMICH_ML_URL` |
+| `STACK_RAW` | `true` | Stack each camera RAW (dng nef nrw orf arw cr2 cr3 rw2 raf raw pef srw) behind the JPG/HEIC with the same name in the same Immich folder, the JPG as the cover. The first sweep covers the whole library, later ones what Immich received since (every 10 min). Pairs already in a stack are left alone; once per pair. Main account only; the key needs `stack.create` + `asset.update` |
 | `AUTO_FIX_WINDOW_S` | `1800` | How far in time a geotagged photo may be from a file to count as evidence |
 | `LINK_KEEP_DAYS` | `7` | Days a file saved from a shared link stays on the NAS when automatic correction has not finished with it; once it is in Immich and corrected it is deleted at once. |
 | `XMP_WAIT_S` | `45` | Seconds a RAW photo (or a photo in a folder with XMP files) waits for its camera sidecar to arrive before it is imported; 0 = never wait. The sidecar goes to Immich with the photo. |
@@ -140,6 +141,12 @@ one of the suggested album names (or type one) and press Import. The originals a
 person's upload folder, imported into an album of that name, corrected like any upload, and the NAS copy is deleted
 once Immich has the same bytes and correction has finished (or after `LINK_KEEP_DAYS`, default 7). Needs
 `WRITABLE=1`.
+
+When you paste, the card says how many items came in through the same link before (they are skipped, not downloaded
+again) and how many look like photos you already have (same second or file name: an estimate; Immich itself keeps one
+copy of anything byte-identical). Each import then shows where its files are, refreshed live:
+`274 at the link · 274 downloaded · 251 in Immich · 23 uploading (Immich busy, waiting) · 120 corrected (or already right) · 101 waiting for correction · 274 on the NAS`,
+plus files Immich would not take (with the reason) and files the corrections looked at but could not settle yet.
 
 ## Fix locations (missing GPS / time zone)
 
@@ -199,7 +206,7 @@ It also corrects wrong camera clocks:
   `xiu` batch hooks). Needs the token when `BRIDGE_TOKEN` is set
 - `GET /status` — open: totals only (counters by status, queue depth, `paused`, backlog, `users`, `backoff`); the per-person keys (`watch_dirs`, `priority_dirs`, `albums`, `recent`, `active`) are present but empty. With the bridge token (`X-Bridge-Token`) it adds watch/priority dirs, album health (`albums`: key permission check, added/failed counts, last error, back-fill progress), the 20 most recent items and `extras` (auto-correct counts, MQTT); `?user=<id>` (token) is one person's view
 - `GET /status/me` — the phone app's own view: header `X-Immich-Token: <the app's Immich access token>`. The bridge asks Immich (`/api/users/me`) whose token it is and answers that person's `?user=` view plus `me` and `immich_user`. 401 = no or wrong token, 404 = an Immich user with no bridge account, 503 = Immich could not be asked (try later). Answers are remembered 5 min (60 s for a wrong token), keyed by a hash; the token is never logged. Send it over https only
-- `POST /api/links/inspect` `{"url"}` — reads a shared album: title, photo/video counts, days, `suggestions` (first = default); `POST /api/links/import` `{"url", "name"?}` — starts the download + import (202 with the job); `GET /api/links` — recent jobs with `kept_on_nas`. Bridge token (`user` = person), or `X-Immich-Token` (always the signed-in person)
+- `POST /api/links/inspect` `{"url"}` — reads a shared album: title, photo/video counts, days, `suggestions` (first = default); `POST /api/links/import` `{"url", "name"?}` — starts the download + import (202 with the job); `GET /api/links` — recent jobs with `kept_on_nas` and `stages` (downloaded, on_nas, uploading, in_immich, not_taken, corrected, checked, waiting), plus `backoff`; inspect also returns `imported_before` and `look_alikes`. Bridge token (`user` = person), or `X-Immich-Token` (always the signed-in person)
 - `GET /healthz` — liveness (open)
 - `GET /` — the web page (the page itself is public; all data behind it needs the token)
 - `GET|PUT /api/config`, `POST /api/config/reset`, `GET /api/fs?path=`, `GET /api/logs`,

@@ -60,6 +60,7 @@
   .lk-chips button.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
   .lk-job { padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; }
   .lk-job .progbar { margin-top: 4px; }
+  .lk-stages { font-size: 13px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
   .pill { font-size: 12px; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); }
   .pill.imported { color: var(--ok); } .pill.duplicate { color: var(--muted); } .pill.failed { color: var(--bad); } .pill.skipped { color: var(--warn); }
   .row { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
@@ -1566,7 +1567,11 @@
       var bits = [r.photos + ' photo' + (r.photos === 1 ? '' : 's')];
       if (r.videos) { bits.push(r.videos + ' video' + (r.videos === 1 ? '' : 's')); }
       if (r.days.length) { bits.push(r.days.length > 1 ? r.days[0] + ' to ' + r.days[r.days.length - 1] : r.days[0]); }
-      lkMsg((r.title ? '“' + r.title + '” · ' : '') + bits.join(' · ') + ' · from ' + r.source + '. Pick a name or type your own:');
+      var notes = [];
+      if (r.imported_before) { notes.push(r.imported_before + ' came in through this link before and will be skipped'); }
+      if (r.look_alikes) { notes.push(r.look_alikes + ' look like photos you already have (same time or name); Immich keeps one copy of anything identical'); }
+      lkMsg((r.title ? '“' + r.title + '” · ' : '') + bits.join(' · ') + ' · from ' + r.source + '.'
+        + (notes.length ? ' ' + notes.join('. ') + '.' : '') + ' Pick a name or type your own:');
       var box = $('lkChips'); box.textContent = '';
       r.suggestions.forEach(function (n, i) {
         var b = el('button', { type: 'button', 'class': i === 0 ? 'on' : '' }, n);
@@ -1597,18 +1602,41 @@
     if (!u) { $('lkJobs').textContent = ''; return Promise.resolve(); }
     return api('GET', '/api/links?user=' + encodeURIComponent(u)).then(function (r) {
       var box = $('lkJobs'); box.textContent = '';
+      var busy = r.backoff && r.backoff.busy;
       (r.jobs || []).slice(0, 5).forEach(function (j) {
-        var got = j.done + j.skipped, pct = j.total ? Math.round(100 * (got + j.failed) / j.total) : 100;
-        var line = j.state === 'running' ? 'downloading ' + got + ' of ' + j.total
-          : j.state === 'finished' ? got + ' of ' + j.total + ' saved' + (j.kept_on_nas ? ' · ' + j.kept_on_nas + ' still on the NAS until Immich has them and corrections are done' : ' · NAS copy tidied away')
-          : (j.error || j.state);
-        if (j.failed) { line += ' · ' + j.failed + ' could not be downloaded'; }
-        var row = el('div', { 'class': 'lk-job' });
-        row.appendChild(el('b', {}, j.name)); row.appendChild(el('span', { 'class': 'muted' }, ' · ' + line + ' · ' + ago(j.created)));
-        if (j.state === 'running') { var bar = el('div', { 'class': 'progbar' }); var f = el('i'); f.style.width = pct + '%'; bar.appendChild(f); row.appendChild(bar); }
+        var row = el('div', { 'class': 'lk-job' }), s = j.stages || {};
+        var head = j.state === 'running' ? 'downloading' : j.state === 'finished' ? '' : (j.error || j.state);
+        row.appendChild(el('b', {}, j.name));
+        row.appendChild(el('span', { 'class': 'muted' }, (head ? ' · ' + head : '') + ' · ' + ago(j.created)));
+        row.appendChild(el('div', { 'class': 'lk-stages' }, lkStages(j, s, busy)));
+        var pct = lkPct(j, s);
+        if (pct !== null) { var bar = el('div', { 'class': 'progbar' }); var f = el('i'); f.style.width = pct + '%'; bar.appendChild(f); row.appendChild(bar); }
         box.appendChild(row);
       });
     });
+  }
+  // One import, stage by stage: at the link -> downloaded -> in Immich -> corrected; the NAS copy goes at the end.
+  function lkStages(j, s, busy) {
+    var out = [j.total + ' at the link'];
+    if (j.earlier) { out.push(j.earlier + ' imported before (skipped)'); }
+    out.push((s.downloaded || 0) + ' downloaded');
+    if (j.skipped) { out.push(j.skipped + ' already on the NAS'); }
+    if (j.failed) { out.push(j.failed + ' could not be downloaded'); }
+    out.push((s.in_immich || 0) + ' in Immich');
+    if (s.uploading) { out.push(s.uploading + ' uploading' + (busy ? ' (Immich busy, waiting)' : '')); }
+    if (s.not_taken) { out.push(s.not_taken + ' not taken by Immich' + (s.not_taken_reason ? ' (' + s.not_taken_reason + ')' : '')); }
+    if (s.corrects && s.in_immich) {
+      out.push(s.corrected + ' corrected (or already right)');
+      if (s.checked) { out.push(s.checked + ' looked at, no strong enough evidence yet'); }
+      if (s.waiting) { out.push(s.waiting + ' waiting for correction' + (busy ? ' (Immich busy)' : '')); }
+    }
+    out.push(s.on_nas ? s.on_nas + ' on the NAS' : (s.downloaded ? 'NAS copy tidied away' : 'nothing on the NAS'));
+    return out.join(' · ');
+  }
+  function lkPct(j, s) {
+    if (j.state === 'running') { return j.total ? Math.round(100 * (j.done + j.skipped + j.failed + (j.earlier || 0)) / j.total) : 0; }
+    var n = s.downloaded || 0, end = (s.not_taken || 0) + (s.corrects ? (s.corrected || 0) + (s.checked || 0) : (s.in_immich || 0));
+    return n && end < n ? Math.round(100 * end / n) : null;  // shown until every file reached its last stage
   }
   $('lkLook').onclick = lkLook;
   $('lkGo').onclick = lkGo;

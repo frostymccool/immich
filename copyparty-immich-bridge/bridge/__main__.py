@@ -13,6 +13,7 @@ import time
 from bridge import __version__
 from bridge.config import Config, ConfigError
 from bridge.autofix import AutoFix
+from bridge.stacks import RawStacker
 from bridge.links import LinkImports, Person
 from bridge.mqtt import MqttPublisher
 from bridge.pressure import PRESSURE
@@ -144,6 +145,21 @@ def main() -> int:
 
     threading.Thread(target=auto_fix_loop, name="auto-fix", daemon=True).start()
 
+    # Each camera RAW stacked behind its JPG (main account; the first sweep covers the whole library)
+    stacker = RawStacker(os.path.join(data_dir, "stacks.db"), client, busy=lambda: PRESSURE.busy)
+    stacker.enabled = lambda: cfg.stack_raw
+    geofix.stacker = stacker
+
+    def stack_loop() -> None:
+        while not stop_event.wait(600):
+            if cfg.stack_raw and not cfg.paused and worker.queue_size == 0:  # imports first
+                try:
+                    stacker.run_once()
+                except Exception:
+                    log.exception("RAW stacking sweep failed")
+
+    threading.Thread(target=stack_loop, name="raw-stacks", daemon=True).start()
+
     # Back off while Immich or its server is overloaded; say so on MQTT and the page
     PRESSURE._ping = client.ping
     PRESSURE.start()
@@ -194,7 +210,12 @@ def main() -> int:
             return True  # nothing will correct it later, so the NAS copy is no longer needed
         return autofix.status_of(asset_id) in ("applied", "has_place")
 
-    links = LinkImports(os.path.join(data_dir, "links.db"), link_person, corrections_done)
+    def correction_of(uid: str, asset_id: str) -> str | None:
+        if uid != MAIN_ID or not cfg.auto_fix:
+            return None
+        return autofix.stage_of(asset_id)
+
+    links = LinkImports(os.path.join(data_dir, "links.db"), link_person, corrections_done, correction_of=correction_of)
 
     def link_cleanup_loop() -> None:
         while not stop_event.wait(600):
@@ -222,6 +243,7 @@ def main() -> int:
     manager.close_all()
     router.close()
     autofix.close()
+    stacker.close()
     geofix.close()
     state.close()
     client.close()

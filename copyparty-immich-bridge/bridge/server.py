@@ -70,6 +70,12 @@ def status_extras(geofix) -> dict:
                               "clocks_set": auto.describe(0).get("clock_counts", {}).get("decided", 0)}
         except Exception:
             pass
+    stacker = getattr(geofix, "stacker", None)
+    if stacker is not None:
+        try:
+            out["raw_stacks"] = stacker.describe()
+        except Exception:
+            pass
     mq = getattr(geofix, "mqtt", None)
     if mq is not None:
         out["mqtt"] = {"on": bool(mq.url()), "connected": mq.connected, "error": mq.last_error[:120] if mq.last_error else ""}
@@ -160,10 +166,12 @@ GET {page}/status/me    one person's own status; header X-Immich-Token = their I
 GET {page}/llms.txt     this text
 
 ## Shared albums (token, or X-Immich-Token for the signed-in person only)
-POST {page}/api/links/inspect  {{"url"}} -> title, counts, days, name suggestions (first = default)
+POST {page}/api/links/inspect  {{"url"}} -> title, counts, days, name suggestions (first = default),
+                               imported_before (skipped on import), look_alikes (same time or name already in Immich)
 POST {page}/api/links/import   {{"url", "name"?}} -> job; downloads into the person's folder, imports, then deletes
                                the NAS copy once Immich has the same bytes and correction is done
-GET  {page}/api/links          recent jobs
+GET  {page}/api/links          recent jobs, each with stages: downloaded, on_nas, uploading, in_immich, not_taken
+                               (+ not_taken_reason), corrected, checked, waiting (corrects = false: no correction runs)
 """
 
 
@@ -604,7 +612,7 @@ def make_handler(
             elif route == "/api/links" and links is not None:
                 uid = self._link_caller(query)
                 if uid is not None:
-                    self._send_json(200, {"jobs": links.jobs(uid)})
+                    self._send_json(200, {"jobs": links.jobs(uid), "backoff": PRESSURE.describe()})
             elif route == "/api/users" and manager is not None:
                 if self._require_api():
                     self._send_json(200, manager.describe_all())
