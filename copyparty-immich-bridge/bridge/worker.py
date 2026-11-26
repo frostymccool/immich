@@ -12,6 +12,7 @@ import time
 
 import requests
 
+from bridge import sidecars
 from bridge.pressure import PRESSURE
 from bridge.config import Config
 from bridge.people import parse_folder
@@ -70,6 +71,7 @@ class ImportWorker:
         # path -> progress of a file being imported now: started, phase, bytes sent/total, when the upload began
         self._active: dict[str, dict] = {}
         self._sizes: dict[str, int] = {}  # size of each queued/active file, for the backlog estimate
+        self._first_seen: dict[str, float] = {}  # when a photo that may get a camera sidecar was first seen
         self._sent_total = 0  # bytes uploaded since start
         self._samples: collections.deque[tuple[float, int]] = collections.deque(maxlen=400)  # (time, _sent_total)
         self._held = 0  # files a worker has taken from the queue but is holding because imports are paused
@@ -266,6 +268,44 @@ class ImportWorker:
                     self._pending.discard(path)
                     self._sizes.pop(path, None)
 
+    def _wait_for_sidecar(self, path: str, name: str) -> bool:
+        """True when this photo should wait a little for its camera sidecar, which may still be uploading: the
+        phone sends a RAW and its .xmp separately and copyparty reports each as soon as it is complete. Measured
+        from when the bridge first saw the photo (the share keeps the camera's times, not the arrival time)."""
+        if sidecars.XMP_WAIT_S <= 0 or sidecars.find_camera_sidecar(path) is not None or not sidecars.may_get_sidecar(path):
+            with self._lock:
+                self._first_seen.pop(path, None)
+            return False
+        now = time.time()
+        with self._lock:
+            first = self._first_seen.setdefault(path, now)
+        left = first + sidecars.XMP_WAIT_S - now
+        if left <= 0:
+            with self._lock:
+                self._first_seen.pop(path, None)
+            return False
+        log.info("waiting up to %d s for the camera sidecar of %s", int(left) + 1, name)
+        timer = threading.Timer(left, self.enqueue, (path, "after waiting for its sidecar"))
+        timer.daemon = True
+        timer.start()
+        return True
+
+    def _late_sidecar(self, path: str) -> None:
+        """A camera sidecar that arrived after its photo was imported: say so (Immich only reads it with the upload)."""
+        folder = os.path.dirname(path)
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            return
+        for n in names:
+            photo = os.path.join(folder, n)
+            if photo == path or sidecars.find_camera_sidecar(photo) != path:
+                continue
+            rec = self._state.get(photo)
+            if rec is not None and rec.status == "imported":
+                log.warning("camera sidecar %s arrived after %s was imported: its rating, keywords and edits are not in "
+                            "Immich (set XMP_WAIT_S higher if this happens often)", os.path.basename(path), n)
+
     def _process(self, path: str) -> None:
         name = os.path.basename(path)
         if not is_candidate_name(name):
@@ -283,12 +323,17 @@ class ImportWorker:
 
         # Hook-delivered paths haven't been extension-filtered yet.
         if extension_of(name) not in self._allowed:
+            if extension_of(name) == "xmp":
+                self._late_sidecar(path)
             self._state.record_skip(path, size, mtime, "unsupported extension")
             log.debug("skipped (extension): %s", path)
             return
         if size == 0:
             return
         if self._state.is_done(path, size, mtime):
+            return
+
+        if self._wait_for_sidecar(path, name):
             return
 
         sha1: str | None = None
@@ -302,6 +347,8 @@ class ImportWorker:
                 outcome = UploadOutcome(status="duplicate", asset_id=None if existing == "present" else existing)
                 if ImportWorker.geofix is not None and ImportWorker.geofix.sidecar_for(path) is not None:
                     ImportWorker.geofix.mark_applied(path, "already in Immich: not changed")
+                if sidecars.find_camera_sidecar(path) is not None:
+                    log.info("its camera sidecar was not applied (the photo was already in Immich): %s", name)
                 log.info("already in Immich (checksum): %s -> %s", name, existing)
             else:
                 if not self._owned(path):  # ownership changed while hashing (settings/users edited)
@@ -309,13 +356,17 @@ class ImportWorker:
                     return
                 self._phase(path, "uploading", 0, 0)
                 gf = ImportWorker.geofix
-                sidecar = gf.sidecar_for(path) if gf is not None else None
+                fix = gf.sidecar_for(path) if gf is not None else None
+                camera = sidecars.read_camera_sidecar(path)
+                sidecar = sidecars.merge(camera, fix) if camera is not None else fix
                 outcome = self._client.upload(
                     path, sha1, progress=lambda sent, total: self._phase(path, "uploading", sent, total), sidecar=sidecar
                 )
+                extras = [w for w, on in (("its camera sidecar (rating, keywords, edits)", camera is not None),
+                                          ("the location chosen on the Fix locations tab", fix is not None)) if on]
                 log.info("%s: %s -> asset %s%s", outcome.status, name, outcome.asset_id,
-                         " (with the location chosen on the Fix locations tab)" if sidecar and outcome.status == "imported" else "")
-                if sidecar is not None and gf is not None:
+                         " (with " + " and ".join(extras) + ")" if extras and outcome.status == "imported" else "")
+                if fix is not None and gf is not None:
                     gf.mark_applied(path, "imported with this place" if outcome.status == "imported" else "already in Immich: not changed")
 
             if outcome.asset_id and outcome.asset_id != "present":

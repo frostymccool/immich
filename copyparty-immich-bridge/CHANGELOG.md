@@ -3,6 +3,22 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.9.0 - camera XMP sidecars go to Immich with their photo
+
+- When a photo has an XMP sidecar next to it (from the camera, Lightroom, darktable...), the bridge sends it with
+  the upload, so the rating, title, description, keywords and any GPS or date in it show in Immich. Matching, in the
+  photo's own folder and ignoring case: `<file name>.xmp` (DSC_0042.NEF.xmp), else `<name without extension>.xmp`
+  (P1010001.xmp, which then goes with both P1010001.ORF and P1010001.JPG). The same rules as the phone app (build 300).
+- With a place and time chosen on the Fix locations tab as well, both go in one sidecar: the camera's rating,
+  keywords and caption are kept, the chosen place and time replace the camera's GPS and date, and the Fix-locations
+  note becomes the description only when the camera has none.
+- A RAW photo, or any photo in a folder that holds XMP files, waits up to 45 s (`XMP_WAIT_S`, 0 = never) for its
+  sidecar, because the phone uploads them as separate files. A sidecar that still arrives after its photo was
+  imported is named in the log. Immich only reads a sidecar with the upload, so photos imported before this version,
+  or already in Immich, keep their old details.
+- Nothing is written to the files on the NAS; the XMP files themselves stay there (Immich does not take them on their
+  own, so they count as skipped).
+
 ## 0.8.1 - "Everyone" no longer names one account
 
 - With several people and **Everyone** picked, the Status tab's "Where files come from and go to" said it imported
