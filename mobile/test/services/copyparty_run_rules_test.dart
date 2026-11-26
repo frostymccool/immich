@@ -134,4 +134,24 @@ void main() {
       expect(read, ['/cache/a.jpg']);
     });
   });
+
+  group('resume choices after Pause', () {
+    test('Resume all turns everything back on', () {
+      expect(pausesForResume(ResumeMode.all, useCache: true), (cardPaused: false, uploadsPaused: false));
+    });
+
+    test('Cache only copies the card into the phone cache and sends nothing', () {
+      expect(pausesForResume(ResumeMode.cacheOnly, useCache: true), (cardPaused: false, uploadsPaused: true));
+    });
+
+    test('Upload only sends cached files and leaves the card alone', () {
+      expect(pausesForResume(ResumeMode.uploadOnly, useCache: true), (cardPaused: true, uploadsPaused: false));
+    });
+
+    test('without the phone cache every choice resumes everything', () {
+      for (final mode in ResumeMode.values) {
+        expect(pausesForResume(mode, useCache: false), (cardPaused: false, uploadsPaused: false));
+      }
+    });
+  });
 }

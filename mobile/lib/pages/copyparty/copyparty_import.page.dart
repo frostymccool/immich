@@ -13,6 +13,7 @@ import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_auto_folder.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_run_rules.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_saved_hashes.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
@@ -144,7 +145,7 @@ class _UploadStateBanner extends StatelessWidget {
       icon = Icon(Icons.sd_card_alert_outlined, color: foreground, size: 20);
     } else if (session.paused && session.step == ImportSessionStep.uploading) {
       title = 'Paused by you';
-      body = 'Tap Resume to continue. Files already sent are not sent again.';
+      body = 'Resume below to continue. Files already sent are not sent again.';
       background = scheme.secondaryContainer;
       foreground = scheme.onSecondaryContainer;
       icon = Icon(Icons.pause_circle_outline_rounded, color: foreground, size: 20);
@@ -2358,44 +2359,10 @@ class _UploadProgressStep extends ConsumerWidget {
           top: false,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-            child: Row(
-              children: [
-                // Item 2: add more folders to the live queue while uploading.
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: onAddFolders,
-                    icon: const Icon(Icons.create_new_folder_outlined),
-                    label: const Text('Add folders'),
-                    style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                // batch3 item 6: Pause halts the queue in place (this page stays;
-                // Resume re-handshakes so sent chunks aren't re-uploaded).
-                Expanded(
-                  child: session.paused
-                      ? FilledButton.icon(
-                          onPressed: () => ref.read(importSessionProvider.notifier).resumeUpload(),
-                          icon: const Icon(Icons.play_arrow_rounded),
-                          label: const Text('Resume'),
-                          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                        )
-                      : _PauseMenuButton(session: session),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _confirmCancel(context),
-                    icon: const Icon(Icons.stop_circle_outlined),
-                    label: const Text('Stop'),
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size.fromHeight(48),
-                      foregroundColor: context.colorScheme.error,
-                      side: BorderSide(color: context.colorScheme.error.withValues(alpha: 0.5)),
-                    ),
-                  ),
-                ),
-              ],
+            child: _ProgressActions(
+              session: session,
+              onAddFolders: onAddFolders,
+              onStop: () => _confirmCancel(context),
             ),
           ),
         ),
@@ -2404,69 +2371,89 @@ class _UploadProgressStep extends ConsumerWidget {
   }
 }
 
-/// Pause: everything, only the card copy, or only the uploads. With the phone cache off there is no
-/// separate card copy, so it pauses everything at once.
-class _PauseMenuButton extends ConsumerWidget {
+/// The buttons under the progress list. Pause pauses everything at once. When paused (with the phone cache on)
+/// Resume is split in three: everything, only the card copy into the cache, or only the uploads of cached files.
+class _ProgressActions extends ConsumerWidget {
   final ImportSessionState session;
-  const _PauseMenuButton({required this.session});
+  final VoidCallback onAddFolders;
+  final VoidCallback onStop;
+  const _ProgressActions({required this.session, required this.onAddFolders, required this.onStop});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final notifier = ref.read(importSessionProvider.notifier);
     final caching = ref.watch(appConfigProvider.select((c) => c.copyparty.stageToLocalBeforeUpload));
-    final style = OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48));
-    if (!caching) {
-      return OutlinedButton.icon(
-        onPressed: notifier.pauseUpload,
-        icon: const Icon(Icons.pause_rounded),
-        label: const Text('Pause'),
-        style: style,
-      );
-    }
-    return MenuAnchor(
-      menuChildren: [
-        MenuItemButton(
-          leadingIcon: const Icon(Icons.pause_rounded),
-          onPressed: notifier.pauseUpload,
-          child: const _PauseMenuText('Pause everything', 'Card copy and uploads'),
-        ),
-        if (!session.cardPaused)
-          MenuItemButton(
-            leadingIcon: const Icon(Icons.sd_card_outlined),
-            onPressed: notifier.pauseCardCopy,
-            child: const _PauseMenuText('Pause card copy', 'Cached files keep uploading'),
-          ),
-        if (!session.uploadsPaused)
-          MenuItemButton(
-            leadingIcon: const Icon(Icons.cloud_upload_outlined),
-            onPressed: notifier.pauseUploadsOnly,
-            child: const _PauseMenuText('Pause uploads', 'The card keeps copying into the phone cache'),
-          ),
-      ],
-      builder: (context, controller, _) => OutlinedButton.icon(
-        onPressed: () => controller.isOpen ? controller.close() : controller.open(),
-        icon: const Icon(Icons.pause_rounded),
-        label: const Text('Pause…'),
-        style: style,
+    const tall = Size.fromHeight(48);
+    final addFolders = OutlinedButton.icon(
+      onPressed: onAddFolders,
+      icon: const Icon(Icons.create_new_folder_outlined),
+      label: const Text('Add folders'),
+      style: OutlinedButton.styleFrom(minimumSize: tall),
+    );
+    final stop = OutlinedButton.icon(
+      onPressed: onStop,
+      icon: const Icon(Icons.stop_circle_outlined),
+      label: const Text('Stop'),
+      style: OutlinedButton.styleFrom(
+        minimumSize: tall,
+        foregroundColor: context.colorScheme.error,
+        side: BorderSide(color: context.colorScheme.error.withValues(alpha: 0.5)),
       ),
     );
+    final Widget middle = session.paused
+        ? FilledButton.icon(
+            onPressed: () => unawaited(notifier.resumeUpload()),
+            icon: const Icon(Icons.play_arrow_rounded),
+            label: Text(caching ? 'Resume all' : 'Resume'),
+            style: FilledButton.styleFrom(minimumSize: tall),
+          )
+        : OutlinedButton.icon(
+            onPressed: notifier.pauseUpload,
+            icon: const Icon(Icons.pause_rounded),
+            label: const Text('Pause'),
+            style: OutlinedButton.styleFrom(minimumSize: tall),
+          );
+    final row = Row(
+      children: [
+        Expanded(child: addFolders),
+        const SizedBox(width: 12),
+        Expanded(child: middle),
+        const SizedBox(width: 12),
+        Expanded(child: stop),
+      ],
+    );
+    if (!session.paused || !caching) {
+      return row;
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.tonalIcon(
+                onPressed: () => unawaited(notifier.resumeUpload(mode: ResumeMode.cacheOnly)),
+                icon: const Icon(Icons.sd_card_outlined),
+                label: const Text('Cache only'),
+                style: FilledButton.styleFrom(minimumSize: tall),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: FilledButton.tonalIcon(
+                onPressed: () => unawaited(notifier.resumeUpload(mode: ResumeMode.uploadOnly)),
+                icon: const Icon(Icons.cloud_upload_outlined),
+                label: const Text('Upload only'),
+                style: FilledButton.styleFrom(minimumSize: tall),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        row,
+      ],
+    );
   }
-}
-
-class _PauseMenuText extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  const _PauseMenuText(this.title, this.subtitle);
-
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Text(title),
-      Text(subtitle, style: context.textTheme.bodySmall),
-    ],
-  );
 }
 
 class _SectionBadge extends StatelessWidget {

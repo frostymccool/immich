@@ -773,7 +773,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     }
   }
 
-  Future<void> startUpload({Set<String>? selectedFilePaths}) async {
+  Future<void> startUpload({Set<String>? selectedFilePaths, ResumeMode resume = ResumeMode.all}) async {
     // Never run two upload loops at once. A caller (appendSelectedSets / resume /
     // retry) that fires while a loop is still active — including during its
     // teardown await — just returns; the live loop already picks up new pending
@@ -873,6 +873,13 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     final effectiveTotal = selectedFilePaths != null ? selectedFilePaths.length : state.totalFiles;
 
     final cancelToken = _uploadCancelToken = Completer<void>();
+    final startPauses = pausesForResume(resume, useCache: useStaging);
+    if (resume != ResumeMode.all) {
+      _log.log(
+        'RESUME ${resume.name}: card copy ${startPauses.cardPaused ? 'paused' : 'on'}, '
+        'uploads ${startPauses.uploadsPaused ? 'paused' : 'on'}',
+      );
+    }
 
     state = state.copyWith(
       step: ImportSessionStep.uploading,
@@ -881,12 +888,12 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       selectedPaths: selectedFilePaths,
       cancelled: false,
       paused: false,
-      cardPaused: false,
-      uploadsPaused: false,
+      cardPaused: startPauses.cardPaused,
+      uploadsPaused: startPauses.uploadsPaused,
     );
     _pauseRequested = false;
-    _cardPaused = false;
-    _uploadsPaused = false;
+    _cardPaused = startPauses.cardPaused;
+    _uploadsPaused = startPauses.uploadsPaused;
     // Seed the cache indicator with whatever is already on disk (e.g. resuming
     // a paused/interrupted run) so the progress page doesn't open at a stale 0%.
     if (useStaging) {
@@ -1937,8 +1944,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
 
   /// Resume a stopped run (item 3): re-runs the upload loop for the files still
   /// pending in the current selection (already-done files are skipped).
-  Future<void> resumeUpload() async {
-    await startUpload(selectedFilePaths: state.selectedPaths);
+  Future<void> resumeUpload({ResumeMode mode = ResumeMode.all}) async {
+    await startUpload(selectedFilePaths: state.selectedPaths, resume: mode);
   }
 
   /// Scan folders WITHOUT touching the live session (item 4): returns the found

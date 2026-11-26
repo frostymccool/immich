@@ -57,6 +57,20 @@ List<T> uploadableNow<T>(
   required bool Function(T) isCached,
 }) => cardPaused && useCache ? pending.where(isCached).toList() : pending;
 
+/// How a paused run is resumed: everything, only the card copy into the phone cache (nothing is sent), or only
+/// the uploads of files already in the cache (nothing is read from the card).
+enum ResumeMode { all, cacheOnly, uploadOnly }
+
+/// The partial pauses a resume starts with. Without the phone cache there is no separate card copy, so every
+/// mode resumes everything.
+({bool cardPaused, bool uploadsPaused}) pausesForResume(ResumeMode mode, {required bool useCache}) => !useCache
+    ? (cardPaused: false, uploadsPaused: false)
+    : switch (mode) {
+        ResumeMode.all => (cardPaused: false, uploadsPaused: false),
+        ResumeMode.cacheOnly => (cardPaused: false, uploadsPaused: true),
+        ResumeMode.uploadOnly => (cardPaused: true, uploadsPaused: false),
+      };
+
 /// What Stop does: a running upload is cancelled; a paused one (its loop already ended, nothing left to
 /// cancel) goes straight to the summary as a stopped run.
 enum StopAction { cancelRun, finishPaused, nothing }
