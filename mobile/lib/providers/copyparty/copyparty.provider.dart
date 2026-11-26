@@ -842,6 +842,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         // Mark it as the loop's current file so the read-ahead filler excludes
         // it (concurrency finding 2).
         _uploadingPath = file.localPath;
+        _rememberXmp(file);
         _logMemory('start ${file.filename}');
         // batch3 item 6: per-file token that fires on session-cancel OR skip.
         // The network/hash calls for THIS file abort on it; the catch below
@@ -2308,6 +2309,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     // identity fields (deviceAssetId, filename) stay the ORIGINAL so Immich
     // dedups correctly regardless of where the bytes were read from.
     final f = File(overridePath ?? file.localPath);
+    final sidecar = await _xmpSidecarBytes(file);
     final fields = {
       'deviceAssetId': file.localPath,
       'deviceId': Store.get(StoreKey.deviceId),
@@ -2328,7 +2330,50 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         }
       },
       logContext: 'copypartyImport[${file.filename}]',
+      sidecarXmp: sidecar,
     );
+  }
+
+  /// XMP sidecars seen this run (small), so one can still go to Immich with its photo after the sidecar itself
+  /// was uploaded and auto-deleted from the card.
+  final Map<String, List<int>> _xmpCache = {};
+  static const _maxXmpBytes = 4 * 1024 * 1024;
+
+  /// Reads an XMP sidecar into [_xmpCache] if it is one (before it can be auto-deleted).
+  void _rememberXmp(UploadFile file) {
+    if (!file.filename.toLowerCase().endsWith('.xmp') || file.sizeBytes > _maxXmpBytes) {
+      return;
+    }
+    try {
+      _xmpCache[file.localPath] = File(file.localPath).readAsBytesSync();
+    } catch (_) {}
+  }
+
+  /// The camera's XMP sidecar for [media] (same name, in its group), for Immich: rating, title, description,
+  /// keywords, GPS and date travel with the photo. Null when there is none or it cannot be read.
+  Future<List<int>?> _xmpSidecarBytes(UploadFile media) async {
+    for (final set in state.uploadSets) {
+      if (!set.files.contains(media)) {
+        continue;
+      }
+      final xmp = CopypartyFilePairer.xmpSidecarFor(set.files, media);
+      if (xmp == null) {
+        return null;
+      }
+      var bytes = _xmpCache[xmp.localPath];
+      if (bytes == null && xmp.sizeBytes <= _maxXmpBytes) {
+        try {
+          bytes = await File(xmp.localPath).readAsBytes();
+        } catch (_) {}
+      }
+      _log.log(
+        bytes == null
+            ? 'IMMICH ${media.filename}: sidecar ${xmp.filename} could not be read; uploading without it'
+            : 'IMMICH ${media.filename}: with sidecar ${xmp.filename}',
+      );
+      return bytes;
+    }
+    return null;
   }
 
   // Progress callbacks (chunk upload, hashing, staging) can call _notify()

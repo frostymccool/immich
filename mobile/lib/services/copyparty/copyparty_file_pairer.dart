@@ -68,7 +68,13 @@ class CopypartyFilePairer {
 
     final dotIdx = stem.lastIndexOf('.');
     if (dotIdx > 0) {
+      final isXmp = stem.substring(dotIdx + 1).toLowerCase() == 'xmp';
       stem = stem.substring(0, dotIdx);
+      // A sidecar named after the whole file ("DSC_0042.NEF.xmp") belongs with "DSC_0042.NEF".
+      final inner = stem.lastIndexOf('.');
+      if (isXmp && inner > 0) {
+        stem = stem.substring(0, inner);
+      }
     }
 
     final insta = _insta360Stem.firstMatch(stem);
@@ -232,6 +238,28 @@ class CopypartyFilePairer {
   };
 
   static bool _isNativeImmichFile(String ext) => _nativeImmichExtensions.contains(ext);
+
+  /// The XMP sidecar in [files] (one group) that belongs to [media], or null: `<file name>.xmp` (for example
+  /// `DSC_0042.NEF.xmp`) first, else `<name without extension>.xmp` (`DSC_0042.xmp`).
+  static UploadFile? xmpSidecarFor(List<UploadFile> files, UploadFile media) {
+    final whole = '${media.filename}.xmp'.toLowerCase();
+    final dot = media.filename.lastIndexOf('.');
+    final base = '${dot > 0 ? media.filename.substring(0, dot) : media.filename}.xmp'.toLowerCase();
+    UploadFile? byBase;
+    for (final f in files) {
+      if (identical(f, media)) {
+        continue;
+      }
+      final n = f.filename.toLowerCase();
+      if (n == whole) {
+        return f;
+      }
+      if (n == base) {
+        byBase = f;
+      }
+    }
+    return byBase;
+  }
 
   /// Whether a filename is a media type Immich would ingest. Used to decide if
   /// the Immich axis applies to a file when its intended destination isn't
