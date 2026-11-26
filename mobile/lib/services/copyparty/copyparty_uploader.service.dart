@@ -301,6 +301,9 @@ class CopypartyUploaderService {
 
     final fileSink = _DigestSink();
     final fileHasher = sha512.startChunkedConversion(fileSink);
+    // Immich's checksum, in the same pass (no second read to check Immich later).
+    final sha1Sink = _DigestSink();
+    final sha1Hasher = sha1.startChunkedConversion(sha1Sink);
 
     final handle = await file.open(mode: FileMode.read);
     try {
@@ -324,6 +327,7 @@ class CopypartyUploaderService {
           }
           chunkHasher.add(slice);
           fileHasher.add(slice);
+          sha1Hasher.add(slice);
           got += slice.length;
         }
         if (got == 0) {
@@ -344,6 +348,8 @@ class CopypartyUploaderService {
 
     fileHasher.close();
     final fileHash = fileSink.value!.toString();
+    sha1Hasher.close();
+    final sha1Base64 = base64.encode(sha1Sink.value!.bytes);
 
     final stat = file.statSync();
     final lastModifiedMs = stat.modified.millisecondsSinceEpoch;
@@ -367,6 +373,7 @@ class CopypartyUploaderService {
       chunkHashes: chunkHashes,
       fileHash: fileHash,
       lastModifiedMs: lastModifiedMs,
+      sha1Base64: sha1Base64,
     );
   }
 
@@ -752,6 +759,7 @@ class CopypartyUploaderService {
     ServerFileVerification base = const ServerFileVerification(),
     DateTime? now,
     void Function(int bytesHashed, int totalBytes)? onHashProgress,
+    HashedFile? hashed,
   }) async {
     try {
       final fileUri = Uri.parse(fileUrl);
@@ -759,8 +767,14 @@ class CopypartyUploaderService {
       final segs = List<String>.from(fileUri.pathSegments)..removeLast();
       final uploadPath = '/${segs.join('/')}';
 
-      final hashed = await hashFile(localPath, onProgress: onHashProgress);
-      final hs = await handshake(hashed, origin, uploadPath, password, label: 'verify');
+      // [hashed] = hashes saved from an earlier read (no read now); the server checks them against its copy.
+      final hs = await handshake(
+        hashed ?? await hashFile(localPath, onProgress: onHashProgress),
+        origin,
+        uploadPath,
+        password,
+        label: 'verify',
+      );
       if (hs.fullyConfirmed) {
         return base.copyWith(
           filenamePresent: VerifyState.yes,
@@ -1347,6 +1361,8 @@ class CopypartyUploaderService {
 
     final fileSink = _DigestSink();
     final fileHasher = sha512.startChunkedConversion(fileSink);
+    final sha1Sink = _DigestSink();
+    final sha1Hasher = sha1.startChunkedConversion(sha1Sink);
 
     final dest = File(stagedPath);
     await dest.parent.create(recursive: true);
@@ -1393,6 +1409,7 @@ class CopypartyUploaderService {
                 break; // short read — don't trust the partial, fall through to wipe.
               }
               fileHasher.add(chunkBytes);
+              sha1Hasher.add(chunkBytes);
               chunkHashes.add(_chunkId(chunkBytes));
               replayed += chunkBytes.length;
               // Report replay progress too — otherwise the progress bar sits
@@ -1488,6 +1505,7 @@ class CopypartyUploaderService {
           }
           hashSw.start();
           fileHasher.add(slice);
+          sha1Hasher.add(slice);
           chunkHasher.add(slice);
           hashSw.stop();
           writeSw.start();
@@ -1553,6 +1571,8 @@ class CopypartyUploaderService {
 
     fileHasher.close();
     final fileHash = fileSink.value!.toString();
+    sha1Hasher.close();
+    final sha1Base64 = base64.encode(sha1Sink.value!.bytes);
     final stat = source.statSync();
 
     String mbps(int bytes, int ms) => ms <= 0 ? '∞' : (bytes / (ms / 1000) / (1024 * 1024)).toStringAsFixed(1);
@@ -1575,6 +1595,7 @@ class CopypartyUploaderService {
       chunkHashes: chunkHashes,
       fileHash: fileHash,
       lastModifiedMs: stat.modified.millisecondsSinceEpoch,
+      sha1Base64: sha1Base64,
     );
   }
 

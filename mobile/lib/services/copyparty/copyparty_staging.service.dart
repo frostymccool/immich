@@ -143,6 +143,7 @@ class CopypartyStagingService {
         chunkHashes: chunkHashes,
         fileHash: meta['fileHash'] as String,
         lastModifiedMs: meta['lastModifiedMs'] as int,
+        sha1Base64: meta['sha1'] as String?,
       );
     } catch (e) {
       _log?.log('staging: unreadable marker for ${sourcePath.split('/').last} ($e) — discarding');
@@ -192,6 +193,7 @@ class CopypartyStagingService {
       'filename': hashed.filename,
       'chunkSize': hashed.chunkSizeBytes,
       'fileHash': hashed.fileHash,
+      'sha1': hashed.sha1Base64,
       'chunkHashes': hashed.chunkHashes,
       'lastModifiedMs': hashed.lastModifiedMs,
     };

@@ -11,6 +11,7 @@ import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_auto_folder.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_saved_hashes.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:immich_mobile/utils/upload_speed_calculator.dart';
@@ -893,6 +894,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
     // update as each completes. Skipped if the listing failed above.
     final api = ref.read(apiServiceProvider).assetsApi;
     final staging = ref.read(copypartyStagingProvider);
+    final receiptRepo = ref.read(copypartyReceiptRepositoryProvider);
     for (final f in files) {
       // Bail immediately if disposed or a newer _verify run superseded us — do
       // NOT start hashing the next (possibly multi-GB) file.
@@ -907,8 +909,21 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
         // session) — prefer it over the card path for the same reason as the
         // cleanup/completion-screen checks: byte-identical, faster, and
         // doesn't require the card.
-        final staged = await staging.findValidStaged(f.localPath);
-        final id = await immichAssetIdByChecksum(api, staged?.path ?? f.localPath);
+        // A file uploaded before with its checksum saved (and unchanged on the card) needs no read.
+        String? savedSha1;
+        try {
+          final receipt = await receiptRepo.findByLocalPath(f.localPath);
+          if (receipt != null && receipt.sha1Base64 != null) {
+            final st = FileStat.statSync(f.localPath);
+            if (SavedHashVerifier.savedFor(receipt, st) != null) {
+              savedSha1 = receipt.sha1Base64;
+            }
+          }
+        } catch (_) {}
+        final staged = savedSha1 == null ? await staging.findValidStaged(f.localPath) : null;
+        final id = savedSha1 != null
+            ? await immichAssetIdBySha1(api, savedSha1, f.localPath)
+            : await immichAssetIdByChecksum(api, staged?.path ?? f.localPath);
         // Re-check after the await: the user may have left or refreshed while
         // this file was hashing. Don't mutate shared state for a stale run.
         if (_disposed || generation != _verifyGeneration) {
@@ -3106,6 +3121,8 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
     final config = ref.read(appConfigProvider).copyparty;
     final uploader = ref.read(copypartyUploaderProvider);
     final staging = ref.read(copypartyStagingProvider);
+    final receiptRepo = ref.read(copypartyReceiptRepositoryProvider);
+    final verifier = ref.read(savedHashVerifierProvider);
     String password = '';
     try {
       password = await ref.read(copypartyPasswordProvider.future);
@@ -3169,13 +3186,22 @@ class _CompletionStepState extends ConsumerState<_CompletionStep> {
         // be inserted, and risk the exact class of USB-unmount access this
         // project has hit before. The staged copy is byte-identical (it's what
         // was actually uploaded) so this is strictly equivalent, never weaker.
-        final stagedCopy = await staging.findValidStaged(f.localPath);
+        // With a receipt, its saved hashes are used when they still stand for the card file (no read).
+        HashedFile? saved;
+        try {
+          final receipt = await receiptRepo.findByLocalPath(f.localPath);
+          if (receipt != null) {
+            saved = (await verifier.hashesFor(receipt)).hashed;
+          }
+        } catch (_) {}
+        final stagedCopy = saved == null ? await staging.findValidStaged(f.localPath) : null;
         final v = await uploader.verifyHash(
           fileUrl: fileUrl,
           localPath: stagedCopy?.path ?? f.localPath,
           password: password,
           base: presence,
           now: now,
+          hashed: saved,
         );
         final liveSafe = v.copypartyVerifiedAt(now) && (!f.needsImmich || f.immichConfirmed);
         if (!liveSafe) {

@@ -197,6 +197,10 @@ class HashedFile {
   final String fileHash;
   final int lastModifiedMs;
 
+  /// The whole file's SHA-1 in base64, the checksum Immich identifies content by. Computed in the same read
+  /// as the chunk ids, so checking Immich never needs another read. Null when not computed (older paths).
+  final String? sha1Base64;
+
   const HashedFile({
     required this.path,
     required this.filename,
@@ -205,6 +209,7 @@ class HashedFile {
     required this.chunkHashes,
     required this.fileHash,
     required this.lastModifiedMs,
+    this.sha1Base64,
   });
 }
 
@@ -398,6 +403,17 @@ class CopypartyReceipt {
   final bool uploadConfirmed;
   final String? immichAssetId;
 
+  /// Saved at upload so a later verify needs no re-read of the card: copyparty's chunk ids (a handshake with
+  /// them makes the server check its own copy) and the Immich SHA-1, plus the card file's modification time.
+  final List<String>? chunkHashes;
+  final int? chunkSizeBytes;
+  final String? sha1Base64;
+  final int? sourceMtimeMs;
+
+  /// True once a SECOND, independent read of the original on the card matched what was uploaded (the check
+  /// before an auto-delete, or the first Verify). Only then are the saved hashes trusted for the card file.
+  final bool sourceChecked;
+
   const CopypartyReceipt({
     this.id,
     required this.filename,
@@ -411,6 +427,11 @@ class CopypartyReceipt {
     this.sourceDeleted = false,
     this.uploadConfirmed = false,
     this.immichAssetId,
+    this.chunkHashes,
+    this.chunkSizeBytes,
+    this.sha1Base64,
+    this.sourceMtimeMs,
+    this.sourceChecked = false,
   });
 
   CopypartyReceipt copyWith({
@@ -431,5 +452,10 @@ class CopypartyReceipt {
     sourceDeleted: sourceDeleted ?? this.sourceDeleted,
     uploadConfirmed: uploadConfirmed ?? this.uploadConfirmed,
     immichAssetId: immichAssetId ?? this.immichAssetId,
+    chunkHashes: chunkHashes,
+    chunkSizeBytes: chunkSizeBytes,
+    sha1Base64: sha1Base64,
+    sourceMtimeMs: sourceMtimeMs,
+    sourceChecked: sourceChecked,
   );
 }

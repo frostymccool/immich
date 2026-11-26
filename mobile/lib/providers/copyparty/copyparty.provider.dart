@@ -23,6 +23,7 @@ import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_foreground_service.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_network_watch.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_saved_hashes.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_source_delete.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_staging.service.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
@@ -48,8 +49,11 @@ Future<String?> immichAssetIdByChecksum(AssetsApi api, String localPath) async {
     input.add(chunk);
   }
   input.close();
-  final sha1b64 = base64.encode(sink.value!.bytes);
+  return immichAssetIdBySha1(api, base64.encode(sink.value!.bytes), localPath);
+}
 
+/// Same as [immichAssetIdByChecksum] with the SHA-1 already known (saved at upload): no file read.
+Future<String?> immichAssetIdBySha1(AssetsApi api, String sha1b64, String localPath) async {
   final resp = await api.checkBulkUpload(
     AssetBulkUploadCheckDto(
       assets: [AssetBulkUploadCheckItem(checksum: sha1b64, id: localPath)],
@@ -83,6 +87,17 @@ class _DigestSink implements Sink<Digest> {
 /// Shared diagnostic logger — single instance so the settings screen can read
 /// the same file the uploader writes to.
 final copypartyLoggerProvider = Provider<CopypartyLogger>((ref) => CopypartyLogger.instance);
+
+/// Verifies uploads from hashes saved at upload time instead of re-reading the card each time.
+final savedHashVerifierProvider = Provider<SavedHashVerifier>((ref) {
+  final staging = ref.watch(copypartyStagingProvider);
+  return SavedHashVerifier(
+    uploader: ref.watch(copypartyUploaderProvider),
+    repo: ref.watch(copypartyReceiptRepositoryProvider),
+    stagedCopyPath: (path) async => (await staging.findValidStaged(path))?.path,
+    log: ref.watch(copypartyLoggerProvider).log,
+  );
+});
 
 const _placeNameChannel = MethodChannel('immich/place_name');
 
@@ -1031,6 +1046,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                   uploadTimestamp: DateTime.now().toUtc(),
                   copypartyUrl: uploadUrl,
                   uploadConfirmed: true,
+                  // Saved so a later verify needs no re-read of the card (trusted once a second read matched).
+                  chunkHashes: hashed.chunkHashes,
+                  chunkSizeBytes: hashed.chunkSizeBytes,
+                  sha1Base64: hashed.sha1Base64,
+                  sourceMtimeMs: _cardMtimeMs(file),
                 ),
               );
               file.dbRecordWritten = true;
@@ -1136,6 +1156,19 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
                     }
                     file.uploadedBytes = file.sizeBytes;
                     safeToRemove = srcHash == file.sha512;
+                    final uploadedHashes = file.cachedHash;
+                    if (safeToRemove && uploadedHashes != null) {
+                      // The independent read matched: the saved hashes now stand for the card file too.
+                      try {
+                        await _receiptRepo.saveCheckedHashes(
+                          receiptId,
+                          chunkHashes: uploadedHashes.chunkHashes,
+                          chunkSizeBytes: uploadedHashes.chunkSizeBytes,
+                          sha1Base64: uploadedHashes.sha1Base64,
+                          sourceMtimeMs: _cardMtimeMs(file),
+                        );
+                      } catch (_) {}
+                    }
                     if (!safeToRemove) {
                       file.sourceNote =
                           'Original kept on the card: it does not match what was uploaded (possible bad read). '
@@ -2082,6 +2115,17 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   /// Independent re-reads of originals for auto-delete, per file, for the current run. Reused when an
   /// upload is interrupted and resumes, so the card is not read a third time.
   final Map<String, _SourceCheck> _sourceChecks = {};
+
+  /// The card file's modification time now (as saved with its hashes), else the one seen at scan time.
+  static int _cardMtimeMs(UploadFile file) {
+    try {
+      final st = FileStat.statSync(file.localPath);
+      if (st.type != FileSystemEntityType.notFound) {
+        return st.modified.millisecondsSinceEpoch;
+      }
+    } catch (_) {}
+    return file.lastModifiedMs;
+  }
 
   _SourceCheck _startSourceCheck(UploadFile file, Completer<void> cancelToken) {
     return _sourceChecks.putIfAbsent(file.localPath, () {

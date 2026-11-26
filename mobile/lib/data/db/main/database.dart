@@ -516,8 +516,32 @@ class Drift extends $Drift {
       await customStatement(
         'CREATE INDEX IF NOT EXISTS idx_copyparty_receipts_wark ON copyparty_upload_receipts(wark)',
       );
+      await ensureCopypartyReceiptColumns((sql) => customSelect(sql).get(), customStatement);
     },
   );
+}
+
+/// Columns added to copyparty_upload_receipts after v36 (saved hashes, build 296). Checked with
+/// pragma_table_info on every open (cheap, idempotent): this table's stored version numbers cannot be trusted.
+Future<void> ensureCopypartyReceiptColumns(
+  Future<List<QueryRow>> Function(String) select,
+  Future<void> Function(String) exec,
+) async {
+  final names = (await select(
+    "SELECT name FROM pragma_table_info('copyparty_upload_receipts')",
+  )).map((row) => row.data['name'] as String).toSet();
+  const added = {
+    'chunk_hashes': 'TEXT',
+    'chunk_size': 'INTEGER',
+    'sha1_b64': 'TEXT',
+    'source_mtime_ms': 'INTEGER',
+    'source_checked': 'INTEGER NOT NULL DEFAULT 0',
+  };
+  for (final e in added.entries) {
+    if (!names.contains(e.key)) {
+      await exec('ALTER TABLE copyparty_upload_receipts ADD COLUMN ${e.key} ${e.value}');
+    }
+  }
 }
 
 // every datetime column of the v33 schema, hardcoded: the heal runs once at v33->v34,

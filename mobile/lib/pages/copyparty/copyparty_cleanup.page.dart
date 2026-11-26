@@ -195,7 +195,13 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
       }
       VerifyState immich;
       try {
-        final assetId = await immichAssetIdByChecksum(api, await _effectiveLocalPath(r.localPath));
+        // Saved checksum when it still stands for the card file (no read); otherwise one read, whose hashes
+        // are saved so the Verify that follows needs no read either.
+        final h = await ref.read(savedHashVerifierProvider).hashesFor(r);
+        final sha1b64 = h.hashed.sha1Base64;
+        final assetId = sha1b64 != null
+            ? await immichAssetIdBySha1(api, sha1b64, r.localPath)
+            : await immichAssetIdByChecksum(api, await _effectiveLocalPath(r.localPath));
         immich = assetId != null ? VerifyState.yes : VerifyState.no;
       } catch (_) {
         immich = VerifyState.unknown;
@@ -218,23 +224,37 @@ class _CopypartyCleanupPageState extends ConsumerState<CopypartyCleanupPage> {
     final uploader = ref.read(copypartyUploaderProvider);
     final api = ref.read(apiServiceProvider).assetsApi;
     try {
-      final effectivePath = await _effectiveLocalPath(r.localPath);
+      // The card is read at most once per file, ever: after a read that matches the upload its hashes are
+      // saved, and copyparty and Immich are then checked from them (both check their OWN copies).
+      final h = await ref
+          .read(savedHashVerifierProvider)
+          .hashesFor(
+            r,
+            onProgress: (done, total) {
+              if (total > 0 && mounted) {
+                setState(() => _progress[r.id!] = done / total);
+              }
+            },
+          );
       final cp = await uploader.verifyHash(
         fileUrl: r.copypartyUrl,
-        localPath: effectivePath,
+        localPath: r.localPath,
         password: _password,
         base: _verify[r.id!] ?? const ServerFileVerification(),
-        onHashProgress: (done, total) {
-          if (total > 0 && mounted) {
-            setState(() => _progress[r.id!] = done / total);
-          }
-        },
+        hashed: h.hashed,
       );
       VerifyState immich = VerifyState.unknown;
       final applicable = _immichApplies(r);
+      final sha1b64 = h.hashed.sha1Base64;
       if (applicable) {
         try {
-          immich = (await immichAssetIdByChecksum(api, effectivePath)) != null ? VerifyState.yes : VerifyState.no;
+          immich =
+              (await (sha1b64 != null
+                      ? immichAssetIdBySha1(api, sha1b64, r.localPath)
+                      : immichAssetIdByChecksum(api, await _effectiveLocalPath(r.localPath)))) !=
+                  null
+              ? VerifyState.yes
+              : VerifyState.no;
         } catch (_) {
           immich = VerifyState.unknown;
         }

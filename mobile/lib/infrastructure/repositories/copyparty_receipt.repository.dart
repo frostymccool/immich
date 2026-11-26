@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:immich_mobile/data/db/main/database.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
@@ -13,8 +15,8 @@ class CopypartyReceiptRepository {
       INSERT INTO copyparty_upload_receipts
         (filename, local_path, size_bytes, sha512_file, wark,
          upload_timestamp, copyparty_url, receipt_file_written, source_deleted,
-         upload_confirmed, immich_asset_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         upload_confirmed, immich_asset_id, chunk_hashes, chunk_size, sha1_b64, source_mtime_ms, source_checked)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ''',
       variables: [
         Variable.withString(receipt.filename),
@@ -28,7 +30,29 @@ class CopypartyReceiptRepository {
         Variable.withInt(receipt.sourceDeleted ? 1 : 0),
         Variable.withInt(receipt.uploadConfirmed ? 1 : 0),
         receipt.immichAssetId != null ? Variable.withString(receipt.immichAssetId!) : const Variable(null),
+        receipt.chunkHashes != null ? Variable.withString(jsonEncode(receipt.chunkHashes)) : const Variable(null),
+        receipt.chunkSizeBytes != null ? Variable.withInt(receipt.chunkSizeBytes!) : const Variable(null),
+        receipt.sha1Base64 != null ? Variable.withString(receipt.sha1Base64!) : const Variable(null),
+        receipt.sourceMtimeMs != null ? Variable.withInt(receipt.sourceMtimeMs!) : const Variable(null),
+        Variable.withInt(receipt.sourceChecked ? 1 : 0),
       ],
+    );
+  }
+
+  /// Records that an independent read of the original matched the upload, with the hashes from that read, so
+  /// later verifies of this file need no re-read while the card file is unchanged (size and [sourceMtimeMs]).
+  Future<void> saveCheckedHashes(
+    int id, {
+    required List<String> chunkHashes,
+    required int chunkSizeBytes,
+    required String? sha1Base64,
+    required int sourceMtimeMs,
+  }) async {
+    await _db.customStatement(
+      '''UPDATE copyparty_upload_receipts
+         SET chunk_hashes = ?, chunk_size = ?, sha1_b64 = COALESCE(?, sha1_b64), source_mtime_ms = ?, source_checked = 1
+         WHERE id = ?''',
+      [jsonEncode(chunkHashes), chunkSizeBytes, sha1Base64, sourceMtimeMs, id],
     );
   }
 
@@ -122,6 +146,22 @@ class CopypartyReceiptRepository {
       sourceDeleted: (data['source_deleted'] as int) == 1,
       uploadConfirmed: (data['upload_confirmed'] as int? ?? 0) == 1,
       immichAssetId: data['immich_asset_id'] as String?,
+      chunkHashes: _decodeList(data['chunk_hashes'] as String?),
+      chunkSizeBytes: data['chunk_size'] as int?,
+      sha1Base64: data['sha1_b64'] as String?,
+      sourceMtimeMs: data['source_mtime_ms'] as int?,
+      sourceChecked: (data['source_checked'] as int? ?? 0) == 1,
     );
+  }
+
+  static List<String>? _decodeList(String? json) {
+    if (json == null) {
+      return null;
+    }
+    try {
+      return (jsonDecode(json) as List<dynamic>).cast<String>();
+    } catch (_) {
+      return null;
+    }
   }
 }
