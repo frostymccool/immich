@@ -150,6 +150,20 @@ class AutoFolderService {
   /// At most this many place names are offered per day.
   static const maxPlaceOptions = 4;
 
+  /// A day (`YYYY-MM-DD`) → place names of the user's other photos taken that day, most common first.
+  final Future<List<String>> Function(String day)? placesOnDay;
+
+  static List<String> _cleanPlaces(Iterable<String> names) {
+    final out = <String>[];
+    for (final n in names) {
+      final p = placeForFolder(n);
+      if (p.isNotEmpty && !out.any((o) => o.toLowerCase() == p.toLowerCase())) {
+        out.add(p);
+      }
+    }
+    return out.take(maxPlaceOptions).toList();
+  }
+
   /// The phone's current position, or null (no permission, no fix).
   final Future<(double, double)?> Function() phoneLocation;
   final DateTime Function() now;
@@ -166,6 +180,7 @@ class AutoFolderService {
     required this.readInfo,
     required this.placeNames,
     required this.phoneLocation,
+    this.placesOnDay,
     DateTime Function()? now,
     this.log,
   }) : now = now ?? DateTime.now;
@@ -240,14 +255,7 @@ class AutoFolderService {
       } catch (e) {
         log?.call('auto folders: place lookup failed ($e)');
       }
-      final out = <String>[];
-      for (final n in names) {
-        final p = placeForFolder(n);
-        if (p.isNotEmpty && !out.any((o) => o.toLowerCase() == p.toLowerCase())) {
-          out.add(p);
-        }
-      }
-      return cache[key] = out.take(maxPlaceOptions).toList();
+      return cache[key] = _cleanPlaces(names);
     }
 
     final days = facts.map((f) => f.day).toSet();
@@ -266,6 +274,23 @@ class AutoFolderService {
       final d = DateTime.tryParse(day);
       return d != null && today.difference(d) <= phoneLocationMaxAge + const Duration(days: 1);
     }).toList();
+    // No GPS in the files: where the user's OTHER photos of that day were taken, from their own Immich server
+    // (most common place first). Works for any date, unlike the phone's current location.
+    for (final day in needPhone) {
+      var names = const <String>[];
+      final lookup = placesOnDay;
+      if (lookup != null) {
+        try {
+          names = await lookup(day).timeout(lookupTimeout);
+        } catch (e) {
+          log?.call('auto folders: Immich photos of $day could not be checked ($e)');
+        }
+      }
+      optionsByDay[day] = _cleanPlaces(names);
+      if (optionsByDay[day]!.isNotEmpty) {
+        source[day] = 'your Immich photos that day';
+      }
+    }
     if (recent.isNotEmpty) {
       (double, double)? here;
       try {
@@ -275,12 +300,16 @@ class AutoFolderService {
       }
       final places = here == null ? const <String>[] : await geocode(here.$1, here.$2);
       for (final day in recent) {
-        optionsByDay[day] = places;
-        source[day] = places.isEmpty ? 'phone location unavailable' : 'phone location';
+        // For a recent day the phone's own position comes first; the Immich photos' places stay as choices.
+        final before = optionsByDay[day] ?? const <String>[];
+        optionsByDay[day] = _cleanPlaces([...places, ...before]);
+        source[day] = places.isNotEmpty
+            ? (before.isEmpty ? 'phone location' : 'phone location + your Immich photos that day')
+            : (before.isEmpty ? 'phone location unavailable' : 'your Immich photos that day');
       }
     }
-    for (final day in needPhone.where((d) => !recent.contains(d))) {
-      source[day] = 'no GPS, too old for the phone location';
+    for (final day in needPhone.where((d) => !recent.contains(d) && optionsByDay[d]!.isEmpty)) {
+      source[day] = 'no GPS, no Immich photos with a place that day, too old for the phone location';
     }
 
     final plan = planFolders(facts, {for (final e in optionsByDay.entries) e.key: e.value.firstOrNull});

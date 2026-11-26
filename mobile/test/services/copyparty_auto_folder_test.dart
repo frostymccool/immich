@@ -404,6 +404,33 @@ void main() {
       expect(plan.alternatives['2026-04-10 X4'], ['2026-04-10 X4']);
     });
 
+    test('an old day without GPS takes the places of the user\'s other Immich photos that day', () async {
+      final asked = <String>[];
+      final svc = AutoFolderService(
+        readInfo: (path) async =>
+            CameraFileInfo(model: 'Insta360 Luna Ultra', day: path.contains('1025') ? '2026-10-25' : '2026-10-26'),
+        placeNames: (_, _) async => const [],
+        phoneLocation: () async => (1.0, 2.0),
+        placesOnDay: (day) async {
+          asked.add(day);
+          return day == '2026-10-25' ? ['Testtown', 'Test State'] : const [];
+        },
+        now: () => DateTime(2026, 11, 26),
+      );
+      final plan = await svc.plan([
+        setOf('a', ['/card/VID_20261025_100000_00_001.insv']),
+        setOf('b', ['/card/VID_20261026_100000_00_002.insv']),
+      ]);
+      expect(plan.folderBySet, {'a': 'Testtown 2026-10-25 Luna Ultra', 'b': '2026-10-26 Luna Ultra'});
+      expect(plan.alternatives['Testtown 2026-10-25 Luna Ultra'], [
+        'Testtown 2026-10-25 Luna Ultra',
+        'Test State 2026-10-25 Luna Ultra',
+        '2026-10-25 Luna Ultra',
+      ]);
+      expect(asked.toSet(), {'2026-10-25', '2026-10-26'});
+      expect(plan.placeSource['2026-10-25'], 'your Immich photos that day');
+    });
+
     test('a failing place lookup leaves the place out', () async {
       final svc = AutoFolderService(
         readInfo: (_) async => const CameraFileInfo(model: 'Insta360 X4', day: '2026-05-03'),

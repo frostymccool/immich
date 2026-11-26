@@ -135,6 +135,37 @@ final autoFolderServiceProvider = Provider<AutoFolderService>((ref) {
       ].whereType<String>().where((n) => n.trim().isNotEmpty).toList();
     },
     phoneLocation: _phoneLocationForImport,
+    placesOnDay: (day) async {
+      // The user's own photos taken that (local) day, from their own Immich server: no third party.
+      final start = DateTime.parse(day);
+      final res = await ref
+          .read(apiServiceProvider)
+          .searchApi
+          .searchAssets(
+            MetadataSearchDto(
+              takenAfter: Optional.present(start.toUtc()),
+              takenBefore: Optional.present(start.add(const Duration(days: 1)).toUtc()),
+              withExif: const Optional.present(true),
+              size: const Optional.present(250),
+            ),
+          );
+      final cities = <String, int>{};
+      final areas = <String, int>{};
+      for (final a in res?.assets.items ?? const <AssetResponseDto>[]) {
+        final exif = a.exifInfo.isPresent ? a.exifInfo.value : null;
+        final city = exif != null && exif.city.isPresent ? exif.city.value : null;
+        final state = exif != null && exif.state.isPresent ? exif.state.value : null;
+        if (city != null && city.trim().isNotEmpty) {
+          cities[city] = (cities[city] ?? 0) + 1;
+        }
+        if (state != null && state.trim().isNotEmpty) {
+          areas[state] = (areas[state] ?? 0) + 1;
+        }
+      }
+      List<String> byCount(Map<String, int> m) =>
+          (m.entries.toList()..sort((x, y) => y.value - x.value)).map((e) => e.key).toList();
+      return [...byCount(cities), ...byCount(areas)];
+    },
     log: log.log,
   );
 });
