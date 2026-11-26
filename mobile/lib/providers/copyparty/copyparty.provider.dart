@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
@@ -83,14 +84,30 @@ class _DigestSink implements Sink<Digest> {
 /// the same file the uploader writes to.
 final copypartyLoggerProvider = Provider<CopypartyLogger>((ref) => CopypartyLogger.instance);
 
-/// Names import folders `<Place> <YYYY-MM-DD> <Camera>`. The place comes from the user's OWN Immich server
-/// (`/map/reverse-geocode`, the offline geodata Immich already uses), so no location goes to a third party.
+const _placeNameChannel = MethodChannel('immich/place_name');
+
+/// Names import folders `<Place> <YYYY-MM-DD> <Camera>`. The place is the CITY from Android's built-in geocoder
+/// (the user chose this: Immich's own geodata names only the nearest small place, e.g. a district instead of the
+/// city). Only a position rounded to about 1 km is sent, once per day of footage. When the phone has no
+/// geocoder or no answer, the user's own Immich server (`/map/reverse-geocode`) is asked instead.
 final autoFolderServiceProvider = Provider<AutoFolderService>((ref) {
   final log = ref.watch(copypartyLoggerProvider);
   return AutoFolderService(
     readInfo: CameraInfoReader().read,
     reverseGeocode: (lat, lon) async {
-      final hits = await ref.read(apiServiceProvider).mapApi.reverseGeocode(lat, lon);
+      final rLat = double.parse(lat.toStringAsFixed(2));
+      final rLon = double.parse(lon.toStringAsFixed(2));
+      try {
+        final r = await _placeNameChannel.invokeMapMethod<String, Object?>('cityAt', {'lat': rLat, 'lon': rLon});
+        final city = r?['city'] as String?;
+        if (city != null && city.trim().isNotEmpty) {
+          return city;
+        }
+        log.log('auto folders: phone geocoder gave no city; asking Immich');
+      } catch (e) {
+        log.log('auto folders: phone geocoder unavailable ($e); asking Immich');
+      }
+      final hits = await ref.read(apiServiceProvider).mapApi.reverseGeocode(rLat, rLon);
       final hit = hits?.firstOrNull;
       return hit?.city ?? hit?.state ?? hit?.country;
     },
