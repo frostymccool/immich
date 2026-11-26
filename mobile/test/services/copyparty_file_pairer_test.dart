@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
@@ -159,6 +161,41 @@ void main() {
 
     test('a lone .LRF preview is still skipped', () {
       expect(pairer.pairFiles([_f('CAM_20261127021113_0002_D.LRF')]), isEmpty);
+    });
+  });
+
+  group('Add folders says why nothing new was found', () {
+    // Bug: a card folder showed only "No new files found in that folder" with no way to tell whether the folder
+    // could not be read, held no camera files, or was already in the import.
+    late Directory tmp;
+    setUp(() => tmp = Directory.systemTemp.createTempSync('cp_scan_report_'));
+    tearDown(() => tmp.deleteSync(recursive: true));
+
+    test('a folder the app cannot open', () async {
+      final r = await pairer.scanDirectoryWithReport('${tmp.path}/missing');
+      expect(r.report.exists, isFalse);
+      expect(r.report.emptyReason, contains('could not open'));
+    });
+
+    test('a folder with no files the app can see', () async {
+      final r = await pairer.scanDirectoryWithReport(tmp.path);
+      expect(r.report.listed, 0);
+      expect(r.report.emptyReason, contains('found no files'));
+    });
+
+    test('files that are not camera footage name their types', () async {
+      File('${tmp.path}/notes.txt').writeAsStringSync('x');
+      File('${tmp.path}/CAM_20261127021113_0002_D.LRF').writeAsStringSync('x');
+      final r = await pairer.scanDirectoryWithReport(tmp.path);
+      expect(r.sets, isEmpty);
+      expect(r.report.emptyReason, allOf(contains('2 files'), contains('lrf'), contains('txt')));
+    });
+
+    test('everything already in this import', () async {
+      File('${tmp.path}/CAM_20261127021113_0001_D.OSV').writeAsStringSync('x');
+      final r = await pairer.scanDirectoryWithReport(tmp.path);
+      expect(r.report.grouped, 1);
+      expect(r.report.withAlreadyQueued(1).emptyReason, contains('already in this import'));
     });
   });
 }

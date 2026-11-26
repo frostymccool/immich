@@ -1951,7 +1951,14 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   /// Scan folders WITHOUT touching the live session (item 4): returns the found
   /// upload sets (rootPath set, receipts loaded) so a selection page can let the
   /// user pick before anything is appended to the ongoing task.
-  Future<List<UploadSet>> scanFolders(List<String> directoryPaths) async {
+  Future<List<UploadSet>> scanFolders(List<String> directoryPaths) async =>
+      (await scanFoldersWithReport(directoryPaths)).sets;
+
+  /// [scanFolders] plus why an empty result is empty (shown to the user and logged).
+  Future<({List<UploadSet> sets, List<FolderScanReport> reports})> scanFoldersWithReport(
+    List<String> directoryPaths,
+  ) async {
+    final reports = <FolderScanReport>[];
     final config = _ref.read(appConfigProvider).copyparty;
     final pairer = CopypartyFilePairer(
       triggerExtensions: config.triggerExtensions,
@@ -1961,17 +1968,24 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     // De-dup against files already queued so re-picking a folder can't double it.
     final existing = state.uploadSets.expand((s) => s.files).map((f) => f.localPath).toSet();
     for (final dir in directoryPaths) {
-      final sets = await pairer.scanDirectory(dir);
+      final scanned = await pairer.scanDirectoryWithReport(dir);
+      final sets = scanned.sets;
+      var queued = 0;
       for (final set in sets) {
         set.rootPath = dir;
+        final before = set.files.length;
         set.files.removeWhere((f) => existing.contains(f.localPath));
+        queued += before - set.files.length;
         for (final file in set.files) {
           file.existingReceipt = await _receiptRepo.findByLocalPath(file.localPath);
         }
       }
+      final report = scanned.report.withAlreadyQueued(queued);
+      _log.log('ADD FOLDERS ${report.logLine}');
+      reports.add(report);
       newSets.addAll(sets.where((s) => s.files.isNotEmpty));
     }
-    return newSets;
+    return (sets: newSets, reports: reports);
   }
 
   /// Append user-selected files from already-scanned sets to the live queue and

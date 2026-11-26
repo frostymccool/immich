@@ -33,14 +33,33 @@ class CopypartyFilePairer {
   ///
   /// [onFileFound] is called with the running total each time a file is
   /// discovered, so callers can show live progress.
-  Future<List<UploadSet>> scanDirectory(String directoryPath, {void Function(int count)? onFileFound}) async {
+  Future<List<UploadSet>> scanDirectory(String directoryPath, {void Function(int count)? onFileFound}) async =>
+      (await scanDirectoryWithReport(directoryPath, onFileFound: onFileFound)).sets;
+
+  /// Like [scanDirectory], plus what was seen, so an empty result can say why (folder not readable, no
+  /// files, or files that are not camera footage).
+  Future<({List<UploadSet> sets, FolderScanReport report})> scanDirectoryWithReport(
+    String directoryPath, {
+    void Function(int count)? onFileFound,
+  }) async {
     final dir = Directory(directoryPath);
     if (!dir.existsSync()) {
-      return [];
+      return (sets: <UploadSet>[], report: FolderScanReport(path: directoryPath, exists: false));
     }
-
     final allFiles = await _listFiles(dir, onFileFound: onFileFound);
-    return _pairFiles(allFiles);
+    final sets = _pairFiles(allFiles);
+    final grouped = sets.fold<int>(0, (n, s) => n + s.files.length);
+    final extensions = <String>{for (final f in allFiles) _ext(f.name)}..remove('');
+    return (
+      sets: sets,
+      report: FolderScanReport(
+        path: directoryPath,
+        exists: true,
+        listed: allFiles.length,
+        grouped: grouped,
+        extensions: extensions.toList()..sort(),
+      ),
+    );
   }
 
   /// Pairs a flat list of [FileInfo] objects into upload sets.
@@ -285,4 +304,67 @@ class FileInfo {
   final int lastModifiedMs;
 
   const FileInfo({required this.path, required this.name, required this.sizeBytes, required this.lastModifiedMs});
+}
+
+/// What a folder scan saw.
+class FolderScanReport {
+  final String path;
+
+  /// False when the app could not open the folder at this path at all.
+  final bool exists;
+
+  /// Files listed in the folder and its subfolders.
+  final int listed;
+
+  /// Files that formed upload groups (camera footage and its side files).
+  final int grouped;
+
+  /// Of [grouped], files already in the current import (not offered again).
+  final int alreadyQueued;
+
+  /// File types seen (lower case, no dot).
+  final List<String> extensions;
+
+  const FolderScanReport({
+    required this.path,
+    required this.exists,
+    this.listed = 0,
+    this.grouped = 0,
+    this.alreadyQueued = 0,
+    this.extensions = const [],
+  });
+
+  FolderScanReport withAlreadyQueued(int n) => FolderScanReport(
+    path: path,
+    exists: exists,
+    listed: listed,
+    grouped: grouped,
+    alreadyQueued: n,
+    extensions: extensions,
+  );
+
+  String get logLine =>
+      'scan $path: exists=$exists listed=$listed grouped=$grouped alreadyQueued=$alreadyQueued '
+      'types=${extensions.join(',')}';
+
+  /// Why nothing new was offered, in words.
+  String get emptyReason {
+    if (!exists) {
+      return 'The app could not open this folder ($path). If it is on a second card reader or USB drive, '
+          'pick it again from the card\'s top level, then open the folder.';
+    }
+    if (listed == 0) {
+      return 'The app found no files in this folder ($path). Android may not be letting the app read this '
+          'storage: pick the card again, or check the app has "All files access".';
+    }
+    if (grouped == 0) {
+      return 'None of the $listed file${listed == 1 ? '' : 's'} here look like camera footage '
+          '(types found: ${extensions.isEmpty ? 'none' : extensions.join(', ')}). Add the type to File matching in '
+          'Settings if it should be imported.';
+    }
+    if (alreadyQueued >= grouped) {
+      return 'All $grouped file${grouped == 1 ? ' in this folder is' : 's in this folder are'} already in this import.';
+    }
+    return 'No new files found in that folder.';
+  }
 }

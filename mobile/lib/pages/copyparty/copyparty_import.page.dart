@@ -261,6 +261,9 @@ class _AddFoldersSelectionPage extends ConsumerStatefulWidget {
 class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPage> {
   List<UploadSet>? _sets;
   String? _error;
+
+  /// Why the scan offered nothing (folder unreadable, no files, no camera files, all already queued).
+  String? _emptyReason;
   final Set<String> _selectedPaths = {};
   final Map<String, UploadDestination> _destinationOverrides = {};
   bool _adding = false;
@@ -348,10 +351,12 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
 
   Future<void> _scan() async {
     try {
-      final sets = await ref.read(importSessionProvider.notifier).scanFolders([widget.directoryPath]);
+      final scanned = await ref.read(importSessionProvider.notifier).scanFoldersWithReport([widget.directoryPath]);
+      final sets = scanned.sets;
       if (!mounted) {
         return;
       }
+      _emptyReason = scanned.reports.isEmpty ? null : scanned.reports.first.emptyReason;
       _planning = _plan(sets);
       setState(() {
         _sets = sets;
@@ -466,10 +471,10 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
             : sets == null
             ? const Center(child: CircularProgressIndicator())
             : sets.isEmpty
-            ? const Center(
+            ? Center(
                 child: Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text('No new files found in that folder.', textAlign: TextAlign.center),
+                  padding: const EdgeInsets.all(24),
+                  child: Text(_emptyReason ?? 'No new files found in that folder.', textAlign: TextAlign.center),
                 ),
               )
             : _buildList(context, sets),
