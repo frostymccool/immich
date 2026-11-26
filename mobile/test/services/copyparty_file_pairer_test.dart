@@ -70,8 +70,35 @@ void main() {
       expect(sets.single.files, hasLength(2));
     });
 
-    test('a lone non-trigger file does not create a set', () {
-      expect(pairer.pairFiles([_f('VID_20261018_072236_00_004.mp4')]), isEmpty);
+    test('hidden files and folders are ignored', () {
+      expect(pairer.pairFiles([_f('._DSC_0042.JPG'), _f('x.jpg', dir: '/sd/.thumbnails')]), isEmpty);
+    });
+
+    test('a lone side file (not a photo or video) does not create a set', () {
+      expect(pairer.pairFiles([_f('DJI_0001.SRT')]), isEmpty);
+    });
+
+    test('photos and videos from other cameras are picked up without being trigger types', () {
+      final sets = pairer.pairFiles([
+        _f('DJI_20261025123456_0001_D.MP4'),
+        _f('DJI_20261025123456_0001_D.SRT'),
+        _f('DJI_20261025123456_0001_D.LRF'),
+        _f('DSC_0042.JPG'),
+        _f('DSC_0042.NEF'),
+        _f('P1010001.ORF'),
+        _f('VID_20261018_072236_00_004.mp4'),
+      ]);
+      final groups = sets.map((s) => (s.files.map((f) => f.filename).toList()..sort()).join(' + ')).toList();
+      expect(groups, hasLength(4));
+      expect(
+        groups,
+        containsAll([
+          'DJI_20261025123456_0001_D.LRF + DJI_20261025123456_0001_D.MP4 + DJI_20261025123456_0001_D.SRT',
+          'DSC_0042.JPG + DSC_0042.NEF',
+          'P1010001.ORF',
+          'VID_20261018_072236_00_004.mp4',
+        ]),
+      );
     });
 
     test('normalise: non-Insta360 names keep the old prefix stripping', () {

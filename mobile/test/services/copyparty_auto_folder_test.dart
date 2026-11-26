@@ -241,6 +241,25 @@ void main() {
       expect(info.lon, closeTo(-70.25, 1e-4));
     });
 
+    test('RAW files: Olympus ORF and Nikon NEF are read like TIFF', () {
+      final jpeg = jpegWithExif(make: 'OLYMPUS CORPORATION', model: 'E-M1MarkIII');
+      // The TIFF block inside the JPEG's APP1, with the header mark swapped for ORF's "IIRO".
+      final tiffAt = jpeg.indexOf(0x49, 10); // first "I" of "II*"
+      final orf = Uint8List.fromList(jpeg.sublist(tiffAt))
+        ..[2] = 0x52
+        ..[3] = 0x4f;
+      expect(CameraInfoReader.parseExif(orf).model, 'E-M1MarkIII');
+      final nef = Uint8List.fromList(jpeg.sublist(tiffAt));
+      expect(CameraInfoReader.parseExif(nef).make, 'OLYMPUS CORPORATION');
+      expect(CameraInfoReader.isPhoto('/card/P1010001.ORF'), isTrue);
+      expect(CameraInfoReader.isPhoto('/card/DSC_0042.NEF'), isTrue);
+    });
+
+    test('DJI file names give the day', () {
+      expect(CameraInfoReader.dayFromFilename('DJI_20261025123456_0001_D.MP4'), '2026-10-25');
+      expect(CameraInfoReader.dayFromFilename('DJI_0001.JPG'), isNull);
+    });
+
     test('a photo with GPS 0,0 counts as no GPS', () {
       final info = CameraInfoReader.parseExif(jpegWithExif(lat: 0, lon: 0));
       expect(info.hasGps, isFalse);
@@ -261,6 +280,17 @@ void main() {
       expect(shortCameraName('HERO9 Black'), 'HERO9 Black');
       expect(shortCameraName('GoPro HERO12 Black'), 'HERO12 Black');
       expect(shortCameraName(null), isNull);
+      // Other makers: brand + model, from EXIF Make and Model.
+      expect(shortCameraName('NIKON Z 6_2', make: 'NIKON CORPORATION'), 'Nikon Z 6_2');
+      expect(shortCameraName('NIKON D7500', make: 'NIKON CORPORATION'), 'Nikon D7500');
+      expect(shortCameraName('E-M1MarkIII', make: 'OLYMPUS CORPORATION'), 'Olympus E-M1MarkIII');
+      expect(shortCameraName('E-M5MarkII', make: 'OLYMPUS IMAGING CORP.'), 'Olympus E-M5MarkII');
+      expect(shortCameraName('OM-1', make: 'OM Digital Solutions'), 'OM System OM-1');
+      expect(shortCameraName('FC3582', make: 'DJI'), 'DJI Mini 3 Pro');
+      expect(shortCameraName('FC9999', make: 'DJI'), 'DJI FC9999', reason: 'unknown codes are kept, never guessed');
+      expect(shortCameraName('Canon EOS R5', make: 'Canon'), 'Canon EOS R5');
+      expect(shortCameraName('X4', make: 'Arashi Vision'), 'X4');
+      expect(shortCameraName('HERO9 Black', make: 'GoPro'), 'HERO9 Black');
     });
 
     test('place names lose Latin accents and unsafe characters', () {

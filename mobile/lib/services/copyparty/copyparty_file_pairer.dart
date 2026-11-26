@@ -104,6 +104,10 @@ class CopypartyFilePairer {
     // Group files by directory
     final byDir = <String, List<FileInfo>>{};
     for (final f in files) {
+      // Hidden files and folders (".thumbnails", "._x.jpg" from a Mac…) are never camera footage.
+      if (f.path.split('/').any((part) => part.startsWith('.') && part != '.' && part != '..')) {
+        continue;
+      }
       final dir = f.path.substring(0, f.path.lastIndexOf('/'));
       byDir.putIfAbsent(dir, () => []).add(f);
     }
@@ -127,9 +131,13 @@ class CopypartyFilePairer {
 
     // Find stems that contain at least one trigger file
     final triggerStems = <String>{};
+    // A group starts from a trigger file (Insta360 by default) OR any photo/video/RAW file, so cards from
+    // other cameras (DJI, Nikon, Olympus, GoPro…) are picked up whatever the trigger list says. Side files with
+    // the same name (DJI .SRT/.LRF, .XMP, .THM…) join their group; a side file on its own is still skipped.
     for (final entry in stemMap.entries) {
       for (final f in entry.value) {
-        if (triggerExtensions.contains(_ext(f.name))) {
+        final ext = _ext(f.name);
+        if (triggerExtensions.contains(ext) || _isNativeImmichFile(ext)) {
           triggerStems.add(entry.key);
           break;
         }
@@ -214,6 +222,7 @@ class CopypartyFilePairer {
     'mkv',
     'webm',
     'raw',
+    'dng',
     'arw',
     'cr2',
     'cr3',

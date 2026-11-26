@@ -40,7 +40,8 @@ class CameraFileInfo {
 /// of .insv/.mp4/.insp files. Reads only small parts of each file (the first 256 KiB of a photo, the
 /// trailer's index and info record of a video), never the gyro data or the video itself.
 class CameraInfoReader {
-  static const _photoExt = {'jpg', 'jpeg', 'insp', 'dng'};
+  // RAW: DNG/NEF/ARW/CR2 are TIFF files; Olympus ORF and Panasonic RW2 are TIFF with their own header mark.
+  static const _photoExt = {'jpg', 'jpeg', 'insp', 'dng', 'nef', 'orf', 'arw', 'cr2', 'rw2'};
   static const _videoExt = {'insv', 'mp4', 'mov'};
   static const exifReadBytes = 256 * 1024;
 
@@ -81,7 +82,10 @@ class CameraInfoReader {
 
   /// `VID_20260502_143012_00_057.insv` → `2026-05-02` (Insta360 and similar names hold the camera's wall clock).
   static String? dayFromFilename(String name) {
-    final m = RegExp(r'^[A-Za-z]{2,4}_(\d{4})(\d{2})(\d{2})_\d{6}_').firstMatch(name);
+    // Insta360 `VID_20260502_143012_…`, DJI `DJI_20260502143012_0001_D.MP4`.
+    final m =
+        RegExp(r'^[A-Za-z]{2,4}_(\d{4})(\d{2})(\d{2})_\d{6}_').firstMatch(name) ??
+        RegExp(r'^[A-Za-z]{2,4}_(\d{4})(\d{2})(\d{2})\d{6}_').firstMatch(name);
     if (m == null) {
       return null;
     }
@@ -110,11 +114,13 @@ class CameraInfoReader {
     }
   }
 
+  static bool _rawMark(int c2, int c3) => (c2 == 0x52 && (c3 == 0x4f || c3 == 0x53)) || (c2 == 0x55 && c3 == 0);
+
   static int? _findTiff(Uint8List b) {
     if (b.length >= 4 &&
-        ((b[0] == 0x49 && b[1] == 0x49 && b[2] == 42 && b[3] == 0) ||
-            (b[0] == 0x4d && b[1] == 0x4d && b[2] == 0 && b[3] == 42))) {
-      return 0; // TIFF/DNG
+        ((b[0] == 0x49 && b[1] == 0x49 && ((b[2] == 42 && b[3] == 0) || _rawMark(b[2], b[3]))) ||
+            (b[0] == 0x4d && b[1] == 0x4d && ((b[2] == 0 && b[3] == 42) || (b[2] == 0x4f && b[3] == 0x52))))) {
+      return 0; // TIFF / DNG / NEF / ARW / CR2, Olympus ORF ("IIRO", "IIRS", "MMOR"), Panasonic RW2 ("IIU")
     }
     if (b.length < 4 || b[0] != 0xFF || b[1] != 0xD8) {
       return null;

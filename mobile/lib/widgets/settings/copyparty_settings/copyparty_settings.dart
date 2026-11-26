@@ -850,7 +850,10 @@ class _TriggerExtensionsTile extends ConsumerWidget {
       padding: const EdgeInsets.only(left: 8.0),
       child: SettingListTile(
         title: 'Trigger extensions',
-        subtitle: exts.map((e) => '.$e').join(', '),
+        subtitle:
+            '${exts.map((e) => '.$e').join(', ')}\n'
+            'Files that start a group (with same-named files such as previews). Photos, videos and RAW '
+            'files from any camera are always picked up.',
         leading: const Icon(Icons.extension_outlined),
         onTap: () => _showTextDialog(
           context,

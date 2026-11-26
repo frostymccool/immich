@@ -44,17 +44,91 @@ class AutoFolderPlan {
   );
 }
 
-/// Only the maker prefix is dropped, never one model mapped to another (each camera keeps its own name):
-/// `Insta360 X4` → `X4`, `Insta360 Luna Ultra` → `Luna Ultra`, `GoPro HERO9 Black` → `HERO9 Black`.
-String? shortCameraName(String? model) {
+/// The camera's name for a folder.
+///
+/// Insta360 and GoPro: the model without the maker (`Insta360 X4` → `X4`, `GoPro HERO9 Black` → `HERO9 Black`).
+/// Other makers: brand + model, the brand tidied from EXIF Make and not repeated (`NIKON CORPORATION` +
+/// `NIKON Z 6_2` → `Nikon Z 6_2`, `OLYMPUS CORPORATION` + `E-M1MarkIII` → `Olympus E-M1MarkIII`). DJI's internal
+/// camera codes are named when known (`FC3582` → `DJI Mini 3 Pro`), else kept (`DJI FC1234`). One model is never
+/// mapped to a different camera.
+String? shortCameraName(String? model, {String? make}) {
   if (model == null) {
     return null;
   }
   var m = model.replaceAll(RegExp(r'\s+'), ' ').trim();
-  m = m.replaceFirst(RegExp(r'^(insta360|arashi vision|gopro)\s+', caseSensitive: false), '').trim();
-  m = sanitizeFolderName(m);
-  return m.isEmpty ? null : m;
+  final makerPrefix = RegExp(r'^(insta360|arashi vision|gopro)\s+', caseSensitive: false);
+  final insta360OrGoPro =
+      makerPrefix.hasMatch(m) || RegExp(r'^(insta360|arashi|gopro)', caseSensitive: false).hasMatch(make?.trim() ?? '');
+  final brand = insta360OrGoPro ? null : _brandOf(make);
+  if (brand == null) {
+    m = sanitizeFolderName(m.replaceFirst(makerPrefix, '').trim());
+    return m.isEmpty ? null : m;
+  }
+  m = m.replaceFirst(RegExp('^${RegExp.escape(brand)}\\s+', caseSensitive: false), '');
+  final makeWord = make!.trim().split(RegExp(r'\s+')).first;
+  m = m.replaceFirst(RegExp('^${RegExp.escape(makeWord)}\\s+', caseSensitive: false), '').trim();
+  if (brand == 'DJI') {
+    m = _djiCameraCodes[m.toUpperCase()] ?? m;
+  }
+  final out = sanitizeFolderName(m.isEmpty ? brand : '$brand $m');
+  return out.isEmpty ? null : out;
 }
+
+const _brands = {
+  'nikon': 'Nikon',
+  'olympus': 'Olympus',
+  'om digital solutions': 'OM System',
+  'om system': 'OM System',
+  'dji': 'DJI',
+  'canon': 'Canon',
+  'sony': 'Sony',
+  'fujifilm': 'Fujifilm',
+  'panasonic': 'Panasonic',
+  'samsung': 'Samsung',
+  'apple': 'Apple',
+  'google': 'Google',
+  'leica': 'Leica',
+  'ricoh': 'Ricoh',
+  'pentax': 'Pentax',
+  'hasselblad': 'Hasselblad',
+};
+
+/// EXIF Make → a short brand: known makers by name, else the first word (Title case when all capitals).
+String? _brandOf(String? make) {
+  final raw = make?.trim() ?? '';
+  if (raw.isEmpty) {
+    return null;
+  }
+  final norm = raw
+      .toLowerCase()
+      .replaceAll(RegExp(r'[,.]'), ' ')
+      .replaceAll(RegExp(r'\b(corporation|corp|imaging|co|ltd|inc|company)\b'), '')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  for (final e in _brands.entries) {
+    if (norm == e.key || norm.startsWith('${e.key} ')) {
+      return e.value;
+    }
+  }
+  final word = raw.split(RegExp(r'\s+')).first;
+  return word == word.toUpperCase() && word.length > 3 ? word[0] + word.substring(1).toLowerCase() : word;
+}
+
+/// DJI writes an internal camera code as the EXIF model. Only codes known for certain are named; others stay.
+const _djiCameraCodes = {
+  'FC220': 'Mavic Pro',
+  'FC6310': 'Phantom 4 Pro',
+  'FC2103': 'Mavic Air',
+  'FC7203': 'Mavic Mini',
+  'FC7303': 'Mini 2',
+  'FC3170': 'Mavic Air 2',
+  'FC3411': 'Air 2S',
+  'FC3582': 'Mini 3 Pro',
+  'FC3682': 'Mini 3',
+  'FC8482': 'Mini 4 Pro',
+  'L1D-20C': 'Mavic 2 Pro',
+  'FC2204': 'Mavic 2 Zoom',
+};
 
 /// A folder name copyparty and every OS accept: no slashes or reserved characters, no leading dot,
 /// single spaces, at most 100 characters.
@@ -105,7 +179,7 @@ String? _validSerial(String? serial) {
 /// Two cameras of the same model (different serials) get the serial's last 4 characters appended.
 /// Place: [placeByDay] for the set's day; left out when unknown.
 AutoFolderPlan planFolders(List<SetFacts> sets, Map<String, String?> placeByDay) {
-  final label = <String, String?>{for (final s in sets) s.setId: shortCameraName(s.info.model)};
+  final label = <String, String?>{for (final s in sets) s.setId: shortCameraName(s.info.model, make: s.info.make)};
   final counts = <String, int>{};
   for (final l in label.values.whereType<String>()) {
     counts[l] = (counts[l] ?? 0) + 1;
