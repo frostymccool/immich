@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -2276,6 +2277,7 @@ class _UploadProgressStep extends ConsumerWidget {
               rootPath: orderedSets[i].rootPath ?? session.directoryPath,
               onSkipFile: (f) => ref.read(importSessionProvider.notifier).skipCurrentFile(f.localPath),
               onRetryFile: (f) => ref.read(importSessionProvider.notifier).retryFile(f.localPath),
+              onKeepOriginal: (f) => ref.read(importSessionProvider.notifier).keepOriginal(f.localPath),
             ),
           ),
         ),
@@ -2369,7 +2371,15 @@ class _ProgressSetSection extends StatelessWidget {
   final String? rootPath;
   final void Function(UploadFile)? onSkipFile;
   final void Function(UploadFile)? onRetryFile;
-  const _ProgressSetSection({required this.set, this.selectedPaths, this.rootPath, this.onSkipFile, this.onRetryFile});
+  final void Function(UploadFile)? onKeepOriginal;
+  const _ProgressSetSection({
+    required this.set,
+    this.selectedPaths,
+    this.rootPath,
+    this.onSkipFile,
+    this.onRetryFile,
+    this.onKeepOriginal,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -2424,6 +2434,7 @@ class _ProgressSetSection extends StatelessWidget {
               file: f,
               onSkip: onSkipFile == null ? null : () => onSkipFile!(f),
               onRetry: onRetryFile == null ? null : () => onRetryFile!(f),
+              onKeepOriginal: onKeepOriginal == null ? null : () => onKeepOriginal!(f),
             ),
           ),
         ),
@@ -2479,7 +2490,9 @@ class CopypartyProgressFileCard extends StatefulWidget {
   final VoidCallback? onSkip;
   // Invoked from the skipped-file card's retry icon to requeue it.
   final VoidCallback? onRetry;
-  const CopypartyProgressFileCard({super.key, required this.file, this.onSkip, this.onRetry});
+  // Skips the background check of the original before its delete; the original is kept.
+  final VoidCallback? onKeepOriginal;
+  const CopypartyProgressFileCard({super.key, required this.file, this.onSkip, this.onRetry, this.onKeepOriginal});
 
   @override
   State<CopypartyProgressFileCard> createState() => _ProgressFileCardState();
@@ -2728,8 +2741,43 @@ class _ProgressFileCardState extends State<CopypartyProgressFileCard> {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
+                  // The check of the original running in the background (the queue moved on), with a way to skip it.
+                  if (file.sourceCheckPending) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Icon(Icons.fact_check_outlined, size: 14, color: context.colorScheme.tertiary),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            file.sourceCheckBytes > 0
+                                ? 'Checking the original before deleting it: '
+                                      '${(file.sourceCheckBytes * 100 / max(1, file.sizeBytes)).clamp(0, 100).toStringAsFixed(0)}%'
+                                : 'Waiting to check the original before deleting it',
+                            style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.tertiary),
+                          ),
+                        ),
+                        if (widget.onKeepOriginal != null)
+                          Tooltip(
+                            message: 'Skip the check and keep the original (delete it later in Free up space)',
+                            child: InkWell(
+                              onTap: widget.onKeepOriginal,
+                              borderRadius: BorderRadius.circular(10),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                child: Icon(
+                                  Icons.skip_next_rounded,
+                                  size: 18,
+                                  color: context.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
                   // Whether the original was deleted, in full (never cut off).
-                  if (file.sourceNote != null) ...[
+                  if (file.sourceNote != null && !file.sourceCheckPending) ...[
                     const SizedBox(height: 4),
                     Text(
                       file.sourceNote!,

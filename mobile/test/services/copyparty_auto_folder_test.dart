@@ -324,6 +324,27 @@ void main() {
       expect(plan.folderBySet.values.toSet(), {'2026-05-02 X4 1111', '2026-05-02 X4 2222'});
     });
 
+    test('a field that is not a real serial never splits one camera into two folders', () {
+      final plan = planFolders([
+        const SetFacts(
+          setId: 'a',
+          day: '2026-05-02',
+          info: CameraFileInfo(model: 'Insta360 X4', serial: 'TESTAAAA1111'),
+        ),
+        const SetFacts(
+          setId: 'b',
+          day: '2026-05-02',
+          info: CameraFileInfo(model: 'Insta360 X4', serial: 'v1.0.44'),
+        ),
+        const SetFacts(
+          setId: 'c',
+          day: '2026-05-02',
+          info: CameraFileInfo(model: 'Insta360 X4'),
+        ),
+      ], {});
+      expect(plan.folderBySet.values.toSet(), {'2026-05-02 X4'});
+    });
+
     test('renames apply to every set in that folder', () {
       const plan = AutoFolderPlan({'a': '2026-05-02 X4', 'b': '2026-05-02 X4'});
       expect(plan.renamed({'2026-05-02 X4': 'Reef dive/2'}).folderBySet.values.toSet(), {'Reef dive 2'});

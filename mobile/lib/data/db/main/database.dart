@@ -539,7 +539,14 @@ Future<void> ensureCopypartyReceiptColumns(
   };
   for (final e in added.entries) {
     if (!names.contains(e.key)) {
-      await exec('ALTER TABLE copyparty_upload_receipts ADD COLUMN ${e.key} ${e.value}');
+      try {
+        await exec('ALTER TABLE copyparty_upload_receipts ADD COLUMN ${e.key} ${e.value}');
+      } catch (err) {
+        // Another connection or isolate opening the same database added it first: fine.
+        if (!'$err'.contains('duplicate column')) {
+          rethrow;
+        }
+      }
     }
   }
 }

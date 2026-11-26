@@ -650,6 +650,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     // A new run (Start, Resume or Retry) gives every file fresh stall retries and source checks.
     _noProgressRetries.clear();
     _sourceChecks.clear();
+    _keepOriginalTokens.clear();
+    _checkChain = Future<void>.value();
     _deleteBlocked = null;
     state = state.copyWith(clearNotice: true);
     // Auto-delete on: check once, up front, that this card's originals can be deleted at all, so a
@@ -1101,117 +1103,46 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             // "both"/Immich file is only removed once it's confirmed in Immich —
             // not just on copyparty. Runs for copyparty-only files too.
             if (config.autoDeleteAfterVerify && file.safeToDelete && receiptId != null) {
-              // When we uploaded from a STAGED copy the source was read only once,
-              // so a transient read corruption would be self-consistent (its hash
-              // matches the corrupt bytes the server accepted). Before the
-              // IRREVERSIBLE source delete, re-read the source once and confirm it
-              // still matches what we uploaded. This restores the cross-check the
-              // direct (double-read) path gets for free. (data-integrity finding 2)
-              var safeToRemove = true;
-              if (staged != null) {
-                // Once staged, nothing else in the pipeline needs the ORIGINAL
-                // source again — this re-hash is the one exception, and only to
-                // sanity-check before an irreversible delete. Check existence
-                // first rather than going straight to a full streamed read: a
-                // source that's gone (card removed/unmounted) should be a quick,
-                // ordinary "can't verify, keep it" — not a full-file read
-                // against a torn-down mount, which is exactly the kind of
-                // access this project has previously seen cause USB-unmount
-                // crashes (see CLAUDE.md). No delete is safe without a source
-                // to compare against anyway.
-                bool sourceStillThere;
-                try {
-                  sourceStillThere = File(file.localPath).existsSync();
-                } catch (_) {
-                  sourceStillThere = false;
-                }
-                if (!sourceStillThere) {
-                  safeToRemove = false;
-                  file.sourceNote = 'Original kept: it could not be found on the card to check against the upload.';
-                  _log.log('AUTO-DELETE SKIPPED for ${file.filename}: source gone — nothing to verify against');
-                } else {
-                  try {
-                    // Normally already finished (it ran alongside the upload). If not, show it with
-                    // progress instead of a card that looks done at 100%.
-                    final check = _startSourceCheck(file, cancelToken);
-                    Timer? ticker;
-                    if (!check.done) {
-                      file.status = UploadFileStatus.verifyingSource;
-                      file.uploadedBytes = check.bytes;
-                      _notify();
-                      ticker = Timer.periodic(const Duration(milliseconds: 500), (_) {
-                        file.uploadedBytes = check.bytes;
-                        _notify();
-                      });
-                    }
-                    final String srcHash;
-                    try {
-                      // Skip/Stop on this file abandons the wait (and the delete), never the safety rule.
-                      srcHash = await Future.any<String>([
-                        check.hash,
-                        fileToken.future.then<String>((_) => throw const CopypartyCancelledException()),
-                      ]);
-                    } finally {
-                      ticker?.cancel();
-                    }
-                    file.uploadedBytes = file.sizeBytes;
-                    safeToRemove = srcHash == file.sha512;
-                    final uploadedHashes = file.cachedHash;
-                    if (safeToRemove && uploadedHashes != null) {
-                      // The independent read matched: the saved hashes now stand for the card file too.
-                      try {
-                        await _receiptRepo.saveCheckedHashes(
-                          receiptId,
-                          chunkHashes: uploadedHashes.chunkHashes,
-                          chunkSizeBytes: uploadedHashes.chunkSizeBytes,
-                          sha1Base64: uploadedHashes.sha1Base64,
-                          sourceMtimeMs: _cardMtimeMs(file),
-                        );
-                      } catch (_) {}
-                    }
-                    if (!safeToRemove) {
-                      file.sourceNote =
-                          'Original kept on the card: it does not match what was uploaded (possible bad read). '
-                          'The upload itself is complete.';
-                      _log.log(
-                        'AUTO-DELETE BLOCKED for ${file.filename}: source hash != uploaded hash '
-                        '(possible bad read) — keeping the source file',
-                      );
-                    }
-                  } on CopypartyCancelledException {
-                    // Stopped during the check: never delete without a finished check.
-                    safeToRemove = false;
-                    file.sourceNote = 'Original kept on the card: the check before deleting was stopped.';
-                  } catch (_) {
-                    // Source unreadable (e.g. card pulled mid-check) → never delete.
-                    safeToRemove = false;
-                    file.sourceNote = 'Original kept on the card: it could not be read to check it.';
-                  }
-                }
+              final pendingCheck = staged != null ? _sourceChecks[file.localPath] : null;
+              if (staged != null && (pendingCheck == null || !pendingCheck.done)) {
+                // The check re-reads the original from the (slow) card. Don't hold the queue for it: the next
+                // files upload while it finishes, and the original is deleted then (or kept, with the reason).
+                final keep = _keepOriginalToken(file.localPath);
+                file.sourceCheckPending = true;
+                file.sourceNote = 'Uploaded. The original is deleted once it has been checked against the upload.';
+                _log.log('SOURCE ${file.filename}: check continues in the background; queue moves on');
+                final id = receiptId;
+                final st = staged;
+                late final Future<void> pending;
+                pending =
+                    _finishSourceDelete(
+                          file: file,
+                          receiptId: id,
+                          staged: st,
+                          cancelToken: cancelToken,
+                          giveUp: Future.any<void>([keep.future, cancelToken.future]),
+                          inline: false,
+                        )
+                        .catchError((Object e) {
+                          file.sourceNote = 'Original kept on the card: the check before deleting failed ($e).';
+                        })
+                        .whenComplete(() {
+                          file.sourceCheckPending = false;
+                          _keepOriginalTokens.remove(file.localPath);
+                          _pendingSourceDeletes.remove(pending);
+                          _notify();
+                        });
+                _pendingSourceDeletes.add(pending);
+              } else {
+                await _finishSourceDelete(
+                  file: file,
+                  receiptId: receiptId,
+                  staged: staged,
+                  cancelToken: cancelToken,
+                  giveUp: fileToken.future,
+                  inline: true,
+                );
               }
-              if (safeToRemove && _deleteBlocked != null) {
-                file.sourceNote = 'Original kept on the card: ${DeleteFailureExplanation.of(_deleteBlocked!).cause}';
-              } else if (safeToRemove) {
-                final deleted = await _sourceDeleter.delete(file.localPath);
-                if (deleted.ok) {
-                  file.sourceNote = staged != null
-                      ? 'Original deleted from the card (checked: it matched the upload).'
-                      : 'Original deleted from the card.';
-                  try {
-                    await _receiptRepo.markSourceDeleted(receiptId);
-                  } catch (_) {}
-                  // This file just left Pending Cleanup (auto-deleted) — keep
-                  // the badge count in sync the same way a fresh receipt does.
-                  _ref.invalidate(pendingCleanupProvider);
-                } else {
-                  // Say it once for the run, keep this and every later original, and stop trying.
-                  _deleteBlocked = deleted.reason;
-                  file.sourceNote =
-                      'Original kept on the card: ${DeleteFailureExplanation.of(deleted.reason ?? '').cause}';
-                  state = state.copyWith(notice: originalsKeptNotice(deleted.reason ?? 'unknown'));
-                }
-              }
-              _log.log('SOURCE ${file.filename}: ${file.sourceNote}');
             }
 
             // Freeze the transfer duration so "total · elapsed · avg" is stable in
@@ -1377,6 +1308,16 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       // returning. On cancel each copy holds the now-completed token, aborts
       // within a chunk and self-deletes its partial, so awaiting them guarantees
       // no detached writer survives into a later resume. (review finding 2)
+      // Checks of originals that ran on in the background: finish them (and their deletes) before the run ends,
+      // still under the wakelock and foreground service. Stop/Pause end them at once (originals kept).
+      if (_pendingSourceDeletes.isNotEmpty) {
+        _log.log('finishing ${_pendingSourceDeletes.length} background check(s) of originals before the run ends');
+        for (final d in List<Future<void>>.of(_pendingSourceDeletes)) {
+          try {
+            await d;
+          } catch (_) {}
+        }
+      }
       final filler = _cacheFillFuture;
       if (filler != null) {
         try {
@@ -2116,6 +2057,159 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   /// upload is interrupted and resumes, so the card is not read a third time.
   final Map<String, _SourceCheck> _sourceChecks = {};
 
+  /// Checks of originals still running in the background (the queue moved on); awaited before the run ends.
+  final List<Future<void>> _pendingSourceDeletes = [];
+
+  /// Per file: "keep the original" — stops its check and keeps it (it stays in Pending Cleanup).
+  final Map<String, Completer<void>> _keepOriginalTokens = {};
+
+  /// One card read at a time for the checks: several at once, next to the caching read, slow every one of them.
+  Future<void> _checkChain = Future<void>.value();
+
+  Completer<void> _keepOriginalToken(String localPath) => _keepOriginalTokens.putIfAbsent(localPath, Completer.new);
+
+  /// The user chose to skip the check before deleting [localPath]: the original is kept.
+  void keepOriginal(String localPath) {
+    final t = _keepOriginalTokens[localPath];
+    if (t != null && !t.isCompleted) {
+      _log.log('KEEP ORIGINAL requested for ${localPath.split('/').last}: check stopped, original kept');
+      t.complete();
+      _notify();
+    }
+  }
+
+  /// Checks the original against the upload (an independent re-read for a staged upload) and deletes it.
+  /// [inline]: the loop waits (the check is done, or the upload was read straight from the card); otherwise it
+  /// runs in the background while the next files upload. [giveUp] = skip / keep original / stop.
+  Future<void> _finishSourceDelete({
+    required UploadFile file,
+    required int receiptId,
+    required HashedFile? staged,
+    required Completer<void> cancelToken,
+    required Future<void> giveUp,
+    required bool inline,
+  }) async {
+    // When we uploaded from a STAGED copy the source was read only once,
+    // so a transient read corruption would be self-consistent (its hash
+    // matches the corrupt bytes the server accepted). Before the
+    // IRREVERSIBLE source delete, re-read the source once and confirm it
+    // still matches what we uploaded. This restores the cross-check the
+    // direct (double-read) path gets for free. (data-integrity finding 2)
+    var safeToRemove = true;
+    if (staged != null) {
+      // Once staged, nothing else in the pipeline needs the ORIGINAL
+      // source again — this re-hash is the one exception, and only to
+      // sanity-check before an irreversible delete. Check existence
+      // first rather than going straight to a full streamed read: a
+      // source that's gone (card removed/unmounted) should be a quick,
+      // ordinary "can't verify, keep it" — not a full-file read
+      // against a torn-down mount, which is exactly the kind of
+      // access this project has previously seen cause USB-unmount
+      // crashes (see CLAUDE.md). No delete is safe without a source
+      // to compare against anyway.
+      bool sourceStillThere;
+      try {
+        sourceStillThere = File(file.localPath).existsSync();
+      } catch (_) {
+        sourceStillThere = false;
+      }
+      if (!sourceStillThere) {
+        safeToRemove = false;
+        file.sourceNote = 'Original kept: it could not be found on the card to check against the upload.';
+        _log.log('AUTO-DELETE SKIPPED for ${file.filename}: source gone — nothing to verify against');
+      } else {
+        try {
+          // Normally already finished (it ran alongside the upload). If not, show it with
+          // progress instead of a card that looks done at 100%.
+          final check = _startSourceCheck(file, cancelToken);
+          Timer? ticker;
+          if (!check.done) {
+            // Inline (the loop waits) it is the file's status; in the background the card shows it on its own line.
+            if (inline) {
+              file.status = UploadFileStatus.verifyingSource;
+              file.uploadedBytes = check.bytes;
+            }
+            file.sourceCheckBytes = check.bytes;
+            _notify();
+            ticker = Timer.periodic(const Duration(milliseconds: 500), (_) {
+              if (inline) {
+                file.uploadedBytes = check.bytes;
+              }
+              file.sourceCheckBytes = check.bytes;
+              _notify();
+            });
+          }
+          final String srcHash;
+          try {
+            // Skip / Keep original / Stop abandons the wait (and the delete), never the safety rule.
+            srcHash = await Future.any<String>([
+              check.hash,
+              giveUp.then<String>((_) => throw const CopypartyCancelledException()),
+            ]);
+          } finally {
+            ticker?.cancel();
+          }
+          if (inline) {
+            file.uploadedBytes = file.sizeBytes;
+          }
+          safeToRemove = srcHash == file.sha512;
+          final uploadedHashes = file.cachedHash;
+          if (safeToRemove && uploadedHashes != null) {
+            // The independent read matched: the saved hashes now stand for the card file too.
+            try {
+              await _receiptRepo.saveCheckedHashes(
+                receiptId,
+                chunkHashes: uploadedHashes.chunkHashes,
+                chunkSizeBytes: uploadedHashes.chunkSizeBytes,
+                sha1Base64: uploadedHashes.sha1Base64,
+                sourceMtimeMs: _cardMtimeMs(file),
+              );
+            } catch (_) {}
+          }
+          if (!safeToRemove) {
+            file.sourceNote =
+                'Original kept on the card: it does not match what was uploaded (possible bad read). '
+                'The upload itself is complete.';
+            _log.log(
+              'AUTO-DELETE BLOCKED for ${file.filename}: source hash != uploaded hash '
+              '(possible bad read) — keeping the source file',
+            );
+          }
+        } on CopypartyCancelledException {
+          // Stopped during the check: never delete without a finished check.
+          safeToRemove = false;
+          file.sourceNote = 'Original kept on the card: the check before deleting was stopped.';
+        } catch (_) {
+          // Source unreadable (e.g. card pulled mid-check) → never delete.
+          safeToRemove = false;
+          file.sourceNote = 'Original kept on the card: it could not be read to check it.';
+        }
+      }
+    }
+    if (safeToRemove && _deleteBlocked != null) {
+      file.sourceNote = 'Original kept on the card: ${DeleteFailureExplanation.of(_deleteBlocked!).cause}';
+    } else if (safeToRemove) {
+      final deleted = await _sourceDeleter.delete(file.localPath);
+      if (deleted.ok) {
+        file.sourceNote = staged != null
+            ? 'Original deleted from the card (checked: it matched the upload).'
+            : 'Original deleted from the card.';
+        try {
+          await _receiptRepo.markSourceDeleted(receiptId);
+        } catch (_) {}
+        // This file just left Pending Cleanup (auto-deleted) — keep
+        // the badge count in sync the same way a fresh receipt does.
+        _ref.invalidate(pendingCleanupProvider);
+      } else {
+        // Say it once for the run, keep this and every later original, and stop trying.
+        _deleteBlocked = deleted.reason;
+        file.sourceNote = 'Original kept on the card: ${DeleteFailureExplanation.of(deleted.reason ?? '').cause}';
+        state = state.copyWith(notice: originalsKeptNotice(deleted.reason ?? 'unknown'));
+      }
+    }
+    _log.log('SOURCE ${file.filename}: ${file.sourceNote}');
+  }
+
   /// The card file's modification time now (as saved with its hashes), else the one seen at scan time.
   static int _cardMtimeMs(UploadFile file) {
     try {
@@ -2130,7 +2224,16 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   _SourceCheck _startSourceCheck(UploadFile file, Completer<void> cancelToken) {
     return _sourceChecks.putIfAbsent(file.localPath, () {
       final check = _SourceCheck();
-      check.hash = _wholeFileSha512(file.localPath, onProgress: (done) => check.bytes = done, cancelToken: cancelToken);
+      final keep = _keepOriginalToken(file.localPath);
+      check.hash = _checkChain.then(
+        (_) => _wholeFileSha512(
+          file.localPath,
+          onProgress: (done) => check.bytes = done,
+          cancelToken: cancelToken,
+          stop: keep,
+        ),
+      );
+      _checkChain = check.hash.then((_) {}, onError: (_) {});
       unawaited(
         check.hash.then(
           (_) {
@@ -2152,12 +2255,13 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     String path, {
     void Function(int bytesRead)? onProgress,
     Completer<void>? cancelToken,
+    Completer<void>? stop,
   }) async {
     final sink = _DigestSink();
     final input = sha512.startChunkedConversion(sink);
     var read = 0;
     await for (final chunk in File(path).openRead()) {
-      if (cancelToken?.isCompleted ?? false) {
+      if ((cancelToken?.isCompleted ?? false) || (stop?.isCompleted ?? false)) {
         throw const CopypartyCancelledException();
       }
       input.add(chunk);

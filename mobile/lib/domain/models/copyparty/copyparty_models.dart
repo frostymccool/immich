@@ -115,6 +115,11 @@ class UploadFile {
   // folder whose files were partly staged in an earlier session.
   int? stagedBytesOnPhone;
 
+  // Transient: the upload is done and the check of the original before its delete runs in the background (the
+  // queue moved on). [sourceCheckBytes] = bytes of the original read so far.
+  bool sourceCheckPending = false;
+  int sourceCheckBytes = 0;
+
   UploadFile({
     required this.localPath,
     required this.filename,

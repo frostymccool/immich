@@ -92,6 +92,13 @@ String placeForFolder(String place) {
   return sanitizeFolderName(out.toString());
 }
 
+/// A camera serial number only when it looks like one (letters and digits, at least 6): some files carry other
+/// text in that field (a real import read "…0.44" from one X4 file and split one camera into two folders).
+String? _validSerial(String? serial) {
+  final v = serial?.trim() ?? '';
+  return RegExp(r'^[A-Za-z0-9]{6,}$').hasMatch(v) ? v : null;
+}
+
 /// Builds `<Place> <YYYY-MM-DD> <Camera>` for each set. Pure: no I/O.
 ///
 /// Camera: the set's own model; a set with none takes the most common camera of the import, else `Camera`.
@@ -112,16 +119,16 @@ AutoFolderPlan planFolders(List<SetFacts> sets, Map<String, String?> placeByDay)
   final serials = <String, Set<String>>{};
   for (final s in sets) {
     final l = label[s.setId];
-    final serial = s.info.serial;
-    if (l != null && serial != null && serial.isNotEmpty) {
+    final serial = _validSerial(s.info.serial);
+    if (l != null && serial != null) {
       serials.putIfAbsent(l, () => {}).add(serial);
     }
   }
   final out = <String, String>{};
   for (final s in sets) {
     var camera = label[s.setId] ?? common ?? 'Camera';
-    final serial = s.info.serial;
-    if (label[s.setId] != null && (serials[camera]?.length ?? 0) > 1 && serial != null && serial.isNotEmpty) {
+    final serial = _validSerial(s.info.serial);
+    if (label[s.setId] != null && (serials[camera]?.length ?? 0) > 1 && serial != null) {
       camera = '$camera ${serial.length <= 4 ? serial : serial.substring(serial.length - 4)}';
     }
     final place = placeByDay[s.day];
