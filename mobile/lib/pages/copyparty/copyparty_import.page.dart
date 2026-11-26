@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
+import 'package:immich_mobile/pages/copyparty/bridge_link_import.page.dart';
 import 'package:immich_mobile/providers/api.provider.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
@@ -80,6 +81,8 @@ class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
             children: [
               if (session.step != ImportSessionStep.idle && session.step != ImportSessionStep.scanning)
                 _UploadStateBanner(session: session),
+              if (session.step == ImportSessionStep.uploading && (session.cardPaused || session.uploadsPaused))
+                _PartialPauseBanner(session: session),
               Expanded(
                 child: switch (session.step) {
                   ImportSessionStep.idle => const _DirectoryPickerStep(),
@@ -87,7 +90,7 @@ class _CopypartyImportPageState extends ConsumerState<CopypartyImportPage> {
                   ImportSessionStep.options => _OptionsStep(session),
                   ImportSessionStep.uploading => _UploadProgressStep(
                     session,
-                    onCancel: () => ref.read(importSessionProvider.notifier).cancelUpload(),
+                    onCancel: () => ref.read(importSessionProvider.notifier).stopUpload(),
                     onAddFolders: () => pickAndAddFoldersToImport(context),
                   ),
                   ImportSessionStep.complete => _CompletionStep(session),
@@ -176,6 +179,64 @@ class _UploadStateBanner extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// What is paused when only part of the run is: the card copy, the uploads, or both. Each line has its own
+/// Resume.
+class _PartialPauseBanner extends ConsumerWidget {
+  final ImportSessionState session;
+  const _PartialPauseBanner({required this.session});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = context.colorScheme;
+    final notifier = ref.read(importSessionProvider.notifier);
+    Widget line(IconData icon, String title, String body, VoidCallback onResume) => Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+      decoration: BoxDecoration(color: scheme.secondaryContainer, borderRadius: BorderRadius.circular(8)),
+      child: Row(
+        children: [
+          Icon(icon, color: scheme.onSecondaryContainer, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: context.textTheme.titleSmall?.copyWith(color: scheme.onSecondaryContainer)),
+                Text(body, style: context.textTheme.bodySmall?.copyWith(color: scheme.onSecondaryContainer)),
+              ],
+            ),
+          ),
+          TextButton.icon(onPressed: onResume, icon: const Icon(Icons.play_arrow_rounded), label: const Text('Resume')),
+        ],
+      ),
+    );
+    return Column(
+      children: [
+        if (session.cardPaused)
+          line(
+            Icons.sd_card_outlined,
+            'Card copy paused',
+            session.uploadsPaused
+                ? 'Nothing is read from the memory card.'
+                : 'Files already in the phone cache keep uploading. Nothing else is read from the memory card, '
+                      'including the check before deleting an original.',
+            notifier.resumeCardCopy,
+          ),
+        if (session.uploadsPaused)
+          line(
+            Icons.cloud_upload_outlined,
+            'Uploads paused',
+            session.cardPaused
+                ? 'Nothing is being sent.'
+                : 'The memory card keeps copying into the phone cache, up to its size limit. Nothing is sent.',
+            notifier.resumeUploadsOnly,
+          ),
+      ],
     );
   }
 }
@@ -585,6 +646,18 @@ class _DirectoryPickerStepState extends ConsumerState<_DirectoryPickerStep> {
             label: const Text('Browse for Folder'),
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
           ),
+          // Only with the optional import bridge set up: nothing else on this page needs it.
+          if (ref.watch(appConfigProvider.select((c) => c.copyparty.bridgeUrl)).trim().isNotEmpty) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => unawaited(
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => const BridgeLinkImportPage())),
+              ),
+              icon: const Icon(Icons.link_rounded),
+              label: const Text('Add from a shared album link'),
+              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            ),
+          ],
         ],
       ),
     );
@@ -2307,12 +2380,7 @@ class _UploadProgressStep extends ConsumerWidget {
                           label: const Text('Resume'),
                           style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
                         )
-                      : OutlinedButton.icon(
-                          onPressed: () => ref.read(importSessionProvider.notifier).pauseUpload(),
-                          icon: const Icon(Icons.pause_rounded),
-                          label: const Text('Pause'),
-                          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                        ),
+                      : _PauseMenuButton(session: session),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -2334,6 +2402,71 @@ class _UploadProgressStep extends ConsumerWidget {
       ],
     );
   }
+}
+
+/// Pause: everything, only the card copy, or only the uploads. With the phone cache off there is no
+/// separate card copy, so it pauses everything at once.
+class _PauseMenuButton extends ConsumerWidget {
+  final ImportSessionState session;
+  const _PauseMenuButton({required this.session});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final notifier = ref.read(importSessionProvider.notifier);
+    final caching = ref.watch(appConfigProvider.select((c) => c.copyparty.stageToLocalBeforeUpload));
+    final style = OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48));
+    if (!caching) {
+      return OutlinedButton.icon(
+        onPressed: notifier.pauseUpload,
+        icon: const Icon(Icons.pause_rounded),
+        label: const Text('Pause'),
+        style: style,
+      );
+    }
+    return MenuAnchor(
+      menuChildren: [
+        MenuItemButton(
+          leadingIcon: const Icon(Icons.pause_rounded),
+          onPressed: notifier.pauseUpload,
+          child: const _PauseMenuText('Pause everything', 'Card copy and uploads'),
+        ),
+        if (!session.cardPaused)
+          MenuItemButton(
+            leadingIcon: const Icon(Icons.sd_card_outlined),
+            onPressed: notifier.pauseCardCopy,
+            child: const _PauseMenuText('Pause card copy', 'Cached files keep uploading'),
+          ),
+        if (!session.uploadsPaused)
+          MenuItemButton(
+            leadingIcon: const Icon(Icons.cloud_upload_outlined),
+            onPressed: notifier.pauseUploadsOnly,
+            child: const _PauseMenuText('Pause uploads', 'The card keeps copying into the phone cache'),
+          ),
+      ],
+      builder: (context, controller, _) => OutlinedButton.icon(
+        onPressed: () => controller.isOpen ? controller.close() : controller.open(),
+        icon: const Icon(Icons.pause_rounded),
+        label: const Text('Pause…'),
+        style: style,
+      ),
+    );
+  }
+}
+
+class _PauseMenuText extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  const _PauseMenuText(this.title, this.subtitle);
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Text(title),
+      Text(subtitle, style: context.textTheme.bodySmall),
+    ],
+  );
 }
 
 class _SectionBadge extends StatelessWidget {

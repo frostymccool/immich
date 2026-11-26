@@ -346,6 +346,14 @@ class ImportSessionState {
   /// stays on the progress page with a Resume control. (batch3 item 6)
   final bool paused;
 
+  /// The user paused only the copying from the memory card: files already in the phone cache keep
+  /// uploading, and the run waits when none are left.
+  final bool cardPaused;
+
+  /// The user paused only the uploads: the memory card keeps copying into the phone cache (up to
+  /// its size limit).
+  final bool uploadsPaused;
+
   /// Live bytes currently sitting in the on-device staging cache, refreshed at
   /// staging/discard transitions during an import so the progress page can
   /// show the cache filling up and draining in near-real-time.
@@ -362,6 +370,8 @@ class ImportSessionState {
     this.selectedPaths,
     this.cancelled = false,
     this.paused = false,
+    this.cardPaused = false,
+    this.uploadsPaused = false,
     this.cacheUsedBytes = 0,
     this.connectionProblem,
     this.networkWaiting = false,
@@ -380,6 +390,8 @@ class ImportSessionState {
     Set<String>? selectedPaths,
     bool? cancelled,
     bool? paused,
+    bool? cardPaused,
+    bool? uploadsPaused,
     int? cacheUsedBytes,
     String? connectionProblem,
     bool clearConnectionProblem = false,
@@ -398,6 +410,8 @@ class ImportSessionState {
     selectedPaths: selectedPaths ?? this.selectedPaths,
     cancelled: cancelled ?? this.cancelled,
     paused: paused ?? this.paused,
+    cardPaused: cardPaused ?? this.cardPaused,
+    uploadsPaused: uploadsPaused ?? this.uploadsPaused,
     cacheUsedBytes: cacheUsedBytes ?? this.cacheUsedBytes,
     connectionProblem: clearConnectionProblem ? null : (connectionProblem ?? this.connectionProblem),
     networkWaiting: clearConnectionProblem ? false : (networkWaiting ?? this.networkWaiting),
@@ -470,7 +484,113 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     if (token != null && !token.isCompleted) {
       _log.log('UPLOAD CANCEL requested by user');
       token.complete();
+      _haltCardCopies();
       _notify();
+    }
+  }
+
+  /// Stop pressed on the progress page. While paused the run has already ended, so there is nothing to
+  /// cancel: the session goes straight to the summary as a stopped run (it can still be resumed there).
+  void stopUpload() {
+    if (_uploadRunning) {
+      cancelUpload();
+      return;
+    }
+    if (state.step == ImportSessionStep.uploading) {
+      _log.log('UPLOAD STOP requested by user while paused');
+      state = state.copyWith(step: ImportSessionStep.complete, cancelled: true, paused: false);
+    }
+  }
+
+  // ---- Split pause: the card copy and the uploads can be paused on their own ----
+
+  /// The user paused copying from the card ([ImportSessionState.cardPaused]).
+  bool _cardPaused = false;
+
+  /// The user paused the uploads ([ImportSessionState.uploadsPaused]).
+  bool _uploadsPaused = false;
+
+  /// Per-file: completed when the user pauses uploads while this file is being worked on. Like Skip it
+  /// aborts the file, but the file goes back to pending and the loop waits for Resume.
+  Completer<void>? _holdToken;
+
+  /// One token per card copy in progress. Completed when the run is cancelled or the card copy is paused,
+  /// so a copy stops within a slice (its partial is kept and resumed later).
+  final Set<Completer<void>> _copyTokens = {};
+
+  void _haltCardCopies() {
+    for (final t in _copyTokens) {
+      if (!t.isCompleted) {
+        t.complete();
+      }
+    }
+  }
+
+  /// A token for one card copy: already completed when the run was cancelled or the card is paused.
+  Completer<void> _newCopyToken(Completer<void> cancelToken) {
+    final t = Completer<void>();
+    if (cancelToken.isCompleted || _cardPaused) {
+      t.complete();
+    }
+    _copyTokens.add(t);
+    return t;
+  }
+
+  /// Pauses copying from the memory card; files already in the phone cache keep uploading.
+  void pauseCardCopy() {
+    if (!_uploadRunning || _cardPaused) {
+      return;
+    }
+    _cardPaused = true;
+    _log.log('CARD COPY PAUSE requested by user (cached files keep uploading)');
+    _haltCardCopies();
+    state = state.copyWith(cardPaused: true);
+  }
+
+  void resumeCardCopy() {
+    if (!_cardPaused) {
+      return;
+    }
+    _cardPaused = false;
+    _log.log('CARD COPY RESUMED by user');
+    state = state.copyWith(cardPaused: false);
+    final token = _uploadCancelToken;
+    if (token != null && !token.isCompleted) {
+      _startCacheFiller(token);
+    }
+  }
+
+  /// Pauses the uploads; the memory card keeps copying into the phone cache.
+  void pauseUploadsOnly() {
+    if (!_uploadRunning || _uploadsPaused) {
+      return;
+    }
+    _uploadsPaused = true;
+    _log.log('UPLOADS PAUSE requested by user (card copy continues)');
+    final hold = _holdToken;
+    if (hold != null && !hold.isCompleted) {
+      hold.complete();
+    }
+    state = state.copyWith(uploadsPaused: true);
+    final token = _uploadCancelToken;
+    if (token != null && !token.isCompleted) {
+      _startCacheFiller(token);
+    }
+  }
+
+  void resumeUploadsOnly() {
+    if (!_uploadsPaused) {
+      return;
+    }
+    _uploadsPaused = false;
+    _log.log('UPLOADS RESUMED by user');
+    state = state.copyWith(uploadsPaused: false);
+  }
+
+  /// Waits while the card copy is paused (for reads of the card such as the check before an auto-delete).
+  Future<void> _waitWhileCardPaused(Completer<void> cancelToken, [Completer<void>? stop]) async {
+    while (_cardPaused && !cancelToken.isCompleted && !(stop?.isCompleted ?? false)) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
     }
   }
 
@@ -759,8 +879,12 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       selectedPaths: selectedFilePaths,
       cancelled: false,
       paused: false,
+      cardPaused: false,
+      uploadsPaused: false,
     );
     _pauseRequested = false;
+    _cardPaused = false;
+    _uploadsPaused = false;
     // Seed the cache indicator with whatever is already on disk (e.g. resuming
     // a paused/interrupted run) so the progress page doesn't open at a stale 0%.
     if (useStaging) {
@@ -797,6 +921,15 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
           cancelled = true;
           break;
         }
+        if (_uploadsPaused) {
+          // Uploads paused by the user: nothing is sent, but the card keeps copying into the cache.
+          _uploadingPath = null;
+          if (useStaging) {
+            _startCacheFiller(cancelToken);
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+          continue;
+        }
         final sel = state.selectedPaths;
         final candidates = <({UploadSet set, UploadFile file})>[];
         for (final s in state.uploadSets) {
@@ -812,6 +945,15 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         }
         if (candidates.isEmpty) {
           break;
+        }
+        if (_cardPaused && useStaging) {
+          // Card copy paused by the user: only files already in the phone cache can go; wait when none are.
+          candidates.retainWhere((c) => c.file.stagedReady);
+          if (candidates.isEmpty) {
+            _uploadingPath = null;
+            await Future<void>.delayed(const Duration(milliseconds: 500));
+            continue;
+          }
         }
         // Prefer an ALREADY-STAGED candidate for the loop's next pick,
         // regardless of size order — it can start uploading (network) RIGHT
@@ -848,6 +990,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         // The network/hash calls for THIS file abort on it; the catch below
         // tells the two apart (skip → mark skipped + continue; cancel → break).
         final skip = _skipToken = Completer<void>();
+        final hold = _holdToken = Completer<void>();
         final fileToken = Completer<void>();
         currentFileToken = fileToken;
         void completeFileToken(void _) {
@@ -857,6 +1000,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         }
 
         unawaited(skip.future.then(completeFileToken));
+        unawaited(hold.future.then(completeFileToken));
         // Network watchdog for THIS file: if bytes stop moving and a quick probe says the server is
         // gone (or the phone's network changes and the probe fails), abort the in-flight request so
         // the loop can wait for the network and resume, instead of sitting on a 60-120 s timeout.
@@ -922,9 +1066,18 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
               staged = await Future.any<HashedFile?>([
                 _acquireStaged(file, cancelToken),
                 skip.future.then<HashedFile?>((_) => null),
+                hold.future.then<HashedFile?>((_) => null),
               ]);
-              if (skip.isCompleted && !cancelToken.isCompleted) {
+              if ((skip.isCompleted || hold.isCompleted) && !cancelToken.isCompleted) {
                 throw const CopypartyCancelledException();
+              }
+              if (staged == null && _cardPaused && !cancelToken.isCompleted) {
+                // The card copy was paused while this file was being copied: it stays pending (the partial
+                // copy is kept) and never falls back to reading the card directly.
+                file.staging = false;
+                _log.log('-- CARD PAUSED during copy of ${file.filename}: left pending');
+                _notify();
+                continue;
               }
             }
             // Copy phase is over for THIS file — clear the flags so the card
@@ -1226,6 +1379,15 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
               _notify();
               continue;
             }
+            if (!cancelToken.isCompleted && hold.isCompleted) {
+              // Uploads paused by the user: back to pending (the server keeps the chunks it has and the
+              // cached copy stays), and the loop waits at the top until Resume.
+              file.staging = false;
+              file.status = UploadFileStatus.pending;
+              _log.log('-- UPLOADS PAUSED at ${file.filename}: left pending');
+              _notify();
+              continue;
+            }
             if (cancelToken.isCompleted) {
               // User cancelled (pause/stop) mid-file: leave it pending (not
               // failed) so it can be resumed cleanly next run, and stop the
@@ -1327,6 +1489,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       if (!cancelToken.isCompleted) {
         cancelToken.complete();
       }
+      _haltCardCopies();
       try {
         await _log.flush();
       } catch (_) {}
@@ -1374,6 +1537,12 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       _uploadRunning = false;
       _uploadingPath = null;
       _skipToken = null;
+      _holdToken = null;
+      _cardPaused = false;
+      _uploadsPaused = false;
+      if (state.cardPaused || state.uploadsPaused) {
+        state = state.copyWith(cardPaused: false, uploadsPaused: false);
+      }
       final wasPaused = _pauseRequested;
       _pauseRequested = false;
       try {
@@ -1502,6 +1671,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
           await prev;
         } catch (_) {}
       }
+      Completer<void>? copyToken;
       try {
         if (cancelToken.isCompleted) {
           return null;
@@ -1528,10 +1698,14 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             return null;
           }
         }
+        if (_cardPaused) {
+          return null;
+        }
         file.stageStartMs ??= DateTime.now().millisecondsSinceEpoch;
+        copyToken = _newCopyToken(cancelToken);
         final hashed = await _staging.stage(
           file.localPath,
-          cancelToken: cancelToken,
+          cancelToken: copyToken,
           onProgress: (bytesCopied, total, verifying) {
             // Drive the card's "Copying to phone N%" WITHOUT changing status —
             // the file must stay `pending` so the upload loop still picks it.
@@ -1589,6 +1763,9 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         _notify();
         return null;
       } finally {
+        if (copyToken != null) {
+          _copyTokens.remove(copyToken);
+        }
         done.complete();
         if (identical(_stageLock, done.future)) {
           _stageLock = null;
@@ -1603,7 +1780,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   /// left to stage — then it exits and is restarted after a discard frees space.
   /// (cache-size feature)
   void _startCacheFiller(Completer<void> cancelToken) {
-    if (_cacheFillFuture != null) {
+    if (_cacheFillFuture != null || _cardPaused) {
       return;
     }
     if (!_ref.read(appConfigProvider).copyparty.stageToLocalBeforeUpload) {
@@ -1613,7 +1790,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   }
 
   Future<void> _fillCache(Completer<void> cancelToken) async {
-    while (!cancelToken.isCompleted) {
+    while (!cancelToken.isCompleted && !_cardPaused) {
       final config = _ref.read(appConfigProvider).copyparty;
       if (!config.stageToLocalBeforeUpload) {
         return;
@@ -2257,14 +2434,17 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     return _sourceChecks.putIfAbsent(file.localPath, () {
       final check = _SourceCheck();
       final keep = _keepOriginalToken(file.localPath);
-      check.hash = _checkChain.then(
-        (_) => _wholeFileSha512(
+      check.hash = _checkChain.then((_) async {
+        // A paused card copy holds this read of the card too.
+        await _waitWhileCardPaused(cancelToken, keep);
+        _log.log('source check reading: ${file.filename}');
+        return _wholeFileSha512(
           file.localPath,
           onProgress: (done) => check.bytes = done,
           cancelToken: cancelToken,
           stop: keep,
-        ),
-      );
+        );
+      });
       _checkChain = check.hash.then((_) {}, onError: (_) {});
       unawaited(
         check.hash.then(
@@ -2278,7 +2458,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
           },
         ),
       );
-      _log.log('source check started in parallel: ${file.filename}');
+      _log.log('source check queued: ${file.filename}');
       return check;
     });
   }
@@ -2292,7 +2472,13 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     final sink = _DigestSink();
     final input = sha512.startChunkedConversion(sink);
     var read = 0;
-    await for (final chunk in File(path).openRead()) {
+    // A card read that stops answering must not hold every later check (they run one at a time): with no
+    // data for a minute the check gives up and the original is kept.
+    final stream = File(path).openRead().timeout(
+      const Duration(seconds: 60),
+      onTimeout: (sink) => sink.addError(TimeoutException('the memory card stopped answering while being read')),
+    );
+    await for (final chunk in stream) {
       if ((cancelToken?.isCompleted ?? false) || (stop?.isCompleted ?? false)) {
         throw const CopypartyCancelledException();
       }
@@ -2424,6 +2610,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
       selectedPaths: state.selectedPaths,
       cancelled: state.cancelled,
       paused: state.paused,
+      cardPaused: state.cardPaused,
+      uploadsPaused: state.uploadsPaused,
       cacheUsedBytes: state.cacheUsedBytes,
       connectionProblem: state.connectionProblem,
       networkWaiting: state.networkWaiting,

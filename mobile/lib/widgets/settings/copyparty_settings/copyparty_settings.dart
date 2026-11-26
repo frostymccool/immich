@@ -8,6 +8,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/config/copyparty_config.dart';
 import 'package:immich_mobile/domain/models/settings_key.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
+import 'package:immich_mobile/pages/copyparty/bridge_link_import.page.dart';
 import 'package:immich_mobile/pages/copyparty/copyparty_cache.page.dart';
 import 'package:immich_mobile/pages/copyparty/copyparty_cleanup.page.dart';
 import 'package:immich_mobile/pages/copyparty/copyparty_import.page.dart';
@@ -73,6 +74,7 @@ class CopypartySettings extends ConsumerWidget {
             const _BridgeUrlTile(),
             const _BridgeStatusTile(),
             const _BridgeTestButton(),
+            const _BridgeLinkImportTile(),
             const Divider(),
           ],
           const SettingGroupTitle(title: 'Import', icon: Icons.sd_card_rounded),
@@ -1267,6 +1269,29 @@ class _BridgeTestButton extends HookConsumerWidget {
             : const Icon(Icons.sync_alt_rounded),
         label: Text(testing.value ? 'Testing…' : 'Test bridge'),
         style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+      ),
+    );
+  }
+}
+
+/// Opens the shared-link import page; shown only when a bridge address is set.
+class _BridgeLinkImportTile extends ConsumerWidget {
+  const _BridgeLinkImportTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final url = ref.watch(appConfigProvider.select((c) => c.copyparty.bridgeUrl));
+    if (url.trim().isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(left: 8.0),
+      child: SettingListTile(
+        title: 'Add from a shared album link',
+        subtitle: 'Paste a Google Photos or Google Drive link; the bridge adds the photos to Immich',
+        leading: const Icon(Icons.link_rounded),
+        onTap: () =>
+            unawaited(Navigator.of(context).push(MaterialPageRoute(builder: (_) => const BridgeLinkImportPage()))),
       ),
     );
   }
