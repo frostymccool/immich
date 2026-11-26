@@ -42,7 +42,7 @@ class CameraFileInfo {
 class CameraInfoReader {
   // RAW: DNG/NEF/ARW/CR2 are TIFF files; Olympus ORF and Panasonic RW2 are TIFF with their own header mark.
   static const _photoExt = {'jpg', 'jpeg', 'insp', 'dng', 'nef', 'orf', 'arw', 'cr2', 'rw2'};
-  static const _videoExt = {'insv', 'mp4', 'mov'};
+  static const _videoExt = {'insv', 'mp4', 'mov', 'osv', '360'};
   static const exifReadBytes = 256 * 1024;
 
   /// The Insta360 trailer ends with this ASCII text.

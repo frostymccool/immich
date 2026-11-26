@@ -136,4 +136,29 @@ void main() {
       expect(pairer.normalise('LRV_20261018_072236_01_004.lrv'), '20261018_072236_004');
     });
   });
+
+  group('cameras whose originals Immich does not take', () {
+    // Bug: a card with only a DJI Osmo 360 recording (.OSV + .LRF) showed "No new files found in that folder".
+    test('a DJI Osmo 360 .OSV recording and its .LRF preview form one set, copyparty only', () {
+      final sets = pairer.pairFiles([
+        _f('CAM_20261127021113_0001_D.OSV', dir: '/sd/DCIM/CAM_001'),
+        _f('CAM_20261127021113_0001_D.LRF', dir: '/sd/DCIM/CAM_001'),
+      ]);
+      expect(sets, hasLength(1));
+      expect(_names(sets.single), ['CAM_20261127021113_0001_D.LRF', 'CAM_20261127021113_0001_D.OSV']);
+      for (final f in sets.single.files) {
+        expect(f.destination, UploadDestination.copypartyOnly);
+        expect(f.isNativeImmichFile, isFalse);
+      }
+    });
+
+    test('a GoPro MAX .360 recording is picked up too', () {
+      final sets = pairer.pairFiles([_f('GS010123.360', dir: '/sd/DCIM/100GOPRO')]);
+      expect(sets.single.files.single.filename, 'GS010123.360');
+    });
+
+    test('a lone .LRF preview is still skipped', () {
+      expect(pairer.pairFiles([_f('CAM_20261127021113_0002_D.LRF')]), isEmpty);
+    });
+  });
 }

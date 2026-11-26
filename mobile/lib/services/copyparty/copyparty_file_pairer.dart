@@ -143,7 +143,7 @@ class CopypartyFilePairer {
     for (final entry in stemMap.entries) {
       for (final f in entry.value) {
         final ext = _ext(f.name);
-        if (triggerExtensions.contains(ext) || _isNativeImmichFile(ext)) {
+        if (triggerExtensions.contains(ext) || _isNativeImmichFile(ext) || _cameraOriginalExtensions.contains(ext)) {
           triggerStems.add(entry.key);
           break;
         }
@@ -238,6 +238,10 @@ class CopypartyFilePairer {
   };
 
   static bool _isNativeImmichFile(String ext) => _nativeImmichExtensions.contains(ext);
+
+  /// Camera originals Immich does not take, which still start a group (copyparty only): DJI Osmo 360 `.osv`
+  /// and GoPro MAX `.360`. Their same-name previews (`.lrf`, `.lrv`, `.thm`) join the group.
+  static const _cameraOriginalExtensions = {'osv', '360'};
 
   /// The XMP sidecar in [files] (one group) that belongs to [media], or null: `<file name>.xmp` (for example
   /// `DSC_0042.NEF.xmp`) first, else `<name without extension>.xmp` (`DSC_0042.xmp`).

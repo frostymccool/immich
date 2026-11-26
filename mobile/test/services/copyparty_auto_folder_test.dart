@@ -258,6 +258,8 @@ void main() {
     test('DJI file names give the day', () {
       expect(CameraInfoReader.dayFromFilename('DJI_20261025123456_0001_D.MP4'), '2026-10-25');
       expect(CameraInfoReader.dayFromFilename('DJI_0001.JPG'), isNull);
+      // DJI Osmo 360 recordings: CAM_<date><time>_<counter>_D.OSV
+      expect(CameraInfoReader.dayFromFilename('CAM_20261127021113_0001_D.OSV'), '2026-11-27');
     });
 
     test('a photo with GPS 0,0 counts as no GPS', () {

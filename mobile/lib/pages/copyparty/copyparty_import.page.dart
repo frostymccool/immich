@@ -270,9 +270,52 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
   // revising it once server verification landed, unlike the initial picker.)
   bool _userTouched = false;
 
-  // Automatic folders for the added groups, worked out right after the scan (null while working, or off).
+  // Automatic folders for the added groups, worked out right after the scan (null while working, or off),
+  // and the user's picks or typed names (proposed name → chosen name), as on the first import's options.
   AutoFolderPlan? _folderPlan;
   Future<AutoFolderPlan?>? _planning;
+  bool _planningFolders = false;
+  final Map<String, String> _folderRenames = {};
+
+  AutoFolderPlan? get _effectivePlan => _folderPlan?.renamed(_folderRenames);
+
+  void _pickFolderName(String proposed, String chosen) {
+    setState(() {
+      if (chosen == proposed) {
+        _folderRenames.remove(proposed);
+      } else {
+        _folderRenames[proposed] = chosen;
+      }
+    });
+    ref.read(copypartyLoggerProvider).log('auto folder chosen by user (add folders): "$proposed" -> "$chosen"');
+  }
+
+  Future<void> _renameFolder(String proposed) async {
+    final controller = TextEditingController(text: _folderRenames[proposed] ?? proposed);
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Folder name'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(helperText: 'Also the album name in Immich'),
+          onSubmitted: (v) => Navigator.of(ctx).pop(v),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(controller.text), child: const Text('Save')),
+        ],
+      ),
+    );
+    controller.dispose();
+    final clean = chosen == null ? '' : sanitizeFolderName(chosen);
+    if (clean.isEmpty || !mounted) {
+      return;
+    }
+    setState(() => _folderRenames[proposed] = clean);
+    ref.read(copypartyLoggerProvider).log('auto folder renamed by user (add folders): "$proposed" -> "$clean"');
+  }
 
   @override
   void initState() {
@@ -284,6 +327,9 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
     if (!ref.read(appConfigProvider).copyparty.autoFolders) {
       return null;
     }
+    if (mounted) {
+      setState(() => _planningFolders = true);
+    }
     try {
       final plan = await ref.read(autoFolderServiceProvider).plan(sets);
       if (mounted) {
@@ -293,6 +339,10 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
     } catch (e) {
       ref.read(copypartyLoggerProvider).log('auto folders: planning failed ($e); using the upload path');
       return null;
+    } finally {
+      if (mounted) {
+        setState(() => _planningFolders = false);
+      }
     }
   }
 
@@ -384,7 +434,7 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
     }
     // Automatic folders apply to added folders too (no editing step here: the names are shown on the cards'
     // destination after upload and in the log).
-    final plan = await (_planning ?? _plan(sets));
+    final plan = (await (_planning ?? _plan(sets)))?.renamed(_folderRenames);
     if (plan != null) {
       final base = ref.read(appConfigProvider).copyparty.uploadPath;
       for (final set in sets) {
@@ -479,23 +529,36 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
               onToggleGroup: (select) => _toggleGroup(sets[i], select),
               onToggleFile: _toggleFile,
               onDestinationChange: (path, dest) => setState(() => _destinationOverrides[path] = dest),
-              destFolder: _folderPlan?.folderBySet[sets[i].id],
+              destFolder: _effectivePlan?.folderBySet[sets[i].id],
             ),
           ),
         ),
         SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(16.0),
-            child: SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: selectedCount > 0 && !_adding ? _add : null,
-                icon: _adding
-                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.playlist_add_rounded),
-                label: Text('Add $selectedCount file${selectedCount == 1 ? '' : 's'} to upload'),
-                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
-              ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Where the added files go, with the same name choices as the first import's options.
+                _DestinationBanner(
+                  planning: _planningFolders,
+                  plan: _folderPlan,
+                  renames: _folderRenames,
+                  onRename: (p) => unawaited(_renameFolder(p)),
+                  onPick: _pickFolderName,
+                ),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: selectedCount > 0 && !_adding && !_planningFolders ? _add : null,
+                    icon: _adding
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.playlist_add_rounded),
+                    label: Text('Add $selectedCount file${selectedCount == 1 ? '' : 's'} to upload'),
+                    style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
