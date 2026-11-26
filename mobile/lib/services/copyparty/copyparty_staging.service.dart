@@ -18,6 +18,9 @@ typedef StagedCacheEntry = ({
   String stagedPath,
   DateTime modified,
   bool complete,
+
+  /// The server folder chosen for the file when it was cached (an automatic or picked folder), if any.
+  String? uploadPath,
 });
 
 /// Local staging for copyparty imports (batch: item 4).
@@ -160,6 +163,7 @@ class CopypartyStagingService {
     String sourcePath, {
     void Function(int bytesProcessed, int totalBytes, bool verifying)? onProgress,
     Completer<void>? cancelToken,
+    String? uploadPath,
   }) async {
     final paths = await _pathsFor(sourcePath);
     // Clear a stale/incomplete MARKER only — findValidStaged() already ruled
@@ -196,6 +200,8 @@ class CopypartyStagingService {
       'sha1': hashed.sha1Base64,
       'chunkHashes': hashed.chunkHashes,
       'lastModifiedMs': hashed.lastModifiedMs,
+      // Where it was going, so a later "upload from the cache" sends it to the same folder.
+      'uploadPath': ?uploadPath,
     };
     // Atomic marker write: temp then rename, so a crash mid-write can never
     // leave a truncated marker that would be trusted on resume.
@@ -243,6 +249,7 @@ class CopypartyStagingService {
             stagedPath: stagedPath,
             modified: stat.modified,
             complete: true,
+            uploadPath: meta['uploadPath'] is String ? meta['uploadPath'] as String : null,
           ));
         } catch (_) {}
       }
@@ -263,6 +270,7 @@ class CopypartyStagingService {
             stagedPath: path,
             modified: stat.modified,
             complete: false,
+            uploadPath: null,
           ));
         } catch (_) {}
       }

@@ -23,6 +23,7 @@ import 'package:immich_mobile/services/copyparty/copyparty_file_pairer.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_foreground_service.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_logger.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_network_watch.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_run_rules.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_saved_hashes.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_source_delete.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_staging.service.dart';
@@ -492,13 +493,14 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   /// Stop pressed on the progress page. While paused the run has already ended, so there is nothing to
   /// cancel: the session goes straight to the summary as a stopped run (it can still be resumed there).
   void stopUpload() {
-    if (_uploadRunning) {
-      cancelUpload();
-      return;
-    }
-    if (state.step == ImportSessionStep.uploading) {
-      _log.log('UPLOAD STOP requested by user while paused');
-      state = state.copyWith(step: ImportSessionStep.complete, cancelled: true, paused: false);
+    switch (stopActionFor(running: _uploadRunning, onProgressPage: state.step == ImportSessionStep.uploading)) {
+      case StopAction.cancelRun:
+        cancelUpload();
+      case StopAction.finishPaused:
+        _log.log('UPLOAD STOP requested by user while paused');
+        state = state.copyWith(step: ImportSessionStep.complete, cancelled: true, paused: false);
+      case StopAction.nothing:
+        break;
     }
   }
 
@@ -948,7 +950,10 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         }
         if (_cardPaused && useStaging) {
           // Card copy paused by the user: only files already in the phone cache can go; wait when none are.
-          candidates.retainWhere((c) => c.file.stagedReady);
+          final now = uploadableNow(candidates, cardPaused: true, useCache: true, isCached: (c) => c.file.stagedReady);
+          candidates
+            ..clear()
+            ..addAll(now);
           if (candidates.isEmpty) {
             _uploadingPath = null;
             await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -1706,6 +1711,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         final hashed = await _staging.stage(
           file.localPath,
           cancelToken: copyToken,
+          uploadPath: file.uploadPathOverride,
           onProgress: (bytesCopied, total, verifying) {
             // Drive the card's "Copying to phone N%" WITHOUT changing status —
             // the file must stay `pending` so the upload loop still picks it.
@@ -2013,6 +2019,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     final defaultDest = CopypartyFilePairer.parseDefaultDestination(config.defaultDestination);
     final newSets = <UploadSet>[];
     final paths = <String>{};
+    final toPlan = <UploadSet>[];
+    final cachedCopy = <String, String>{};
     for (final e in entries) {
       if (existing.contains(e.sourcePath)) {
         continue;
@@ -2028,13 +2036,47 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         destination: native ? defaultDest : UploadDestination.copypartyOnly,
       );
       file.existingReceipt = await _receiptRepo.findByLocalPath(e.sourcePath);
-      newSets.add(UploadSet(files: [file], directoryPath: parent, rootPath: parent));
+      // Same folder as before: where it was already uploaded, else the one chosen when it was cached. Without
+      // this a cached file went to the plain upload folder, not its automatic folder.
+      file.uploadPathOverride = cachedFileFolder(
+        receiptUrl: file.existingReceipt?.copypartyUrl,
+        cachedUploadPath: e.uploadPath,
+      );
+      final set = UploadSet(files: [file], directoryPath: parent, rootPath: parent);
+      newSets.add(set);
       paths.add(e.sourcePath);
+      if (file.uploadPathOverride == null) {
+        toPlan.add(set);
+        cachedCopy[e.sourcePath] = e.stagedPath;
+      }
     }
     if (paths.isEmpty) {
       return;
     }
-    _log.log('QUEUE FROM CACHE: +${paths.length} file(s)');
+    if (toPlan.isNotEmpty && config.autoFolders) {
+      // Copies cached by older builds have no folder recorded: plan them like a new import, reading the
+      // camera details from the cached copy when the card is not attached.
+      try {
+        final plan = await _ref
+            .read(autoFolderServiceProvider)
+            .readingFrom((p) => File(p).existsSync() ? p : (cachedCopy[p] ?? p))
+            .plan(toPlan);
+        for (final set in toPlan) {
+          final name = plan.folderBySet[set.id];
+          if (name != null) {
+            for (final f in set.files) {
+              f.uploadPathOverride = autoFolderUploadPath(config.uploadPath, name);
+            }
+          }
+        }
+      } catch (e) {
+        _log.log('QUEUE FROM CACHE: automatic folders failed ($e); using the upload folder');
+      }
+    }
+    _log.log(
+      'QUEUE FROM CACHE: +${paths.length} file(s) → '
+      '${newSets.map((s) => s.files.first.uploadPathOverride ?? config.uploadPath).toSet().join(', ')}',
+    );
     await appendSelectedSets(newSets, paths);
   }
 
@@ -2469,25 +2511,12 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     Completer<void>? cancelToken,
     Completer<void>? stop,
   }) async {
-    final sink = _DigestSink();
-    final input = sha512.startChunkedConversion(sink);
-    var read = 0;
-    // A card read that stops answering must not hold every later check (they run one at a time): with no
-    // data for a minute the check gives up and the original is kept.
-    final stream = File(path).openRead().timeout(
-      const Duration(seconds: 60),
-      onTimeout: (sink) => sink.addError(TimeoutException('the memory card stopped answering while being read')),
+    // A card read that stops answering gives up after a minute, so it cannot hold every later check.
+    return sha512OfStream(
+      File(path).openRead(),
+      onProgress: onProgress,
+      stopped: () => (cancelToken?.isCompleted ?? false) || (stop?.isCompleted ?? false),
     );
-    await for (final chunk in stream) {
-      if ((cancelToken?.isCompleted ?? false) || (stop?.isCompleted ?? false)) {
-        throw const CopypartyCancelledException();
-      }
-      input.add(chunk);
-      read += chunk.length;
-      onProgress?.call(read);
-    }
-    input.close();
-    return sink.value!.toString();
   }
 
   Future<UploadResult> _uploadToImmich(UploadFile file, [Completer<void>? cancelToken, String? overridePath]) async {

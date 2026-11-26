@@ -259,6 +259,17 @@ class AutoFolderService {
     this.log,
   }) : now = now ?? DateTime.now;
 
+  /// The same service reading each file from `pathFor(path)` instead: for files queued from the phone
+  /// cache, whose original may no longer be on a card.
+  AutoFolderService readingFrom(String Function(String path) pathFor) => AutoFolderService(
+    readInfo: (path) => readInfo(pathFor(path)),
+    placeNames: placeNames,
+    phoneLocation: phoneLocation,
+    placesOnDay: placesOnDay,
+    now: now,
+    log: log,
+  );
+
   /// Files read per set, best first: photos (EXIF), then the main video; never the .lrv preview.
   static List<UploadFile> _candidates(UploadSet set) {
     int rank(UploadFile f) {
@@ -416,3 +427,28 @@ class AutoFolderService {
 
 /// `/uploads` + `Lisbon 2026-05-02 X4` → `/uploads/Lisbon 2026-05-02 X4`.
 String autoFolderUploadPath(String base, String folder) => '${base.replaceAll(RegExp(r'/+$'), '')}/$folder';
+
+/// The server folder of an uploaded file's copyparty URL (`https://host/up/Trip%202026/a.jpg` → `/up/Trip 2026`),
+/// or null when the URL has no folder.
+String? folderOfCopypartyUrl(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null) {
+    return null;
+  }
+  final segs = uri.pathSegments.where((s) => s.isNotEmpty).toList();
+  if (segs.length < 2) {
+    return null;
+  }
+  return '/${segs.sublist(0, segs.length - 1).join('/')}';
+}
+
+/// Where a file queued from the phone cache goes: the folder it was already uploaded to (its receipt),
+/// else the folder chosen when it was cached, else null (plan it like a new import).
+String? cachedFileFolder({String? receiptUrl, String? cachedUploadPath}) {
+  final fromReceipt = receiptUrl == null ? null : folderOfCopypartyUrl(receiptUrl);
+  if (fromReceipt != null) {
+    return fromReceipt;
+  }
+  final cached = cachedUploadPath?.trim();
+  return cached == null || cached.isEmpty ? null : cached;
+}

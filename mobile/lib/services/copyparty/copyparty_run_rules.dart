@@ -1,0 +1,68 @@
+import 'dart:async';
+
+import 'package:crypto/crypto.dart';
+import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
+
+/// Small rules of the import run, kept out of the provider so each one has its own regression test.
+
+/// How long a read of the card may go without any data before the check of an original gives up.
+const sourceCheckStallTimeout = Duration(seconds: 60);
+
+/// The SHA-512 (hex) of [data], for the check of an original before it is deleted.
+///
+/// Checks read the card one at a time, so a read that stops answering would hold every later check
+/// ("Waiting to check the original" on every file). With no data for [stallTimeout] this throws a
+/// [TimeoutException] instead, and the original is kept. [stopped] is polled per slice (Stop, Pause, or
+/// Keep original) and throws [CopypartyCancelledException].
+Future<String> sha512OfStream(
+  Stream<List<int>> data, {
+  Duration stallTimeout = sourceCheckStallTimeout,
+  void Function(int bytesRead)? onProgress,
+  bool Function()? stopped,
+}) async {
+  final sink = _DigestSink();
+  final input = sha512.startChunkedConversion(sink);
+  var read = 0;
+  final guarded = data.timeout(
+    stallTimeout,
+    onTimeout: (out) => out.addError(TimeoutException('the memory card stopped answering while being read')),
+  );
+  await for (final chunk in guarded) {
+    if (stopped?.call() ?? false) {
+      throw const CopypartyCancelledException();
+    }
+    input.add(chunk);
+    read += chunk.length;
+    onProgress?.call(read);
+  }
+  input.close();
+  return sink.value!.toString();
+}
+
+class _DigestSink implements Sink<Digest> {
+  Digest? value;
+  @override
+  void add(Digest data) => value = data;
+  @override
+  void close() {}
+}
+
+/// The files the upload loop may take next. While the user has paused the card copy (with the phone
+/// cache on) only files already in the cache may go, so nothing is read from the card; with none left
+/// the loop waits. Otherwise every pending file may go.
+List<T> uploadableNow<T>(
+  List<T> pending, {
+  required bool cardPaused,
+  required bool useCache,
+  required bool Function(T) isCached,
+}) => cardPaused && useCache ? pending.where(isCached).toList() : pending;
+
+/// What Stop does: a running upload is cancelled; a paused one (its loop already ended, nothing left to
+/// cancel) goes straight to the summary as a stopped run.
+enum StopAction { cancelRun, finishPaused, nothing }
+
+StopAction stopActionFor({required bool running, required bool onProgressPage}) => running
+    ? StopAction.cancelRun
+    : onProgressPage
+    ? StopAction.finishPaused
+    : StopAction.nothing;
