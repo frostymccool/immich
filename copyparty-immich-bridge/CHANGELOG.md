@@ -3,6 +3,13 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.11.1 - newest uploads corrected first; plainer skip reason
+
+- Automatic correction takes the newest imports first (still in import order within a pass), so what was just
+  uploaded is corrected before the older backlog.
+- A file type Immich does not accept is listed as "Immich does not take .<ext> files; kept on the NAS" instead of
+  "unsupported extension".
+
 ## 0.11.0 - automatic correction of wrong camera clocks
 
 - Automatic correction (`AUTO_FIX`) now also corrects the TIME, not only the place, when the evidence is strong:

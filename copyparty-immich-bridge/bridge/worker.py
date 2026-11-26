@@ -325,7 +325,7 @@ class ImportWorker:
         if extension_of(name) not in self._allowed:
             if extension_of(name) == "xmp":
                 self._late_sidecar(path)
-            self._state.record_skip(path, size, mtime, "unsupported extension")
+            self._state.record_skip(path, size, mtime, f"Immich does not take .{extension_of(name)} files; kept on the NAS")
             log.debug("skipped (extension): %s", path)
             return
         if size == 0:

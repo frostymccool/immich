@@ -168,7 +168,7 @@ class AutoFix:
         cutoff = time.time() - RECHECK_S
         out = [(p, a) for p, a in self._state.imported_assets()
                if a not in seen or (seen[a][0] == "review" and seen[a][1] < cutoff)]
-        return out[:BATCH]
+        return out[-BATCH:]  # the newest imports (what people look at), still in import order within the batch
 
     # -- Immich lookups ---------------------------------------------------------------------------------------------
 
