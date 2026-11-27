@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:crypto/crypto.dart';
+import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_uploader.service.dart';
 
 /// Small rules of the import run, kept out of the provider so each one has its own regression test.
@@ -189,3 +190,13 @@ List<String> cacheFailureWarnings(Map<CacheFailure, int> counts) {
       'Save log shows why.';
   return [if (full > 0) fullText, if (card > 0) cardText, if (other > 0) otherText];
 }
+
+/// Files of this run whose upload finished but whose delete Pause or Stop interrupted: Resume finishes them
+/// (check the original, then delete it) when deleting is still on for them.
+List<UploadFile> deletesToFinish(Iterable<UploadFile> files, {Set<String>? selected, required bool setting}) => [
+  for (final f in files)
+    if (f.deleteInterruptedReceiptId != null &&
+        (selected == null || selected.contains(f.localPath)) &&
+        shouldAutoDelete(setting: setting, override: f.deleteOriginalOverride))
+      f,
+];

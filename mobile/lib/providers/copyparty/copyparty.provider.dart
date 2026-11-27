@@ -843,6 +843,16 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         }
       }
     }
+    // Files uploaded before a Pause or Stop whose delete was cut short: finish those deletes now, alongside the
+    // remaining uploads.
+    final toFinish = deletesToFinish(
+      state.uploadSets.expand((s) => s.files),
+      selected: selectedFilePaths,
+      setting: deleteSetting,
+    );
+    if (toFinish.isNotEmpty) {
+      _log.log('RESUME: finishing ${toFinish.length} delete(s) interrupted by Pause/Stop');
+    }
 
     // Watch the phone's network for the whole session: a change re-checks the file in flight at
     // once, and wakes a "Waiting for network" wait early.
@@ -919,6 +929,12 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     _pauseRequested = false;
     _cardPaused = startPauses.cardPaused;
     _uploadsPaused = startPauses.uploadsPaused;
+    for (final f in toFinish) {
+      final id = f.deleteInterruptedReceiptId;
+      if (id != null) {
+        _deleteInBackground(f, id, fromCache: f.deleteInterruptedFromCache, cancelToken: cancelToken);
+      }
+    }
     // Seed the cache indicator with whatever is already on disk (e.g. resuming
     // a paused/interrupted run) so the progress page doesn't open at a stale 0%.
     if (useStaging) {
@@ -1334,37 +1350,13 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
               if (staged != null && (pendingCheck == null || !pendingCheck.done)) {
                 // The check re-reads the original from the (slow) card. Don't hold the queue for it: the next
                 // files upload while it finishes, and the original is deleted then (or kept, with the reason).
-                final keep = _keepOriginalToken(file.localPath);
-                file.sourceCheckPending = true;
-                file.sourceNote = 'Uploaded. The original is deleted once it has been checked against the upload.';
                 _log.log('SOURCE ${file.filename}: check continues in the background; queue moves on');
-                final id = receiptId;
-                final st = staged;
-                late final Future<void> pending;
-                pending =
-                    _finishSourceDelete(
-                          file: file,
-                          receiptId: id,
-                          staged: st,
-                          cancelToken: cancelToken,
-                          giveUp: Future.any<void>([keep.future, cancelToken.future]),
-                          inline: false,
-                        )
-                        .catchError((Object e) {
-                          file.sourceNote = 'Original kept on the card: the check before deleting failed ($e).';
-                        })
-                        .whenComplete(() {
-                          file.sourceCheckPending = false;
-                          _keepOriginalTokens.remove(file.localPath);
-                          _pendingSourceDeletes.remove(pending);
-                          _notify();
-                        });
-                _pendingSourceDeletes.add(pending);
+                _deleteInBackground(file, receiptId, fromCache: true, cancelToken: cancelToken);
               } else {
                 await _finishSourceDelete(
                   file: file,
                   receiptId: receiptId,
-                  staged: staged,
+                  fromCache: staged != null,
                   cancelToken: cancelToken,
                   giveUp: fileToken.future,
                   inline: true,
@@ -1610,6 +1602,39 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         }
       }
     }
+  }
+
+  /// Checks the original against the upload and deletes it, without holding the queue. Tracked in
+  /// [_pendingSourceDeletes], which the run's end waits for (under the wakelock and foreground service).
+  void _deleteInBackground(
+    UploadFile file,
+    int receiptId, {
+    required bool fromCache,
+    required Completer<void> cancelToken,
+  }) {
+    final keep = _keepOriginalToken(file.localPath);
+    file.sourceCheckPending = true;
+    file.sourceNote = 'Uploaded. The original is deleted once it has been checked against the upload.';
+    late final Future<void> pending;
+    pending =
+        _finishSourceDelete(
+              file: file,
+              receiptId: receiptId,
+              fromCache: fromCache,
+              cancelToken: cancelToken,
+              giveUp: Future.any<void>([keep.future, cancelToken.future]),
+              inline: false,
+            )
+            .catchError((Object e) {
+              file.sourceNote = 'Original kept on the card: the check before deleting failed ($e).';
+            })
+            .whenComplete(() {
+              file.sourceCheckPending = false;
+              _keepOriginalTokens.remove(file.localPath);
+              _pendingSourceDeletes.remove(pending);
+              _notify();
+            });
+    _pendingSourceDeletes.add(pending);
   }
 
   /// Sets already stacked in Immich this session (by set id), so a stack is made once.
@@ -2413,7 +2438,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
   Future<void> _finishSourceDelete({
     required UploadFile file,
     required int receiptId,
-    required HashedFile? staged,
+    required bool fromCache,
     required Completer<void> cancelToken,
     required Future<void> giveUp,
     required bool inline,
@@ -2425,7 +2450,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     // still matches what we uploaded. This restores the cross-check the
     // direct (double-read) path gets for free. (data-integrity finding 2)
     var safeToRemove = true;
-    if (staged != null) {
+    file.deleteInterruptedReceiptId = null;
+    if (fromCache) {
       // Once staged, nothing else in the pipeline needs the ORIGINAL
       // source again — this re-hash is the one exception, and only to
       // sanity-check before an irreversible delete. Check existence
@@ -2507,7 +2533,16 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         } on CopypartyCancelledException {
           // Stopped during the check: never delete without a finished check.
           safeToRemove = false;
-          file.sourceNote = 'Original kept on the card: the check before deleting was stopped.';
+          if (cancelToken.isCompleted && !(_keepOriginalTokens[file.localPath]?.isCompleted ?? false)) {
+            // Pause or Stop, not "keep original": Resume finishes this delete.
+            file.deleteInterruptedReceiptId = receiptId;
+            file.deleteInterruptedFromCache = fromCache;
+            file.sourceNote =
+                'Uploaded. The original is still on the card: the check before deleting it was '
+                'paused, and Resume finishes it.';
+          } else {
+            file.sourceNote = 'Original kept on the card: the check before deleting was stopped.';
+          }
         } catch (_) {
           // Source unreadable (e.g. card pulled mid-check) → never delete.
           safeToRemove = false;
@@ -2522,7 +2557,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     } else if (safeToRemove) {
       final deleted = await _sourceDeleter.delete(file.localPath);
       if (deleted.ok) {
-        file.sourceNote = staged != null
+        file.sourceNote = fromCache
             ? 'Original deleted from the card (checked: it matched the upload).'
             : 'Original deleted from the card.';
         try {

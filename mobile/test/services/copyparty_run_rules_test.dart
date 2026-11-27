@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:immich_mobile/domain/models/copyparty/copyparty_models.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_auto_folder.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_camera_info.dart';
 import 'package:immich_mobile/services/copyparty/copyparty_run_rules.dart';
@@ -251,6 +252,32 @@ void main() {
       expect(w.single, isNot(contains('storage full')));
       expect(cacheFailureWarnings({CacheFailure.phoneFull: 1}).single, contains('phone storage full'));
       expect(cacheFailureWarnings({}), isEmpty);
+    });
+  });
+
+  group('Resume finishes deletes that Pause cut short', () {
+    // Bug: with auto-delete on, files that finished uploading before a Pause kept their originals after Resume.
+    UploadFile file(String name, {int? interrupted, bool? deleteChoice}) =>
+        UploadFile(localPath: '/storage/EB55-F36E/DCIM/$name', filename: name, sizeBytes: 10, lastModifiedMs: 0)
+          ..deleteInterruptedReceiptId = interrupted
+          ..deleteOriginalOverride = deleteChoice;
+
+    test('an interrupted delete is finished on Resume', () {
+      final files = [file('a.jpg', interrupted: 7), file('b.jpg')];
+      expect(deletesToFinish(files, setting: true).map((f) => f.filename), ['a.jpg']);
+    });
+
+    test('not when deleting was turned off for those files, or by the setting', () {
+      expect(deletesToFinish([file('a.jpg', interrupted: 7, deleteChoice: false)], setting: true), isEmpty);
+      expect(deletesToFinish([file('a.jpg', interrupted: 7)], setting: false), isEmpty);
+    });
+
+    test('only files of the resumed selection', () {
+      final files = [file('a.jpg', interrupted: 7), file('b.jpg', interrupted: 8)];
+      expect(
+        deletesToFinish(files, selected: {'/storage/EB55-F36E/DCIM/b.jpg'}, setting: true).map((f) => f.filename),
+        ['b.jpg'],
+      );
     });
   });
 }

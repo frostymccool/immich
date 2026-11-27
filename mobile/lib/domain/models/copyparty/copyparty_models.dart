@@ -78,6 +78,14 @@ class UploadFile {
   /// safely uploaded. Null = the "Delete after upload" setting.
   bool? deleteOriginalOverride;
 
+  /// Uploaded, but Pause or Stop interrupted the check before deleting its original: the receipt to finish
+  /// that delete with when the run is resumed. Null when nothing is left to do.
+  int? deleteInterruptedReceiptId;
+
+  /// With [deleteInterruptedReceiptId]: the upload came from the phone cache, so the original must still be
+  /// re-read and compared before it is deleted.
+  bool deleteInterruptedFromCache = false;
+
   // Transient (not persisted): true while the file is being COPIED to local
   // phone storage before hashing/upload, so the card can show "Copying" instead
   // of "Hashing". (batch: item 4)
