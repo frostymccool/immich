@@ -280,6 +280,10 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
   bool _planningFolders = false;
   final Map<String, String> _folderRenames = {};
 
+  /// Delete the originals of THESE files after upload: starts from the setting, changed here for this import
+  /// only (for example off while testing). Null until first shown (= the setting).
+  bool? _deleteOriginals;
+
   AutoFolderPlan? get _effectivePlan => _folderPlan?.renamed(_folderRenames);
 
   void _pickFolderName(String proposed, String chosen) {
@@ -428,9 +432,11 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
       return;
     }
     setState(() => _adding = true);
+    final deleteOriginals = _deleteOriginals ?? ref.read(appConfigProvider).copyparty.autoDeleteAfterVerify;
     // Commit destination overrides onto the scanned files before appending.
     for (final set in sets) {
       for (final file in set.files) {
+        file.deleteOriginalOverride = deleteOriginals;
         final override = _destinationOverrides[file.localPath];
         if (override != null) {
           file.destination = override;
@@ -552,6 +558,7 @@ class _AddFoldersSelectionPageState extends ConsumerState<_AddFoldersSelectionPa
                   onRename: (p) => unawaited(_renameFolder(p)),
                   onPick: _pickFolderName,
                 ),
+                _DeleteOriginalsSwitch(value: _deleteOriginals, onChanged: (v) => setState(() => _deleteOriginals = v)),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
@@ -795,6 +802,10 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
   AutoFolderPlan? _folderPlan;
   bool _planningFolders = false;
   final Map<String, String> _folderRenames = {};
+
+  /// Delete the originals of THESE files after upload: starts from the setting, changed here for this import
+  /// only (for example off while testing). Null until first shown (= the setting).
+  bool? _deleteOriginals;
 
   @override
   void dispose() {
@@ -1188,8 +1199,10 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
   UploadDestination _destinationFor(UploadFile file) => _destinationOverrides[file.localPath] ?? file.destination;
 
   void _applyDestinations() {
+    final deleteOriginals = _deleteOriginals ?? ref.read(appConfigProvider).copyparty.autoDeleteAfterVerify;
     for (final set in widget.session.uploadSets) {
       for (final file in set.files) {
+        file.deleteOriginalOverride = deleteOriginals;
         final override = _destinationOverrides[file.localPath];
         if (override != null) {
           file.destination = override;
@@ -1593,6 +1606,7 @@ class _OptionsStepState extends ConsumerState<_OptionsStep> {
                   onRename: _renameFolder,
                   onPick: _pickFolderName,
                 ),
+                _DeleteOriginalsSwitch(value: _deleteOriginals, onChanged: (v) => setState(() => _deleteOriginals = v)),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
@@ -2118,6 +2132,51 @@ class _FolderChoice extends StatelessWidget {
             Icon(Icons.arrow_drop_down_rounded, size: 22, color: primary),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// "Delete originals after upload" for this import only: starts from the setting; changing it here does not
+/// change the setting.
+class _DeleteOriginalsSwitch extends ConsumerWidget {
+  final bool? value;
+  final ValueChanged<bool> onChanged;
+  const _DeleteOriginalsSwitch({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final setting = ref.watch(appConfigProvider.select((c) => c.copyparty.autoDeleteAfterVerify));
+    final on = value ?? setting;
+    final changed = on != setting;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Icon(
+            on ? Icons.delete_sweep_outlined : Icons.sd_card_outlined,
+            size: 20,
+            color: on ? context.colorScheme.error : context.colorScheme.primary,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Delete originals after upload', style: context.textTheme.bodyMedium),
+                Text(
+                  changed
+                      ? 'This import only (your setting is ${setting ? 'on' : 'off'})'
+                      : (on ? 'Each original is checked against the upload first' : 'Originals stay on the card'),
+                  style: context.textTheme.labelSmall?.copyWith(
+                    color: changed ? context.colorScheme.tertiary : context.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Switch(value: on, onChanged: onChanged),
+        ],
       ),
     );
   }

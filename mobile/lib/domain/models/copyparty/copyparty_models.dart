@@ -74,6 +74,10 @@ class UploadFile {
   // (review L1). (batch3 item 18)
   String? uploadPathOverride;
 
+  /// Chosen on the import screen for this import only: delete (true) or keep (false) the original once it is
+  /// safely uploaded. Null = the "Delete after upload" setting.
+  bool? deleteOriginalOverride;
+
   // Transient (not persisted): true while the file is being COPIED to local
   // phone storage before hashing/upload, so the card can show "Copying" instead
   // of "Hashing". (batch: item 4)

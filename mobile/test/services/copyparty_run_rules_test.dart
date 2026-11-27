@@ -194,4 +194,19 @@ void main() {
       expect(rawJpgStack([(filename: 'A.DNG', assetId: 'same'), (filename: 'A.JPG', assetId: 'same')]), isNull);
     });
   });
+
+  group('delete originals: one-time choice per import', () {
+    test('no choice made: the setting decides', () {
+      expect(shouldAutoDelete(setting: true), isTrue);
+      expect(shouldAutoDelete(setting: false), isFalse);
+    });
+
+    test('turned off for this import (testing): originals are kept even with the setting on', () {
+      expect(shouldAutoDelete(setting: true, override: false), isFalse);
+    });
+
+    test('turned on for this import: originals are deleted even with the setting off', () {
+      expect(shouldAutoDelete(setting: false, override: true), isTrue);
+    });
+  });
 }

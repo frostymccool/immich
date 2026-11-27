@@ -809,7 +809,12 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     state = state.copyWith(clearNotice: true);
     // Auto-delete on: check once, up front, that this card's originals can be deleted at all, so a
     // read-only card is reported before the batch rather than on every file.
-    if (_ref.read(appConfigProvider).copyparty.autoDeleteAfterVerify) {
+    final deleteSetting = _ref.read(appConfigProvider).copyparty.autoDeleteAfterVerify;
+    final anyDeletes = state.uploadSets
+        .expand((s) => s.files)
+        .where((f) => selectedFilePaths == null || selectedFilePaths.contains(f.localPath))
+        .any((f) => shouldAutoDelete(setting: deleteSetting, override: f.deleteOriginalOverride));
+    if (anyDeletes) {
       final folder = state.directoryPath;
       final blocked = folder == null ? null : await _sourceDeleter.deleteBlockedReason(folder);
       if (blocked != null) {
@@ -1125,7 +1130,11 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             // (the staged copy, its hash and the server would all agree on corrupt bytes). Start it now,
             // in parallel with this file's upload: the card is much faster than the network, so it is
             // normally finished before the upload is, and the delete then waits for nothing.
-            if (staged != null && config.autoDeleteAfterVerify) {
+            final deleteOriginal = shouldAutoDelete(
+              setting: config.autoDeleteAfterVerify,
+              override: file.deleteOriginalOverride,
+            );
+            if (staged != null && deleteOriginal) {
               _startSourceCheck(file, cancelToken);
             }
 
@@ -1300,7 +1309,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
             // already requires the Immich asset id for Immich-native files, so a
             // "both"/Immich file is only removed once it's confirmed in Immich —
             // not just on copyparty. Runs for copyparty-only files too.
-            if (config.autoDeleteAfterVerify && file.safeToDelete && receiptId != null) {
+            if (deleteOriginal && file.safeToDelete && receiptId != null) {
               final pendingCheck = staged != null ? _sourceChecks[file.localPath] : null;
               if (staged != null && (pendingCheck == null || !pendingCheck.done)) {
                 // The check re-reads the original from the (slow) card. Don't hold the queue for it: the next

@@ -115,3 +115,7 @@ List<String>? rawJpgStack(List<({String filename, String? assetId})> files) {
   }
   return ids.length < 2 ? null : ids;
 }
+
+/// Whether a file's original is deleted after a verified upload: the one-time choice made when it was added
+/// to the import, else the "Delete after upload" setting.
+bool shouldAutoDelete({required bool setting, bool? override}) => override ?? setting;
