@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -105,5 +107,74 @@ void main() {
     expect(await messageFor(404, {'error': 'not a bridge user'}), contains('not set up'));
     expect(await messageFor(401, {'error': 'x'}), contains('Immich login'));
     expect(await messageFor(503, {'error': 'immich unreachable'}), contains('cannot reach Immich'));
+  });
+
+  group('link page errors say what really failed', () {
+    // Bug: the link page said "The bridge could not be reached" while Test bridge worked. The page had closed its
+    // own connection (an autoDispose provider read without watching), and every failure was reported as the
+    // network.
+    test('a closed connection is reported as an app problem, not the network', () async {
+      // A real connection, closed the way the provider closed it; a closed one refuses before any network use.
+      final service = BridgeLinksService();
+      service.dispose();
+      await expectLater(
+        service.jobs(bridge, token),
+        throwsA(isA<BridgeLinkException>().having((e) => e.message, 'message', contains('app problem'))),
+      );
+    });
+
+    test('a connection that stays open keeps working for every request', () async {
+      var calls = 0;
+      final service = BridgeLinksService(
+        client: MockClient((r) async {
+          calls++;
+          return json(200, {'jobs': []});
+        }),
+      );
+      await service.jobs(bridge, token);
+      await service.jobs(bridge, token);
+      expect(calls, 2);
+    });
+
+    test('each kind of failure has its own words', () {
+      expect(describeTransportError(TimeoutException('x')), contains('too long'));
+      expect(describeTransportError(const SocketException('refused')), contains('home network or VPN'));
+      expect(describeTransportError(const HandshakeException('bad cert')), contains('certificate'));
+      expect(describeTransportError(Exception('odd')), contains('could not talk to the bridge'));
+    });
+  });
+
+  group('Test bridge checks link imports too', () {
+    test('working', () async {
+      final r = await testBridgeLinks(
+        bridge,
+        token,
+        client: MockClient(
+          (r) async => json(200, {
+            'jobs': [
+              {'id': 'j', 'name': 'n', 'state': 'done'},
+            ],
+          }),
+        ),
+      );
+      expect(r.ok, isTrue);
+      expect(r.message, contains('working (1 recent import)'));
+    });
+
+    test('a refusal is named', () async {
+      final r = await testBridgeLinks(
+        bridge,
+        token,
+        client: MockClient((r) async => json(404, {'error': 'not found'})),
+      );
+      expect(r.ok, isFalse);
+      expect(r.message, contains('0.10.0'));
+    });
+
+    test('never over plain http', () async {
+      final r = await testBridgeLinks('http://bridge.example.test', token);
+      expect(r.ok, isFalse);
+      expect(r.message, contains('https'));
+    });
   });
 }

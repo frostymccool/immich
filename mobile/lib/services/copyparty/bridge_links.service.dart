@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:immich_mobile/services/copyparty/immich_bridge_status.service.dart';
@@ -97,6 +98,24 @@ class BridgeLinkException implements Exception {
   String toString() => message;
 }
 
+/// A failure before the bridge answered, in words, with the technical detail for the log.
+String describeTransportError(Object e) {
+  if (e is TimeoutException) {
+    return 'The bridge took too long to answer. Try again.';
+  }
+  if (e is HandshakeException || e is TlsException) {
+    return 'The bridge\'s https certificate was not accepted by this phone. ($e)';
+  }
+  if (e is SocketException) {
+    return 'The bridge could not be reached. Check you are on your home network or VPN. ($e)';
+  }
+  if (e is http.ClientException && e.message.toLowerCase().contains('closed')) {
+    return 'The app closed its connection to the bridge too early (an app problem, not your network). '
+        'Leave this page and open it again. ($e)';
+  }
+  return 'The app could not talk to the bridge. ($e)';
+}
+
 String _str(Object? v) => v is String ? v : '';
 int _int(Object? v) => v is int ? v : (v is num ? v.toInt() : 0);
 List<String> _strings(Object? v) => v is List
@@ -186,10 +205,8 @@ class BridgeLinksService {
                   ? _client.get(uri, headers: headers)
                   : _client.post(uri, headers: headers, body: jsonEncode(json)))
               .timeout(timeout);
-    } on TimeoutException {
-      throw const BridgeLinkException('The bridge took too long to answer. Try again.');
-    } catch (_) {
-      throw const BridgeLinkException('The bridge could not be reached. Check you are on your home network or VPN.');
+    } catch (e) {
+      throw BridgeLinkException(describeTransportError(e));
     }
     Object? body;
     try {
@@ -222,6 +239,31 @@ class BridgeLinksService {
         throw const BridgeLinkException('The bridge cannot reach Immich right now. Try again later.');
       default:
         throw BridgeLinkException(error ?? 'The bridge answered with an error (HTTP ${response.statusCode}).');
+    }
+  }
+}
+
+/// The "Test bridge" check of shared-link imports: lists the person's link imports with a fresh connection,
+/// exactly as the link page does. Never throws.
+Future<({bool ok, String message})> testBridgeLinks(
+  String bridgeUrl,
+  String? immichToken, {
+  http.Client? client,
+}) async {
+  final service = BridgeLinksService(client: client);
+  try {
+    final jobs = await service.jobs(bridgeUrl, immichToken);
+    return (
+      ok: true,
+      message: 'Shared-link import: working (${jobs.length} recent import${jobs.length == 1 ? '' : 's'}).',
+    );
+  } on BridgeLinkException catch (e) {
+    return (ok: false, message: 'Shared-link import: ${e.message}');
+  } catch (e) {
+    return (ok: false, message: 'Shared-link import: ${describeTransportError(e)}');
+  } finally {
+    if (client == null) {
+      service.dispose();
     }
   }
 }

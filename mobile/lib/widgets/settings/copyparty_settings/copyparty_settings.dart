@@ -15,6 +15,7 @@ import 'package:immich_mobile/pages/copyparty/copyparty_import.page.dart';
 import 'package:immich_mobile/providers/copyparty/copyparty.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/repositories/secure_storage.repository.dart';
+import 'package:immich_mobile/services/copyparty/bridge_links.service.dart';
 import 'package:immich_mobile/services/copyparty/immich_bridge_status.service.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:immich_mobile/utils/disk_space.dart';
@@ -1262,7 +1263,7 @@ class _BridgeTestButton extends HookConsumerWidget {
         if (!context.mounted) {
           return;
         }
-        final (ok, message) = switch (status.health) {
+        var (ok, message) = switch (status.health) {
           BridgeHealth.invalidUrl => (false, 'The bridge URL is not valid.'),
           BridgeHealth.unreachable => (false, 'The bridge did not answer at $url.'),
           BridgeHealth.disabled => (false, 'No bridge URL is set.'),
@@ -1271,6 +1272,15 @@ class _BridgeTestButton extends HookConsumerWidget {
             'Bridge${status.version == null ? '' : ' v${status.version}'} reachable. ${status.accessMessage}',
           ),
         };
+        if (ok) {
+          // Also the shared-link import, through the same kind of connection the link page uses.
+          final links = await testBridgeLinks(url, currentImmichAccessToken());
+          ok = links.ok;
+          message = '$message\n${links.message}';
+        }
+        if (!context.mounted) {
+          return;
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(message),

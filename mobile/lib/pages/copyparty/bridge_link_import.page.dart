@@ -9,17 +9,14 @@ import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/services/copyparty/bridge_links.service.dart';
 import 'package:immich_mobile/utils/bytes_units.dart';
 
-final bridgeLinksServiceProvider = Provider.autoDispose<BridgeLinksService>((ref) {
-  final service = BridgeLinksService();
-  ref.onDispose(service.dispose);
-  return service;
-});
-
 /// Paste a shared album link (Google Photos or a Google Drive folder) and let the import bridge add the
 /// photos to Immich. The bridge does the downloading and importing; this page sends the link, offers names
 /// to pick from and shows the bridge's progress while it is open.
 class BridgeLinkImportPage extends ConsumerStatefulWidget {
-  const BridgeLinkImportPage({super.key});
+  /// For tests; normally the page makes its own.
+  final BridgeLinksService? service;
+
+  const BridgeLinkImportPage({super.key, this.service});
 
   @override
   ConsumerState<BridgeLinkImportPage> createState() => _BridgeLinkImportPageState();
@@ -38,7 +35,10 @@ class _BridgeLinkImportPageState extends ConsumerState<BridgeLinkImportPage> {
   Timer? _poll;
 
   String get _bridgeUrl => ref.read(appConfigProvider).copyparty.bridgeUrl;
-  BridgeLinksService get _service => ref.read(bridgeLinksServiceProvider);
+  // The page owns its connection for as long as it is open. (It used to read an autoDispose provider without
+  // watching it, so the provider was disposed at once and closed the connection: every request then failed with
+  // "client is already closed", shown as "The bridge could not be reached".)
+  late final BridgeLinksService _service = widget.service ?? BridgeLinksService();
 
   @override
   void initState() {
@@ -50,6 +50,9 @@ class _BridgeLinkImportPageState extends ConsumerState<BridgeLinkImportPage> {
   @override
   void dispose() {
     _poll?.cancel();
+    if (widget.service == null) {
+      _service.dispose();
+    }
     _link.dispose();
     super.dispose();
   }
