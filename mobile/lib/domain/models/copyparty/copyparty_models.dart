@@ -105,6 +105,9 @@ class UploadFile {
   // file quietly still needs the card connected until it finishes.
   bool stagingFallback = false;
 
+  /// Why the copy into the phone cache failed (the system's text), when [stagingFallback].
+  String? stagingFallbackReason;
+
   // Transient: true while a resumed partial is being RE-HASHED (verified)
   // from byte 0 up to the resume point, before any new bytes are copied. The
   // byte counter climbs from 0 exactly like a real copy, so without this flag

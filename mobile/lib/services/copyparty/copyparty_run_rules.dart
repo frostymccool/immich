@@ -119,3 +119,73 @@ List<String>? rawJpgStack(List<({String filename, String? assetId})> files) {
 /// Whether a file's original is deleted after a verified upload: the one-time choice made when it was added
 /// to the import, else the "Delete after upload" setting.
 bool shouldAutoDelete({required bool setting, bool? override}) => override ?? setting;
+
+/// The card (storage volume) a path is on, so a delete problem on one card never affects another:
+/// `/storage/EB55-F36E/DCIM/a.jpg` → `/storage/EB55-F36E`, `/storage/emulated/0/DCIM/a.jpg` →
+/// `/storage/emulated/0`. Anything else: its folder.
+String cardVolumeOf(String path) {
+  final parts = path.split('/');
+  // ['', 'storage', 'EB55-F36E', ...] or ['', 'storage', 'emulated', '0', ...] or ['', 'mnt', 'media_rw', 'X', ...]
+  if (parts.length > 3 && parts[1] == 'storage') {
+    if (parts[2] == 'emulated' && parts.length > 4) {
+      return parts.sublist(0, 4).join('/');
+    }
+    return parts.sublist(0, 3).join('/');
+  }
+  if (parts.length > 4 && parts[1] == 'mnt' && parts[2] == 'media_rw') {
+    return parts.sublist(0, 4).join('/');
+  }
+  final i = path.lastIndexOf('/');
+  return i <= 0 ? '/' : path.substring(0, i);
+}
+
+/// The card's short name for messages (`/storage/EB55-F36E` → `EB55-F36E`).
+String cardNameOf(String volume) => volume.split('/').where((p) => p.isNotEmpty).lastOrNull ?? volume;
+
+/// Whether a delete failure means nothing on that card can be deleted (read-only card, no permission), so
+/// the rest of the card's originals are kept without trying. A missing file or any other one-off failure
+/// only affects that file.
+bool blocksWholeCard(String reason) {
+  final r = reason.toLowerCase();
+  return r.contains('read-only file system') ||
+      r.contains('erofs') ||
+      r.contains('errno = 30') ||
+      r.contains('no folder permission') ||
+      r.contains('permission denied') ||
+      r.contains('eacces') ||
+      r.contains('errno = 13') ||
+      r.contains('operation not permitted');
+}
+
+/// Why a copy into the phone cache failed.
+enum CacheFailure { phoneFull, cardUnreadable, other }
+
+CacheFailure cacheFailureOf(Object error) {
+  final r = '$error'.toLowerCase();
+  if (r.contains('no space') || r.contains('enospc') || r.contains('errno = 28') || r.contains('disk full')) {
+    return CacheFailure.phoneFull;
+  }
+  if (r.contains('no such file') || r.contains('enoent') || r.contains('errno = 2,') || r.contains('i/o error')) {
+    return CacheFailure.cardUnreadable;
+  }
+  return CacheFailure.other;
+}
+
+/// The warning above the progress list for files that could not be copied into the phone cache, by cause.
+/// Empty when there are none.
+List<String> cacheFailureWarnings(Map<CacheFailure, int> counts) {
+  String n(int c) => '$c file${c == 1 ? '' : 's'}';
+  String verb(int c) => c == 1 ? 'is' : 'are';
+  final full = counts[CacheFailure.phoneFull] ?? 0;
+  final card = counts[CacheFailure.cardUnreadable] ?? 0;
+  final other = counts[CacheFailure.other] ?? 0;
+  final fullText =
+      '${n(full)} could not be cached (phone storage full) and ${verb(full)} reading straight from the card. '
+      'Keep it connected until they finish.';
+  final cardText =
+      '${n(card)} could not be read from the card (removed or changed?). Re-insert the card and tap Retry on them.';
+  final otherText =
+      '${n(other)} could not be copied to the phone cache and ${verb(other)} reading straight from the card. '
+      'Save log shows why.';
+  return [if (full > 0) fullText, if (card > 0) cardText, if (other > 0) otherText];
+}

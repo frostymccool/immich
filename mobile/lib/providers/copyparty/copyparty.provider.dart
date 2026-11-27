@@ -650,7 +650,8 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
 
   /// Set when deleting originals failed (or cannot work) in this run: later files skip the attempt and
   /// keep their original, and the notice says it once instead of on every file.
-  String? _deleteBlocked;
+  /// Cards (by [cardVolumeOf]) whose originals cannot be deleted this run, with the system's reason.
+  final Map<String, String> _deleteBlockedByCard = {};
 
   /// Per file: how many times the network "came back" without that file making any progress, and
   /// the bytes it had then. Stops an endless stall-and-retry loop when small requests work but
@@ -805,7 +806,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
     _sourceChecks.clear();
     _keepOriginalTokens.clear();
     _checkChain = Future<void>.value();
-    _deleteBlocked = null;
+    _deleteBlockedByCard.clear();
     state = state.copyWith(clearNotice: true);
     // Auto-delete on: check once, up front, that this card's originals can be deleted at all, so a
     // read-only card is reported before the batch rather than on every file.
@@ -815,12 +816,31 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         .where((f) => selectedFilePaths == null || selectedFilePaths.contains(f.localPath))
         .any((f) => shouldAutoDelete(setting: deleteSetting, override: f.deleteOriginalOverride));
     if (anyDeletes) {
-      final folder = state.directoryPath;
-      final blocked = folder == null ? null : await _sourceDeleter.deleteBlockedReason(folder);
-      if (blocked != null) {
-        _deleteBlocked = blocked;
-        state = state.copyWith(notice: originalsKeptNotice(blocked));
-        _log.log('AUTO-DELETE UNAVAILABLE for $folder: originals will be kept');
+      // One check per card that has files to delete, in a folder of THAT card that exists now. (Checking only
+      // the first picked folder blocked every card once that folder's card was removed.)
+      final folderByCard = <String, String>{};
+      for (final f in state.uploadSets.expand((s) => s.files)) {
+        if (selectedFilePaths != null && !selectedFilePaths.contains(f.localPath)) {
+          continue;
+        }
+        if (!shouldAutoDelete(setting: deleteSetting, override: f.deleteOriginalOverride)) {
+          continue;
+        }
+        final dir = File(f.localPath).parent.path;
+        final card = cardVolumeOf(f.localPath);
+        if (!folderByCard.containsKey(card) && Directory(dir).existsSync()) {
+          folderByCard[card] = dir;
+        }
+      }
+      for (final e in folderByCard.entries) {
+        final blocked = await _sourceDeleter.deleteBlockedReason(e.value);
+        if (blocked != null && blocksWholeCard(blocked)) {
+          _deleteBlockedByCard[e.key] = blocked;
+          state = state.copyWith(notice: originalsKeptNotice(blocked, card: cardNameOf(e.key)));
+          _log.log('AUTO-DELETE UNAVAILABLE on ${e.key}: $blocked; its originals will be kept');
+        } else if (blocked != null) {
+          _log.log('delete check on ${e.key} said "$blocked"; trying each file anyway');
+        }
       }
     }
 
@@ -1779,6 +1799,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         // A later retry succeeded (e.g. space freed up) — this file no longer
         // needs the card, so drop it from the "still needs the card" warning.
         file.stagingFallback = false;
+        file.stagingFallbackReason = null;
         _notify();
         return hashed;
       } on CopypartyCancelledException {
@@ -1807,6 +1828,7 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         file.uploadedBytes = 0;
         file.stageStartMs = null;
         file.stagingFallback = true;
+        file.stagingFallbackReason = '$e';
         file.verifyingResume = false;
         _notify();
         return null;
@@ -2493,8 +2515,10 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         }
       }
     }
-    if (safeToRemove && _deleteBlocked != null) {
-      file.sourceNote = 'Original kept on the card: ${DeleteFailureExplanation.of(_deleteBlocked!).cause}';
+    final card = cardVolumeOf(file.localPath);
+    final cardBlocked = _deleteBlockedByCard[card];
+    if (safeToRemove && cardBlocked != null) {
+      file.sourceNote = 'Original kept on the card: ${DeleteFailureExplanation.of(cardBlocked).cause}';
     } else if (safeToRemove) {
       final deleted = await _sourceDeleter.delete(file.localPath);
       if (deleted.ok) {
@@ -2508,10 +2532,14 @@ class ImportSessionNotifier extends StateNotifier<ImportSessionState> {
         // the badge count in sync the same way a fresh receipt does.
         _ref.invalidate(pendingCleanupProvider);
       } else {
-        // Say it once for the run, keep this and every later original, and stop trying.
-        _deleteBlocked = deleted.reason;
-        file.sourceNote = 'Original kept on the card: ${DeleteFailureExplanation.of(deleted.reason ?? '').cause}';
-        state = state.copyWith(notice: originalsKeptNotice(deleted.reason ?? 'unknown'));
+        final reason = deleted.reason ?? 'unknown';
+        file.sourceNote = 'Original kept on the card: ${DeleteFailureExplanation.of(reason).cause}';
+        _log.log('AUTO-DELETE FAILED for ${file.localPath}: $reason');
+        if (blocksWholeCard(reason)) {
+          // Nothing on this card can be deleted: say it once, keep this card's other originals, stop trying there.
+          _deleteBlockedByCard[card] = reason;
+          state = state.copyWith(notice: originalsKeptNotice(reason, card: cardNameOf(card)));
+        }
       }
     }
     _log.log('SOURCE ${file.filename}: ${file.sourceNote}');

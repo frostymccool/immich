@@ -2378,14 +2378,22 @@ class _UploadProgressStep extends ConsumerWidget {
     // just hit the configured cache budget) and quietly fell back to reading
     // straight from the card — without this, a user who sees "mostly staged"
     // has no way to know one of these still needs the card connected.
-    final fallbackCount = allFiles
-        .where(
-          (f) =>
-              f.stagingFallback &&
-              f.status != UploadFileStatus.receiptWritten &&
-              !(f.status == UploadFileStatus.confirmed && !f.needsImmich),
-        )
-        .length;
+    // Only files still waiting on the card count: once a file is uploaded, skipped, failed or cached after
+    // all, it no longer needs the card. Grouped by cause, so "phone storage full" is said only when it is.
+    final fallbackByCause = <CacheFailure, int>{};
+    for (final f in allFiles) {
+      if (!f.stagingFallback ||
+          f.stagedReady ||
+          f.status == UploadFileStatus.receiptWritten ||
+          f.status == UploadFileStatus.failed ||
+          f.status == UploadFileStatus.skipped ||
+          (f.status == UploadFileStatus.confirmed && !f.needsImmich)) {
+        continue;
+      }
+      final cause = cacheFailureOf(f.stagingFallbackReason ?? '');
+      fallbackByCause[cause] = (fallbackByCause[cause] ?? 0) + 1;
+    }
+    final fallbackWarnings = cacheFailureWarnings(fallbackByCause);
 
     return Column(
       children: [
@@ -2443,7 +2451,7 @@ class _UploadProgressStep extends ConsumerWidget {
               ],
             ),
           ),
-        if (fallbackCount > 0)
+        for (final warning in fallbackWarnings)
           Container(
             width: double.infinity,
             margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
@@ -2457,12 +2465,7 @@ class _UploadProgressStep extends ConsumerWidget {
                 Icon(Icons.warning_amber_rounded, size: 16, color: context.colorScheme.error),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                    '$fallbackCount file${fallbackCount == 1 ? '' : 's'} could not be cached (phone storage '
-                    'full) and ${fallbackCount == 1 ? 'is' : 'are'} reading straight from the card — keep it '
-                    'connected until ${fallbackCount == 1 ? 'it finishes' : 'they finish'}.',
-                    style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.error),
-                  ),
+                  child: Text(warning, style: context.textTheme.bodySmall?.copyWith(color: context.colorScheme.error)),
                 ),
               ],
             ),

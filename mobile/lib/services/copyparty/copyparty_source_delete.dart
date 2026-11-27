@@ -157,7 +157,10 @@ class DeleteFailureExplanation {
 }
 
 /// What the user sees once when originals cannot be deleted from this card.
-String originalsKeptNotice(String reason) {
+String originalsKeptNotice(String reason, {String? card}) {
   final x = DeleteFailureExplanation.of(reason);
-  return '${x.cause} Every original is kept; uploads are not affected.\n${x.action}\n(System message: ${x.detail})';
+  final kept = card == null
+      ? 'Every original is kept'
+      : 'Originals on card $card are kept (other cards are not affected)';
+  return '${x.cause} $kept; uploads are not affected.\n${x.action}\n(System message: ${x.detail})';
 }

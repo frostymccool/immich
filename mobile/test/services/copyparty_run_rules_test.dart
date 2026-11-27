@@ -209,4 +209,48 @@ void main() {
       expect(shouldAutoDelete(setting: false, override: true), isTrue);
     });
   });
+
+  group('deleting originals with two cards', () {
+    // Bug: with two card readers, a delete check that failed on one card ("No such file or directory") kept the
+    // originals of EVERY card for the rest of the run, with an unclear message.
+    test('each card is its own volume', () {
+      expect(cardVolumeOf('/storage/EB55-F36E/DCIM/CAM_001/CAM_1.LRF'), '/storage/EB55-F36E');
+      expect(cardVolumeOf('/storage/FBFD-F67D/DCIM/Camera01/VID_1.insv'), '/storage/FBFD-F67D');
+      expect(cardVolumeOf('/storage/emulated/0/DCIM/a.jpg'), '/storage/emulated/0');
+      expect(cardVolumeOf('/mnt/media_rw/EB55-F36E/DCIM/a.jpg'), '/mnt/media_rw/EB55-F36E');
+      expect(cardNameOf('/storage/EB55-F36E'), 'EB55-F36E');
+    });
+
+    test('a missing file never stops deletes on the card', () {
+      expect(blocksWholeCard('No such file or directory'), isFalse);
+      expect(blocksWholeCard('Cannot delete file, path = x (OS Error: No such file or directory, errno = 2)'), isFalse);
+    });
+
+    test('a read-only card or a refused permission stops deletes on that card', () {
+      expect(blocksWholeCard('Read-only file system'), isTrue);
+      expect(blocksWholeCard('Permission denied'), isTrue);
+      expect(blocksWholeCard('no folder permission covers this path'), isTrue);
+    });
+  });
+
+  group('cache warning says the real cause', () {
+    // Bug: "N files could not be cached (phone storage full)" was shown for every copy failure, while the
+    // cache was working and had plenty of room.
+    test('causes are told apart', () {
+      expect(cacheFailureOf('FileSystemException: No space left on device, errno = 28'), CacheFailure.phoneFull);
+      expect(
+        cacheFailureOf('PathNotFoundException: No such file or directory, errno = 2, path'),
+        CacheFailure.cardUnreadable,
+      );
+      expect(cacheFailureOf('Exception: something else'), CacheFailure.other);
+    });
+
+    test('"phone storage full" only when it is', () {
+      final w = cacheFailureWarnings({CacheFailure.cardUnreadable: 22});
+      expect(w.single, contains('could not be read from the card'));
+      expect(w.single, isNot(contains('storage full')));
+      expect(cacheFailureWarnings({CacheFailure.phoneFull: 1}).single, contains('phone storage full'));
+      expect(cacheFailureWarnings({}), isEmpty);
+    });
+  });
 }
