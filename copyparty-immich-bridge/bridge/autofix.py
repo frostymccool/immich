@@ -460,6 +460,7 @@ class AutoFix:
         with self._lock:
             rows = self._db.execute("SELECT asset_id, path FROM autofix WHERE status='review' AND reason=?", (NO_ZONE,)).fetchall()
             known = {(r[0], r[1]): r[2] for r in self._db.execute("SELECT folder, camera, checked_at FROM clocks")}
+            decided = {(r[0], r[1]) for r in self._db.execute("SELECT folder, camera FROM clocks WHERE status='decided'")}
         groups: dict[tuple[str, str], list[tuple[str, dict]]] = {}
         paths = [p for _, p in rows if os.path.exists(p)]
         meta = {f["path"]: f for f in self._gf._read_metadata(paths)} if paths else {}
@@ -471,8 +472,8 @@ class AutoFix:
         for key, members in groups.items():
             if PRESSURE.busy:
                 break
-            if time.time() - known.get(key, 0) < CLOCK_RECHECK_S:
-                continue
+            if key in decided or time.time() - known.get(key, 0) < CLOCK_RECHECK_S:
+                continue  # a decided clock stays: the files left over are a smaller sample, not new evidence
             r = self._decide_clock(key, members)
             counts[r] = counts.get(r, 0) + 1
         return counts

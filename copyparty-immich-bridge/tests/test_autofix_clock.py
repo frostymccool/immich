@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from bridge import autofix as af
+import bridge.autofix as autofix_mod
 from bridge.autofix import NO_ZONE, AutoFix, clock_offset_from_pairs, describe_offset
 from bridge.state import StateStore
 from tests.test_geofix import KYOTO, LISBON, asset, rig  # noqa: F401
@@ -132,6 +133,22 @@ def test_a_camera_with_a_wrong_clock_is_aligned_by_pictures_of_the_same_moment(r
     with fix._lock:
         whys = [r[0] for r in fix._db.execute("SELECT why FROM changes WHERE field='dateTimeOriginal'")]
     assert len(whys) == 5 and "8 h 11 min behind UTC" in whys[0]
+
+
+def test_a_decided_clock_is_not_undone_by_the_few_files_left_over(rig, auto, monkeypatch):  # noqa: F811
+    fix, imported, seed, _ = auto
+    for i in range(5):
+        seed(phone_id(i), unit(i))
+    canon_set(rig, imported, seed)
+    assert fix.run_once()["clock decided"] == 1
+    for i in range(5):
+        seed(phone_id(i), unit((i + 2) % 5))  # the evidence a recheck would see no longer matches
+    with fix._lock:
+        fix._db.execute("UPDATE clocks SET checked_at=0")  # long after the decision
+        fix._db.commit()
+    monkeypatch.setattr(autofix_mod, "BATCH", 2)  # a big folder: corrected over several passes
+    applied = sum(fix.run_once().get("applied", 0) for _ in range(4))
+    assert applied == 5 and fix.describe()["clocks"][0]["status"] == "decided"
 
 
 def test_pictures_that_only_look_alike_at_other_times_change_nothing(rig, auto):  # noqa: F811

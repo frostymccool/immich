@@ -3,6 +3,12 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.12.2 - a decided camera clock stays decided
+
+- A camera clock decided from pictures of the same moment was checked again 30 minutes later using only the files not
+  yet corrected; in a large folder (corrected 50 per pass) those few could no longer show 3 matches, so the decision was
+  dropped and the rest of that camera's files stayed uncorrected. A decided clock is now kept.
+
 ## 0.12.1 - RAW stacking really leaves existing stacks alone
 
 - Immich's search does not say whether a photo is in a stack, so 0.12.0 could not see existing stacks: a RAW already
