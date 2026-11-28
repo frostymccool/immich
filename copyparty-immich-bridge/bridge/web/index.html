@@ -368,6 +368,22 @@
 </div>
 
 <script>
+// Folding/unfolding a phone or rotating it changes the screen width; Chrome on Android can keep the old zoom, so the
+// page looks cut off on the right. On a width change only (a pinch-zoom of your own keeps the width), briefly cap the
+// zoom at 1, which makes the browser fit the page to the new width, then allow zooming again.
+(function () {
+  var meta = document.querySelector('meta[name=viewport]'), base = meta ? meta.getAttribute('content') : '', w = window.innerWidth, t = 0;
+  function refit() {
+    if (!meta || Math.abs(window.innerWidth - w) < 2) { return; }
+    w = window.innerWidth;
+    meta.setAttribute('content', base + ', maximum-scale=1');
+    clearTimeout(t);
+    t = setTimeout(function () { meta.setAttribute('content', base); }, 400);
+  }
+  window.addEventListener('resize', refit);
+  window.addEventListener('orientationchange', function () { setTimeout(refit, 250); });
+  if (window.visualViewport) { window.visualViewport.addEventListener('resize', refit); }
+})();
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   var token = '', cfg = null, draft = null, pollT = null, lastLogId = 0, logLines = [], tab = 'status';

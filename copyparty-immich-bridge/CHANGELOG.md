@@ -3,6 +3,12 @@
 Versions are shown in the page header, `GET /healthz`, the start-up log line and the phone app's bridge tile
 (header also shows the installed commit).
 
+## 0.12.3 - the page fits again after folding, unfolding or rotating a phone
+
+- Chrome on Android could keep the old zoom when the screen width changed (opening a foldable, rotating), so the page
+  was cut off on the right. On a width change the page now briefly caps the zoom at 1, which refits it, then allows
+  zooming again; a pinch-zoom of your own (no width change) is left alone.
+
 ## 0.12.2 - a decided camera clock stays decided
 
 - A camera clock decided from pictures of the same moment was checked again 30 minutes later using only the files not
